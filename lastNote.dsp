@@ -16,7 +16,7 @@ phase = hslider("phase", 0, 0, 1, stepsize);
 // workaround for proper monophonic handling, increases compile-time massively and CPU usage with +/- 5%:
 // freq = lastNote:ba.pianokey2hz :new_smooth(ba.tau2pole(portamento));
 // freq = lastNote:ba.pianokey2hz :si.smooth(gate' * ba.tau2pole(portamento));
-freq = lastNote:ba.pianokey2hz : enabled_smooth(gate',ba.tau2pole(portamento));
+freq = lastNote:ba.pianokey2hz : enabled_smooth(gate' & gate , ba.tau2pole(portamento));
 // freq = lastNote:ba.pianokey2hz :smoothDelayedBy(2,ba.tau2pole(portamento));
 gain = (vel(lastNote)/127); // increases the cpu-usage, from 7% to 11%
 gate = gain>0;
@@ -35,7 +35,9 @@ gate = gain>0;
 
 process =
   // no.noise*0.5<:(ve.oberheimLPF(normFreq,Q),fi.lowpass(4,LPfreq));
+  // lastNote/127;
   CZsynth;
+// envelope(0);
 // os.osc(freq)*gain*gate;
 // CZ.sinePulse(master,oscillatorIndex);
 // , lastNote/127
@@ -60,7 +62,8 @@ process =
 //groups///////////////////////////////////////////////////////////////////////
 
 tabs(x) = tgroup("CZsynth", x);
-oscillatorGroup(x) = tabs(vgroup("[00]parameters", x));
+oscillatorGroup(x) = tabs(vgroup("[00]oscillators", x));
+// envelopeGroup(x) = tabs(vgroup("[01]envelope", x));
 envelopeGroup(i,x) = tabs(vgroup("[%i]envelope %i", x));
 midiGroup(x) = tabs(vgroup("[99]midi", x));
 mainGroup(x) = vgroup("[0]main", x);
@@ -78,10 +81,15 @@ masterPhase = hslider("masterPhase", 0, -1, 1, stepsize) :new_smooth(0.999);
 portamento = hslider("portamento[scale:log]", 0, 0, 1, stepsize);
 
 oscillatorIndex = hslider("index", 0, 0, 1, stepsize);
-oscillatorRes = hslider("res", 0, 0, 64, stepsize);
+oscillatorRes   = hslider("res", 0, 0, 64, stepsize);
 oscillatorLevel = hslider("Level", 0, -1, 1, stepsize);
 // sawIndex = sawGroup(oscillatorIndex);
 // pulseIndex = pulseGroup(oscillatorIndex);
+attack(i)  = envelopeGroup(i,hslider("[0]attack", 0, 0, 1, stepsize));
+decay(i)   = envelopeGroup(i,hslider("[1]decay", 0.1, 0, 1, stepsize));
+sustain(i) = envelopeGroup(i,hslider("[2]sustain", 0.8, 0, 1, stepsize));
+release(i) = envelopeGroup(i,hslider("[3]release", 0.1, 0, 1, stepsize));
+
 
 lfo_amount = hslider("lfo amount", 0, 0, 1, stepsize):new_smooth(0.999);
 velocity(i) = midiGroup(select2(i>=0, 0, hslider("velocity of note %i [midi:key %i ]", 0, 0, nrNotes, 1)));
@@ -104,7 +112,7 @@ with {
 CZsynth = par(i, 2, CZsynthMono(i));
 
 CZsynthMono(i) =
-  oscillators(i,master) : filters(i) : envelope(i)
+  oscillators(i,master) : filters(i) : envelope(0)
 // ,(master*gate)
 // ,gain
 // ,gate
@@ -143,7 +151,8 @@ CZsynthMono(i) =
    :mixer(8,1,1) ;
 
  filters(i) = _;
- envelope(i) = _ * gain * gate;
+ envelope(i) =  _*(adsre(attack(i),decay(i),sustain(i),release(i),gate));
+ // envelope(i) =  _*en.adsre(attack(i),decay(i),sustain(i),release(i),gate)* gain;
 
  // master = lf_sawpos_reset(freq,reset) ;
  master = lf_sawpos_phase_reset(freq,masterPhase,reset) ;
@@ -173,6 +182,19 @@ CZsynthMono(i) =
  //                                still to PR:                               //
  ///////////////////////////////////////////////////////////////////////////////
 
+ adsre(attT60,decT60,susLvl,relT60,gate) = envelope with {
+   ugate = gate>0;
+   samps = ugate : +~(*(ugate)); // ramp time in samples
+   attSamps = int(attT60 * ma.SR);
+   // in case attack==0, start at 1 and go into the decay stage on the next sample
+   attPhase = (samps<attSamps) |  (ugate:ba.impulsify);
+   // attPhase = (samps<attSamps) | ((attSamps==0) & (ugate:ba.impulsify));
+   target = select2(ugate, 0.0,
+                    select2(attPhase, (susLvl)*float(ugate), ugate));
+   t60 = select2(ugate, relT60, select2(attPhase, decT60, attT60));
+   pole = ba.tau2pole(t60/6.91);
+   envelope = target : si.smooth(pole);
+};
  myBus(0) = 0:!;
 myBus(i) = si.bus(i);
 
@@ -233,12 +255,10 @@ myBus(i) = si.bus(i);
  noteIsOn(i) = velocity(i)>0;
 
  lastNote =
-   (
-     par(i, nrNotes, i)
-   , (par(i, nrNotes, index(i)))
+   par(i, nrNotes, i, index(i))
 // , ((par(i, nrNotes, index(i)),uniqueIfy):ro.interleave(nrNotes,2):par(i, nrNotes, +))
-   ):ro.interleave(nrNotes,2)
    :find_max_index(nrNotes):(_,!)
+   :ba.sAndH(nrNotesPlaying>0)
  ;
  // with {
  // an index to indicate the order of the note
@@ -273,19 +293,6 @@ myBus(i) = si.bus(i);
    (0:seq(i, nrNotes, myBus(i),(_-(noteIsOn(i-1)*(nrNewNotes>1))<:(_,_)) ):(si.bus(nrNotes),!));
 
  // };
- //////////////////////////////////////////////////////////////////////////////
- //                                 constants                                 //
- //////////////////////////////////////////////////////////////////////////////
- // fast
- // stepsize = 0.1;
- // medium
- stepsize = 0.01;
- // smooth
- // stepsize = 0.001;
-
- nrNotes = 127; // nr of midi notes
- // nrNotes = 32; // for looking at bargraphs
- // nrNotes = 4; // for block diagram
  //////////////////////////////////////////////////////////////////////////////
  //                            from @idle on slack                            //
  //////////////////////////////////////////////////////////////////////////////
@@ -420,3 +427,17 @@ myBus(i) = si.bus(i);
 
  lf_sawpos_phase_reset(freq,phase,reset) = lf_sawpos_reset(freq,reset) +phase :ma.frac;
  // lf_sawpos_phase_reset(freq,phase,reset) = (+(phase-phase') : ma.frac * (reset == 0)) ~ +(freq/ma.SR);
+
+ //////////////////////////////////////////////////////////////////////////////
+ //                                 constants                                 //
+ //////////////////////////////////////////////////////////////////////////////
+ // fast
+ // stepsize = 0.1;
+ // medium
+ stepsize = 0.01;
+ // smooth
+ // stepsize = 0.001;
+
+ nrNotes = 127; // nr of midi notes
+ // nrNotes = 4; // for block diagram
+ // nrNotes = 32; // for looking at bargraphs
