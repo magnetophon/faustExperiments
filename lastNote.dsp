@@ -40,6 +40,7 @@ process =
   // oneSumMixer(4,3,2);
   // mixer(4,3,2);
   // oneSumMixer(3,2,1);
+  // smal =  0.0000000000001;
   CZsynth;
 // envelope(0);
 // os.osc(freq)*gain*gate;
@@ -120,206 +121,214 @@ CZsynthMono(i) =
 // ,(master*gate)
 // ,gain
 // ,gate
-;
-oscillators(i,fund) =
-  fund
+   ;
+   oscillators(i,fund) =
+     fund
 // :fi.lowpass(LPfreq)
-  :preFilter
-   <:
-   (
-     sawGroup  ((
-                 (_, offset(oscillatorIndex,i)):CZsawP
-               , offset(oscillatorLevel,i)))
-   , squareGroup  ((
-                    (_, offset(oscillatorIndex,i)):CZsquareP
-                  , offset(oscillatorLevel,i)))
-   , pulseGroup((
-                 (_, offset(oscillatorIndex,i)):CZpulseP
-               , offset(oscillatorLevel,i)))
-   , sinePulseGroup((
-                     (_, offset(oscillatorIndex,i)):CZsinePulseP
-                   , offset(oscillatorLevel,i)))
-   , halfSineGroup((
-                    (_, offset(oscillatorIndex,i)):CZhalfSineP
-                  , offset(oscillatorLevel,i)))
-   , resSawGroup  ((
-                    (_, offset(oscillatorRes,i)):CZresSaw
-                  , offset(oscillatorLevel,i)))
-   , resTriangleGroup  ((
-                         (_, offset(oscillatorRes,i)):CZresTriangle
-                       , offset(oscillatorLevel,i)))
-   , resTrapGroup  ((
-                     (_, offset(oscillatorRes,i)):CZresTrap
-                   , offset(oscillatorLevel,i)))
-   )
-  :mixer(8,1,1) ;
+     :preFilter
+      <:
+      (
+        sawGroup  ((
+                   offset(oscillatorLevel,i)
+                  , ((_, offset(oscillatorIndex,i)):CZsawP)
+        ))
+      , squareGroup  ((
+                     offset(oscillatorLevel,i)
+                     ,((_, offset(oscillatorIndex,i)):CZsquareP)
+      ))
+      , pulseGroup((
+                  offset(oscillatorLevel,i)
+                  , ((_, offset(oscillatorIndex,i)):CZpulseP)
+      ))
+      , sinePulseGroup((
+                      offset(oscillatorLevel,i)
+                      , ((_, offset(oscillatorIndex,i)):CZsinePulseP)
+      ))
+      , halfSineGroup((
+                       offset(oscillatorLevel,i)
+                     , ((_, offset(oscillatorIndex,i)):CZhalfSineP)
+      ))
+      , resSawGroup  ((
+                       offset(oscillatorLevel,i)
+                     , ((_, offset(oscillatorRes,i)):CZresSaw)
+      ))
+      , resTriangleGroup  ((
+                            offset(oscillatorLevel,i)
+                          , ((_, offset(oscillatorRes,i)):CZresTriangle)
+      ))
+      , resTrapGroup  ((
+                        offset(oscillatorLevel,i)
+                      , ((_, offset(oscillatorRes,i)):CZresTrap)
+      ))
+      )
+     :oneSumMixer(8,1,1) ;
 
-filters(i) = _;
-envelope(i) =  _*adsre(attack(i),decay(i),sustain(i),release(i),gate);
-// envelope(i) = _*en.adsre(attack(i),decay(i),sustain(i),release(i),gate);
+   filters(i) = _;
+   envelope(i) =  _*adsre(attack(i),decay(i),sustain(i),release(i),gate);
+   // envelope(i) = _*en.adsre(attack(i),decay(i),sustain(i),release(i),gate);
 
-// master = lf_sawpos_reset(freq,reset) ;
-master = lf_sawpos_phase_reset(freq,masterPhase,reset) ;
-reset = gate:ba.impulsify;
+   // master = lf_sawpos_reset(freq,reset) ;
+   master = lf_sawpos_phase_reset(freq,masterPhase,reset) ;
+   reset = gate:ba.impulsify;
 
-offset(param,i) = mainGroup(param)+(offsetGroup(param) * select2(i,1,-1)) :new_smooth(0.999);
+   offset(param,i) = mainGroup(param)+(offsetGroup(param) * select2(i,1,-1)) :new_smooth(0.999);
 
-preFilter =
-  _<:
-  (
-    filterBPlevel , _
-    , allpassLevel , fi.allpassnn(1,normFreq/2*ma.PI)
-    , ms20level , ve.korg35LPF(normFreq,Q)
-    , oberheimLevel , ve.oberheimLPF(normFreq,Q)
-  )
-  : oneSumMixer(4,1,1);
+   preFilter =
+     _<:
+     (
+       filterBPlevel , _
+       , allpassLevel , fi.allpassnn(1,normFreq/2*ma.PI)
+       , ms20level , ve.korg35LPF(normFreq,Q)
+       , oberheimLevel , ve.oberheimLPF(normFreq,Q)
+     )
+     : oneSumMixer(4,1,1);
 
-// oneSumMixer(nrInChan,nrOutChan,nrSends) =
-// par(i, nrInChan, si.bus(nrSends),si.bus(nrOutChan)) : mixer(nrInChan,nrOutChan,nrSends) : par(i, nrSends, si.bus(nrOutChan));
+   // oneSumMixer(nrInChan,nrOutChan,nrSends) =
+   // par(i, nrInChan, si.bus(nrSends),si.bus(nrOutChan)) : mixer(nrInChan,nrOutChan,nrSends) : par(i, nrSends, si.bus(nrOutChan));
 
 
-lfo = 0.5*(1+os.osc(0.5));
-// vel(x) = chooseFromFixed(nrNotes,velocity,x);
-vel(x) = x:chooseFromFixed(nrNotes,velocity);
-//par(i, nrNotes, velocity(i)*(i==x)):>_ ;
+   lfo = 0.5*(1+os.osc(0.5));
+   // vel(x) = chooseFromFixed(nrNotes,velocity,x);
+   vel(x) = x:chooseFromFixed(nrNotes,velocity);
+   //par(i, nrNotes, velocity(i)*(i==x)):>_ ;
 
-///////////////////////////////////////////////////////////////////////////////
-//                                still to PR:                               //
-///////////////////////////////////////////////////////////////////////////////
+   ///////////////////////////////////////////////////////////////////////////////
+   //                                still to PR:                               //
+   ///////////////////////////////////////////////////////////////////////////////
 
-adsre(attT60,decT60,susLvl,relT60,gate) = envelope with {
-  ugate = gate>0;
-  samps = ugate : +~(*(ugate)); // ramp time in samples
-  attSamps = int(attT60 * ma.SR);
-  // the first sample of each note is alwaus the attack phase, also when attSamps==0
-  attPhase = (samps<attSamps) |  (ugate:ba.impulsify);
-  // attPhase = (samps<attSamps) | ((attSamps==0) & (ugate:ba.impulsify));
-  target = select2(ugate, 0.0,
-                   select2(attPhase, (susLvl)*float(ugate), ugate));
-  t60 = select2(ugate, relT60, select2(attPhase, decT60, attT60));
-  pole = ba.tau2pole(t60/6.91);
-  envelope = target : si.smooth(pole);
+   adsre(attT60,decT60,susLvl,relT60,gate) = envelope with {
+     ugate = gate>0;
+     samps = ugate : +~(*(ugate)); // ramp time in samples
+     attSamps = int(attT60 * ma.SR);
+     // the first sample of each note is alwaus the attack phase, also when attSamps==0
+     attPhase = (samps<attSamps) |  (ugate:ba.impulsify);
+     // attPhase = (samps<attSamps) | ((attSamps==0) & (ugate:ba.impulsify));
+     target = select2(ugate, 0.0,
+                      select2(attPhase, (susLvl)*float(ugate), ugate));
+     t60 = select2(ugate, relT60, select2(attPhase, decT60, attT60));
+     pole = ba.tau2pole(t60/6.91);
+     envelope = target : si.smooth(pole);
 };
-myBus(0) = 0:!;
+   myBus(0) = 0:!;
 myBus(i) = si.bus(i);
 
-sumN(n) = si.bus(n):>_;
-minN(n) = opWithNInputs(min,n);
-maxN(n) = opWithNInputs(max,n);
-meanN(n) = sumN(n)/n;
-RMSn(n) = par(i, n, pow(2)) : meanN(n) : sqrt;
+   sumN(n) = si.bus(n):>_;
+   minN(n) = opWithNInputs(min,n);
+   maxN(n) = opWithNInputs(max,n);
+   meanN(n) = sumN(n)/n;
+   RMSn(n) = par(i, n, pow(2)) : meanN(n) : sqrt;
 
-opWithNInputs =
-  case {
-    (op,0) => 0:!;
-      (op,1) => _;
-    (op,2) => op;
-    (op,N) => (opWithNInputs(op,N-1),_) : op;
-  };
+   opWithNInputs =
+     case {
+       (op,0) => 0:!;
+           (op,1) => _;
+       (op,2) => op;
+       (op,N) => (opWithNInputs(op,N-1),_) : op;
+     };
 
-chooseFromFixed(maxN,expression,N) = par(i, maxN, expression(i)*(i==N)):>_;
+   chooseFromFixed(maxN,expression,N) = par(i, maxN, expression(i)*(i==N)):>_;
 
 
-// https://github.com/grame-cncm/faustlibraries/pull/44#issuecomment-651245377
-new_smooth(s) = si.smooth(s * ((1-1') < 1) );
-enabled_smooth(e,s) = si.smooth(s * e );
+   // https://github.com/grame-cncm/faustlibraries/pull/44#issuecomment-651245377
+   new_smooth(s) = si.smooth(s * ((1-1') < 1) );
+   enabled_smooth(e,s) = si.smooth(s * e );
 
-///////////////////////////////////////////////////////////////////////////////
-//                               mixers from PR                              //
-///////////////////////////////////////////////////////////////////////////////
+   ///////////////////////////////////////////////////////////////////////////////
+   //                               mixers from PR                              //
+   ///////////////////////////////////////////////////////////////////////////////
 
-//  (si.bus(nrSends),_) : monoMixerChannel(nrSends) : si.bus(nrSends);
-monoMixerChannel(nrSends) =
-  (
-    si.bus(nrSends)
-  , (_<:si.bus(nrSends))
-  )
-  :ro.interleave(nrSends,2)
-  :par(i,nrSends,_*_);
-
-oneSumMonoMixerChannel(nrSends) =
-  (
-    (si.bus(nrSends)
-     <: (
-      // par(i, nrSends, min(nrSends*ma.MIN))
-      // ,(sumN(nrSends) : min(nrSends*nrSends*ma.MIN) <: si.bus(nrSends) )
-      si.bus(nrSends)
-     ,(sumN(nrSends) <: si.bus(nrSends) )
+   //  (si.bus(nrSends),_) : monoMixerChannel(nrSends) : si.bus(nrSends);
+   monoMixerChannel(nrSends) =
+     (
+       si.bus(nrSends)
+     , (_<:si.bus(nrSends))
      )
-     :  ro.interleave(nrSends,2) : par(i, nrSends, _/_)
-    )
-  , (_<:si.bus(nrSends))
-  )
-  :ro.interleave(nrSends,2)
-  :par(i,nrSends,_*_);
+     :ro.interleave(nrSends,2)
+     :par(i,nrSends,_*_);
 
-//(si.bus(nrSends),si.bus(nrOutChan)) : multiMixerChannel(nrOutChan,nrSends) : par(i, nrSends, si.bus(nrOutChan));
-multiMixerChannel(nrOutChan,nrSends) =
-  si.bus(nrOutChan+nrSends)
-  <:par(i,nrOutChan,sel(nrOutChan,nrSends,i))
-  :par(i,nrOutChan,monoMixerChannel(nrSends))
-  :ro.interleave(nrSends,nrOutChan)
-with {
-  sel(nrOutChan,nrSends,i) = (par(i,nrSends,_),par(i,nrOutChan,!),(ba.selector(i+nrSends,nrOutChan+nrSends)));
-};
+   oneSumMonoMixerChannel(nrSends) =
+     (
+       (si.bus(nrSends)
+        <: (
+         // par(i, nrSends, min(nrSends*ma.MIN))
+         // ,(sumN(nrSends) : min(nrSends*nrSends*ma.MIN) <: si.bus(nrSends) )
+         si.bus(nrSends)
+        ,(sumN(nrSends) <: si.bus(nrSends) )
+        )
+        :  ro.interleave(nrSends,2) : par(i, nrSends, _/_)
+       )
+     , (_<:si.bus(nrSends))
+     )
+     :ro.interleave(nrSends,2)
+     :par(i,nrSends,_*_);
 
-mixer(nrInChan,nrOutChan,nrSends) =
-  par(i,nrInChan,multiMixerChannel(nrOutChan,nrSends)):ro.interleave(nrSends*nrOutChan,nrInChan):mix
-with {
-  mix=par(i,nrOutChan*nrSends,(si.bus(nrInChan):>_));
-};
+   //(si.bus(nrSends),si.bus(nrOutChan)) : multiMixerChannel(nrOutChan,nrSends) : par(i, nrSends, si.bus(nrOutChan));
+   multiMixerChannel(nrOutChan,nrSends) =
+     si.bus(nrOutChan+nrSends)
+     <:par(i,nrOutChan,sel(nrOutChan,nrSends,i))
+     :par(i,nrOutChan,monoMixerChannel(nrSends))
+     :ro.interleave(nrSends,nrOutChan)
+   with {
+     sel(nrOutChan,nrSends,i) = (par(i,nrSends,_),par(i,nrOutChan,!),(ba.selector(i+nrSends,nrOutChan+nrSends)));
+   };
 
-// par(i, nrInChan, sendsBus,outBus)
-// : mixer(nrInChan,nrOutChan,nrSends)
-// : par(i, nrSends, outBus);
-oneSumMixer(nrInChan,nrOutChan,nrSends) =
-  // ro.interleave(nrInChan,nrOutChan+nrSends)
-  // par(i, nrInChan, sendsBus,outBus)
-  ro.interleave(nrOutChan+nrSends,nrInChan)
-  :
-  (oneSumGains
-  , par(i, nrInChan, outBus)
-  )
-  :
-  // par(i, nrSends, ro.interleave(nrOutChan,nrInChan))
-  ro.interleave(nrInChan,nrOutChan+nrSends)
+   mixer(nrInChan,nrOutChan,nrSends) =
+     par(i,nrInChan,multiMixerChannel(nrOutChan,nrSends)):ro.interleave(nrSends*nrOutChan,nrInChan):mix
+   with {
+     mix=par(i,nrOutChan*nrSends,(si.bus(nrInChan):>_));
+   };
 
-  : par(i,nrInChan,multiMixerChannel(nrOutChan,nrSends))
-  : ro.interleave(nrSends*nrOutChan,nrInChan)
-  : mix
-with {
-  mix=par(i,nrOutChan*nrSends,(si.bus(nrInChan):>_));
-  inBus = si.bus(nrInChan);
-  outBus = si.bus(nrOutChan);
-  sendsBus = si.bus(nrSends);
-  oneSumGains =
+   // par(i, nrInChan, sendsBus,outBus)
+   // : mixer(nrInChan,nrOutChan,nrSends)
+   // : par(i, nrSends, outBus);
+   oneSumMixer(nrInChan,nrOutChan,nrSends) =
+     // ro.interleave(nrInChan,nrOutChan+nrSends)
+     // par(i, nrInChan, sendsBus,outBus)
+     ro.interleave(nrOutChan+nrSends,nrInChan)
+     :
+     (oneSumGains
+     , par(i, nrInChan, outBus)
+     )
+     :
+     // par(i, nrSends, ro.interleave(nrOutChan,nrInChan))
+     ro.interleave(nrInChan,nrOutChan+nrSends)
 
-    (
-      par(i,nrSends,
-          (inBus
-           <: (
-            inBus
-          , (sumN(nrInChan)<:inBus)
-           )
-          )
-          :ro.interleave(nrInChan,2):par(i, nrInChan, /)
-      ))
-  ;
-};
-///////////////////////////////////////////////////////////////////////////////
-//                                  lastNote                                 //
-///////////////////////////////////////////////////////////////////////////////
+     : par(i,nrInChan,multiMixerChannel(nrOutChan,nrSends))
+     : ro.interleave(nrSends*nrOutChan,nrInChan)
+     : mix
+   with {
+     mix=par(i,nrOutChan*nrSends,(si.bus(nrInChan):>_));
+     inBus = si.bus(nrInChan);
+     outBus = si.bus(nrOutChan);
+     sendsBus = si.bus(nrSends);
+     oneSumGains =
 
-// uniqueify makse sure that when multiple new notes are started simultaneously, each get's a unique index
-// TODO: make the uniqueify function only affect the new notes
-nrNotesPlaying = 0: seq(i, nrNotes, noteIsOn(i),_:+);
-noteIsOn(i) = velocity(i)>0;
+       (
+         par(i,nrSends,
+             (inBus
+              <: (
+               par(i, nrInChan, max(nrInChan*ma.MIN))
+             , (sumN(nrInChan):max(nrInChan*nrInChan*ma.MIN)<:inBus)
+              )
+             )
+             :ro.interleave(nrInChan,2):par(i, nrInChan, /)
+         ))
+     ;
+   };
+   ///////////////////////////////////////////////////////////////////////////////
+   //                                  lastNote                                 //
+   ///////////////////////////////////////////////////////////////////////////////
 
-lastNote =
-  par(i, nrNotes, i, index(i))
+   // uniqueify makse sure that when multiple new notes are started simultaneously, each get's a unique index
+   // TODO: make the uniqueify function only affect the new notes
+   nrNotesPlaying = 0: seq(i, nrNotes, noteIsOn(i),_:+);
+   noteIsOn(i) = velocity(i)>0;
+
+   lastNote =
+     par(i, nrNotes, i, index(i))
 // , ((par(i, nrNotes, index(i)),uniqueIfy):ro.interleave(nrNotes,2):par(i, nrNotes, +))
-  :find_max_index(nrNotes):(_,!)
-  :ba.sAndH(nrNotesPlaying>0)
+     :find_max_index(nrNotes):(_,!)
+     :ba.sAndH(nrNotesPlaying>0)
    ;
    // with {
    // an index to indicate the order of the note
