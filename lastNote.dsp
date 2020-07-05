@@ -35,30 +35,11 @@ gate = gain>0;
 
 process =
   // no.noise*0.5<:(ve.oberheimLPF(normFreq,Q),fi.lowpass(4,LPfreq));
-  // lastNote/127;
   // oneSumMonoMixerChannel(3);
   // oneSumMixer(4,3,2);
-  // mixer(4,3,2);
   // oneSumMixer(3,2,1);
-  // smal =  0.0000000000001;
-  CZsynth;
-// envelope(0);
-// os.osc(freq)*gain*gate;
-// CZ.sinePulse(master,oscillatorIndex);
-// , lastNote/127
-// , noteStart(62);
-// (master,oscillatorIndex):CZsaw;
-// master<:
-// (
-// sawGroup ((
-// CZsaw(_, offset(oscillatorIndex,i))
-// , offset(oscillatorLevel,i)))
-// , pulseGroup ((
-// CZpulse(_, offset(oscillatorIndex,i))
-// , offset(oscillatorLevel,i)))
-// );
-// i=0;
-// lf_sawpos_phase_reset(freq,phase,gate:ba.impulsify)*gate;
+  FallbackMixer(5,3,2,(si.bus(3)));
+// CZsynth;
 
 ///////////////////////////////////////////////////////////////////////////////
 //                                    GUI                                    //
@@ -302,6 +283,47 @@ myBus(i) = si.bus(i);
    // par(i, nrInChan, sendsBus,outBus)
    // : mixer(nrInChan,nrOutChan,nrSends)
    // : par(i, nrSends, outBus);
+   FallbackMixer(nrInChan,nrOutChan,nrSends,fallBack) =
+     (
+       (ro.interleave(nrOutChan+nrSends,nrInChan)
+        : (FallbackGains
+          , ro.interleave(nrInChan, nrOutChan)
+        ))
+     , fallBack
+     )
+:
+(inBus,_, ro.interleave(nrOutChan,nrInChan+1) )
+: ro.interleave(nrInChan+1,nrOutChan+nrSends)
+: mixer(nrInChan+1,nrOutChan,nrSends)
+   with {
+     mix=par(i,nrOutChan*nrSends,(si.bus(nrInChan):>_));
+     inBus = si.bus(nrInChan);
+     outBus = si.bus(nrOutChan);
+     sendsBus = si.bus(nrSends);
+     FallbackGains =
+       (
+         par(i,nrSends,
+             (inBus
+              <: (
+               par(i, nrInChan,
+                   (_<:(_<0,(abs:max(nrInChan*ma.MIN)<:(_,_)))) : select2(_,_,_*-1)
+               )
+             , ((par(i, nrInChan, abs):sumN(nrInChan)) <: (max(nrInChan*nrInChan*ma.MIN)<:inBus)
+               , _
+             )
+              )
+              :((ro.interleave(nrInChan,2):par(i, nrInChan, /))
+               , (0<:(inBus))
+               , (min(1)<:(inBus,_))
+              )
+              : ((ro.interleave(nrInChan,3)
+                  : par(i, nrInChan, ro.cross(3) : it.interpolate_linear)
+              ),_*-1+1)
+             )
+         )
+       )
+     ;
+   };
    oneSumMixer(nrInChan,nrOutChan,nrSends) =
      // ro.interleave(nrInChan,nrOutChan+nrSends)
      // par(i, nrInChan, sendsBus,outBus)
