@@ -37,10 +37,10 @@ process =
   // no.noise*0.5<:(ve.oberheimLPF(normFreq,Q),fi.lowpass(4,LPfreq));
   // lastNote/127;
   // oneSumMonoMixerChannel(3);
-  oneSumMixer(4,3,2);
-// mixer(4,3,2);
-// oneSumMixer(3,2,1);
-// CZsynth;
+  // oneSumMixer(4,3,2);
+  // mixer(4,3,2);
+  // oneSumMixer(3,2,1);
+  CZsynth;
 // envelope(0);
 // os.osc(freq)*gain*gate;
 // CZ.sinePulse(master,oscillatorIndex);
@@ -275,15 +275,16 @@ with {
 oneSumMixer(nrInChan,nrOutChan,nrSends) =
   // ro.interleave(nrInChan,nrOutChan+nrSends)
   // par(i, nrInChan, sendsBus,outBus)
-  // :
+  ro.interleave(nrOutChan+nrSends,nrInChan)
+  :
   (oneSumGains
   , par(i, nrInChan, outBus)
   )
-// , par(i, nrSends,
-// outBus
-// )
-// : par(i, nrInChan, sendsBus,outBus)
-            : par(i,nrInChan,multiMixerChannel(nrOutChan,nrSends))
+  :
+  // par(i, nrSends, ro.interleave(nrOutChan,nrInChan))
+  ro.interleave(nrInChan,nrOutChan+nrSends)
+
+  : par(i,nrInChan,multiMixerChannel(nrOutChan,nrSends))
   : ro.interleave(nrSends*nrOutChan,nrInChan)
   : mix
 with {
@@ -303,7 +304,7 @@ with {
           )
           :ro.interleave(nrInChan,2):par(i, nrInChan, /)
       ))
-      ;
+  ;
 };
 ///////////////////////////////////////////////////////////////////////////////
 //                                  lastNote                                 //
@@ -499,5 +500,5 @@ lastNote =
    // stepsize = 0.001;
 
    // nrNotes = 127; // nr of midi notes
-   // nrNotes = 42; // for looking at bargraphs
-   nrNotes = 4; // for block diagram
+   nrNotes = 42; // for looking at bargraphs
+   // nrNotes = 4; // for block diagram
