@@ -37,7 +37,9 @@ process =
   // no.noise*0.5<:(ve.oberheimLPF(normFreq,Q),fi.lowpass(4,LPfreq));
   // lastNote/127;
   // oneSumMonoMixerChannel(3);
-  oneSumMixer(3,2,1);
+  oneSumMixer(4,3,2);
+// mixer(4,3,2);
+// oneSumMixer(3,2,1);
 // CZsynth;
 // envelope(0);
 // os.osc(freq)*gain*gate;
@@ -261,42 +263,47 @@ with {
   sel(nrOutChan,nrSends,i) = (par(i,nrSends,_),par(i,nrOutChan,!),(ba.selector(i+nrSends,nrOutChan+nrSends)));
 };
 
-oneSumMultiMixerChannel(nrOutChan,nrSends) =
-  si.bus(nrOutChan+nrSends)
-  <:par(i,nrOutChan,sel(nrOutChan,nrSends,i))
-  :par(i,nrOutChan,monoMixerChannel(nrSends))
-  :ro.interleave(nrSends,nrOutChan)
-with {
-  sel(nrOutChan,nrSends,i) = (par(i,nrSends,_),par(i,nrOutChan,!),(ba.selector(i+nrSends,nrOutChan+nrSends)));
-};
-
 mixer(nrInChan,nrOutChan,nrSends) =
   par(i,nrInChan,multiMixerChannel(nrOutChan,nrSends)):ro.interleave(nrSends*nrOutChan,nrInChan):mix
 with {
   mix=par(i,nrOutChan*nrSends,(si.bus(nrInChan):>_));
 };
 
-// par(i, nrInChan, si.bus(nrSends),si.bus(nrOutChan))
+// par(i, nrInChan, sendsBus,outBus)
 // : mixer(nrInChan,nrOutChan,nrSends)
-// : par(i, nrSends, si.bus(nrOutChan));
+// : par(i, nrSends, outBus);
 oneSumMixer(nrInChan,nrOutChan,nrSends) =
-  // par(i, nrInChan, si.bus(nrSends),si.bus(nrOutChan))
-  ( par(i, nrOutChan,
-        inBus
-        <: (
-          inBus
-        , (sumN(nrInChan)<:inBus)
-        ):ro.interleave(nrInChan,2):par(i, nrInChan, /)
+  // ro.interleave(nrInChan,nrOutChan+nrSends)
+  // par(i, nrInChan, sendsBus,outBus)
+  // :
+  (oneSumGains
+  , par(i, nrInChan, outBus)
   )
-  , inBus
-  )
-// : par(i, nrInChan, si.bus(nrSends),si.bus(nrOutChan))
-// : par(i,nrInChan,multiMixerChannel(nrOutChan,nrSends))
-// : ro.interleave(nrSends*nrOutChan,nrInChan)
-// : mix
+// , par(i, nrSends,
+// outBus
+// )
+// : par(i, nrInChan, sendsBus,outBus)
+            : par(i,nrInChan,multiMixerChannel(nrOutChan,nrSends))
+  : ro.interleave(nrSends*nrOutChan,nrInChan)
+  : mix
 with {
   mix=par(i,nrOutChan*nrSends,(si.bus(nrInChan):>_));
   inBus = si.bus(nrInChan);
+  outBus = si.bus(nrOutChan);
+  sendsBus = si.bus(nrSends);
+  oneSumGains =
+
+    (
+      par(i,nrSends,
+          (inBus
+           <: (
+            inBus
+          , (sumN(nrInChan)<:inBus)
+           )
+          )
+          :ro.interleave(nrInChan,2):par(i, nrInChan, /)
+      ))
+      ;
 };
 ///////////////////////////////////////////////////////////////////////////////
 //                                  lastNote                                 //
