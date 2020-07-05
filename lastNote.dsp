@@ -292,7 +292,7 @@ myBus(i) = si.bus(i);
      , fallBack
      )
 :
-(inBus,_, ro.interleave(nrOutChan,nrInChan+1) )
+(si.bus((nrInChan+1)*nrSends), ro.interleave(nrOutChan,nrInChan+1) )
 : ro.interleave(nrInChan+1,nrOutChan+nrSends)
 : mixer(nrInChan+1,nrOutChan,nrSends)
    with {
