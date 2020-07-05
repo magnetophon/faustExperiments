@@ -73,14 +73,15 @@ envelopeGroup(i,x) = tabs(vgroup("[%i]envelope %i", x));
 midiGroup(x) = tabs(vgroup("[99]midi", x));
 mainGroup(x) = vgroup("[0]main", x);
 offsetGroup(x) = vgroup("[1]L-R offset", x);
-sawGroup(x)         = oscillatorGroup(hgroup("[0]saw", x));
-squareGroup(x)      = oscillatorGroup(hgroup("[1]square", x));
-pulseGroup(x)       = oscillatorGroup(hgroup("[2]pulse", x));
-sinePulseGroup(x)   = oscillatorGroup(hgroup("[3]sinePulse", x));
-halfSineGroup(x)    = oscillatorGroup(hgroup("[4]halfSine", x));
-resSawGroup(x)      = oscillatorGroup(hgroup("[5]resSaw", x));
-resTriangleGroup(x) = oscillatorGroup(hgroup("[6]resTriangle", x));
-resTrapGroup(x)     = oscillatorGroup(hgroup("[7]resTrap", x));
+sineGroup(x)        = oscillatorGroup(hgroup("[0]sine", x));
+sawGroup(x)         = oscillatorGroup(hgroup("[1]saw", x));
+squareGroup(x)      = oscillatorGroup(hgroup("[2]square", x));
+pulseGroup(x)       = oscillatorGroup(hgroup("[3]pulse", x));
+sinePulseGroup(x)   = oscillatorGroup(hgroup("[4]sinePulse", x));
+halfSineGroup(x)    = oscillatorGroup(hgroup("[5]halfSine", x));
+resSawGroup(x)      = oscillatorGroup(hgroup("[6]resSaw", x));
+resTriangleGroup(x) = oscillatorGroup(hgroup("[7]resTriangle", x));
+resTrapGroup(x)     = oscillatorGroup(hgroup("[8]resTrap", x));
 //sliders//////////////////////////////////////////////////////////////////////
 masterPhase = hslider("masterPhase", 0, -1, 1, stepsize) :new_smooth(0.999);
 portamento = hslider("portamento[scale:log]", 0, 0, 1, stepsize);
@@ -128,10 +129,15 @@ CZsynthMono(i) =
      :preFilter
       <:
       (
-        sawGroup  ((
-                   offset(oscillatorLevel,i)
-                  , ((_, offset(oscillatorIndex,i)):CZsawP)
+        sineGroup  ((
+                     offset(oscillatorLevel,i)
+                   , (_*2*ma.PI:sin)
         ))
+
+      , sawGroup  ((
+                    offset(oscillatorLevel,i)
+                      , ((_, offset(oscillatorIndex,i)):CZsawP)
+            ))
       , squareGroup  ((
                      offset(oscillatorLevel,i)
                      ,((_, offset(oscillatorIndex,i)):CZsquareP)
@@ -161,7 +167,7 @@ CZsynthMono(i) =
                       , ((_, offset(oscillatorRes,i)):CZresTrap)
       ))
       )
-     :oneSumMixer(8,1,1) ;
+     :oneSumMixer(9,1,1) ;
 
    filters(i) = _;
    envelope(i) =  _*adsreg(attack(i),decay(i),sustain(i),release(i),gate,gain);
@@ -308,9 +314,10 @@ myBus(i) = si.bus(i);
      // par(i, nrSends, ro.interleave(nrOutChan,nrInChan))
      ro.interleave(nrInChan,nrOutChan+nrSends)
 
-     : par(i,nrInChan,multiMixerChannel(nrOutChan,nrSends))
-     : ro.interleave(nrSends*nrOutChan,nrInChan)
-     : mix
+     : mixer(nrInChan,nrOutChan,nrSends)
+// : par(i,nrInChan,multiMixerChannel(nrOutChan,nrSends))
+// : ro.interleave(nrSends*nrOutChan,nrInChan)
+// : mix
    with {
      mix=par(i,nrOutChan*nrSends,(si.bus(nrInChan):>_));
      inBus = si.bus(nrInChan);
@@ -322,8 +329,10 @@ myBus(i) = si.bus(i);
          par(i,nrSends,
              (inBus
               <: (
-               par(i, nrInChan, max(nrInChan*ma.MIN))
-             , (sumN(nrInChan):max(nrInChan*nrInChan*ma.MIN)<:inBus)
+               par(i, nrInChan,
+                   (_<:(_<0,(abs:max(nrInChan*ma.MIN)<:(_,_)))) : select2(_,_,_*-1)
+               )
+             , (par(i, nrInChan, abs):sumN(nrInChan):max(nrInChan*nrInChan*ma.MIN)<:inBus)
               )
              )
              :ro.interleave(nrInChan,2):par(i, nrInChan, /)
