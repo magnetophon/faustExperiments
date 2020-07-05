@@ -164,7 +164,8 @@ CZsynthMono(i) =
      :oneSumMixer(8,1,1) ;
 
    filters(i) = _;
-   envelope(i) =  _*adsre(attack(i),decay(i),sustain(i),release(i),gate);
+   envelope(i) =  _*adsreg(attack(i),decay(i),sustain(i),release(i),gate,gain);
+   // envelope(i) =  _*adsre(attack(i),decay(i),sustain(i),release(i),gate);
    // envelope(i) = _*en.adsre(attack(i),decay(i),sustain(i),release(i),gate);
 
    // master = lf_sawpos_reset(freq,reset) ;
@@ -205,6 +206,20 @@ CZsynthMono(i) =
      // attPhase = (samps<attSamps) | ((attSamps==0) & (ugate:ba.impulsify));
      target = select2(ugate, 0.0,
                       select2(attPhase, (susLvl)*float(ugate), ugate));
+     t60 = select2(ugate, relT60, select2(attPhase, decT60, attT60));
+     pole = ba.tau2pole(t60/6.91);
+     envelope = target : si.smooth(pole);
+};
+
+   adsreg(attT60,decT60,susLvl,relT60,gate,gain) = envelope with {
+     ugate = gate>0;
+     samps = ugate : +~(*(ugate)); // ramp time in samples
+     attSamps = int(attT60 * ma.SR);
+     // the first sample of each note is alwaus the attack phase, also when attSamps==0
+     attPhase = (samps<attSamps) |  (ugate:ba.impulsify);
+     // attPhase = (samps<attSamps) | ((attSamps==0) & (ugate:ba.impulsify));
+     target = select2(ugate, 0.0,
+                      select2(attPhase, (susLvl)*float(ugate), ugate)) * gain;
      t60 = select2(ugate, relT60, select2(attPhase, decT60, attT60));
      pole = ba.tau2pole(t60/6.91);
      envelope = target : si.smooth(pole);
