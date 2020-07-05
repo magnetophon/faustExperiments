@@ -36,10 +36,12 @@ gate = gain>0;
 process =
   // no.noise*0.5<:(ve.oberheimLPF(normFreq,Q),fi.lowpass(4,LPfreq));
   // oneSumMonoMixerChannel(3);
-  // oneSumMixer(4,3,2);
+  // oneSumMixer(5,3,4);
   // oneSumMixer(3,2,1);
-  FallbackMixer(5,3,2,(si.bus(3)));
-// CZsynth;
+  // mixer(3,2,2);
+  // oneSumMixer(3,2,2);
+  // FallbackMixer(2,2,2,(si.bus(2)));
+  CZsynth;
 
 ///////////////////////////////////////////////////////////////////////////////
 //                                    GUI                                    //
@@ -110,11 +112,7 @@ CZsynthMono(i) =
      :preFilter
       <:
       (
-        sineGroup  ((
-                     offset(oscillatorLevel,i)
-                   , (_*2*ma.PI:sin)
-        ))
-
+        (_*2*ma.PI:sin)
       , sawGroup  ((
                     offset(oscillatorLevel,i)
                       , ((_, offset(oscillatorIndex,i)):CZsawP)
@@ -147,8 +145,9 @@ CZsynthMono(i) =
                         offset(oscillatorLevel,i)
                       , ((_, offset(oscillatorRes,i)):CZresTrap)
       ))
+
       )
-     :oneSumMixer(9,1,1) ;
+     :fallbackMixer(8,1,1) ;
 
    filters(i) = _;
    envelope(i) =  _*adsreg(attack(i),decay(i),sustain(i),release(i),gate,gain);
@@ -164,12 +163,12 @@ CZsynthMono(i) =
    preFilter =
      _<:
      (
-       filterBPlevel , _
-       , allpassLevel , fi.allpassnn(1,normFreq/2*ma.PI)
-       , ms20level , ve.korg35LPF(normFreq,Q)
-       , oberheimLevel , ve.oberheimLPF(normFreq,Q)
+        _
+      , allpassLevel , fi.allpassnn(1,normFreq/2*ma.PI)
+      , ms20level , ve.korg35LPF(normFreq,Q)
+      , oberheimLevel , ve.oberheimLPF(normFreq,Q)
      )
-     : oneSumMixer(4,1,1);
+     :fallbackMixer(3,1,1);
 
    // oneSumMixer(nrInChan,nrOutChan,nrSends) =
    // par(i, nrInChan, si.bus(nrSends),si.bus(nrOutChan)) : mixer(nrInChan,nrOutChan,nrSends) : par(i, nrSends, si.bus(nrOutChan));
@@ -283,7 +282,7 @@ myBus(i) = si.bus(i);
    // par(i, nrInChan, sendsBus,outBus)
    // : mixer(nrInChan,nrOutChan,nrSends)
    // : par(i, nrSends, outBus);
-   FallbackMixer(nrInChan,nrOutChan,nrSends,fallBack) =
+   fallbackMixer(nrInChan,nrOutChan,nrSends,fallBack) =
      (
        (ro.interleave(nrOutChan+nrSends,nrInChan)
         : (FallbackGains
@@ -291,10 +290,13 @@ myBus(i) = si.bus(i);
         ))
      , fallBack
      )
-:
-(si.bus((nrInChan+1)*nrSends), ro.interleave(nrOutChan,nrInChan+1) )
-: ro.interleave(nrInChan+1,nrOutChan+nrSends)
-: mixer(nrInChan+1,nrOutChan,nrSends)
+     :
+     (si.bus((nrInChan+1)*nrSends), ro.interleave(nrOutChan,nrInChan+1) )
+     :
+     // (par(i, nrInChan+1, ro.interleave(nrOutChan+nrSends,1)))
+     // ro.interleave(nrOutChan+nrSends,nrInChan+1)
+     ro.interleave(nrInChan+1,nrOutChan+nrSends)
+     : mixer(nrInChan+1,nrOutChan,nrSends)
    with {
      mix=par(i,nrOutChan*nrSends,(si.bus(nrInChan):>_));
      inBus = si.bus(nrInChan);
