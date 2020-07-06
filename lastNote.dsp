@@ -3,7 +3,7 @@ declare license "AGPLv3";
 declare name "lastNote";
 declare options "[midi:on]";
 import("stdfaust.lib");
-import("/home/bart/source/edgeofchaos/edgeofchaos.lib");
+// import("/home/bart/source/edgeofchaos/edgeofchaos.lib");
 ///////////////////////////////////////////////////////////////////////////////
 //           give the number of the last note played                         //
 ///////////////////////////////////////////////////////////////////////////////
@@ -43,6 +43,13 @@ process =
   // oneSumMixer(3,2,2);
   // fallbackMixer(7,5,3,(si.bus(5)));
   CZsynth;
+// CZparams(0);
+// envMixer(CZsawGroup,0,oscillatorLevel);
+
+envMixer(group,i,param) = par(j, nrEnvelopes, group(offset(envLevel(j)),i), envelope(j)):mixer(nrEnvelopes,1,1)*group(offset(param,i));
+// envMixer(group,i,param) = par(j, nrEnvelopes, group(offset(envLevel(j)),i), envelope(j)):mixer(nrEnvelopes,1,1);//*group(offset(param,i));
+nrEnvelopes = 4;
+envLevel(i) = vgroup("envelope mixer", hslider("envLevel %i", 0, -1, 1, stepsize));
 
 ///////////////////////////////////////////////////////////////////////////////
 //                                    GUI                                    //
@@ -83,7 +90,7 @@ release(i) = envelopeGroup(i,hslider("[3]release", 0.1, 0, 1, stepsize));
 
 
 lfo_amount = hslider("lfo amount", 0, 0, 1, stepsize):new_smooth(0.999);
-velocity(i) = midiGroup(select2(i>=0, 0, hslider("velocity of note %i [midi:key %i ]", 0, 0, nrNotes, 1)));
+velocity(i) = midiGroup(select2(i>=0, 0, hslider("velocity of note %i [midi:key %i ]", 0, 0, 127, 1)));
 
 // pre-filter /////////////////////////////////////////////////////////////////
 LPfreq = hslider("LPfreq[scale:log]", 24000, 20, 24000, 1);
@@ -103,7 +110,7 @@ with {
 CZsynth = par(i, 2, CZsynthMono(i));
 
 CZsynthMono(i) =
-  oscillators(i,master) : filters(i) : envelope(0);
+  oscillators(i,master) : filters(i) * envelope(-1);
 
 oscillators(i,fund) =
   (
@@ -115,7 +122,7 @@ oscillators(i,fund) =
   :
 
   (
-    (!,(_*2*ma.PI:sin),!)
+    (!,(_*2*ma.PI:sin),!) // !'s' are for routing
   , (_,CZsawP)
   , (_,CZsquareP)
   , (_,CZpulseP)
@@ -129,17 +136,22 @@ oscillators(i,fund) =
 
 CZparams(i) =
   (
-    0,0
-  , CZsawGroup(indexParam(i))
-  , CZsquareGroup(indexParam(i))
-  , CZpulseGroup(indexParam(i))
-  , CZsinePulseGroup(indexParam(i))
-  , CZhalfSineGroup(indexParam(i))
-  , CZresSawGroup(resParam(i))
-  , CZresTriangleGroup(resParam(i))
-  , CZresTrapGroup(resParam(i))
+    0,0 // for routing
+// , CZsawGroup(indexParam(i))
+// , (envMixer(CZsawGroup),envMixer(CZsawGroup))
+    , oscParams(CZsawGroup,i)
+    , CZsquareGroup(indexParam(i))
+    , CZpulseGroup(indexParam(i))
+    , CZsinePulseGroup(indexParam(i))
+    , CZhalfSineGroup(indexParam(i))
+    , CZresSawGroup(resParam(i))
+    , CZresTriangleGroup(resParam(i))
+    , CZresTrapGroup(resParam(i))
   )
   : ro.interleave(2,9);
+
+oscParams(group,i) = envMixer(group,i,oscillatorLevel)
+                   , envMixer(group,i,oscillatorIndex);
 
 indexParam(i) = offset(oscillatorLevel,i)
               , (offset(oscillatorIndex,i));
@@ -190,7 +202,7 @@ OLDoscillators(i,fund) =
 
 
 filters(i) = _;
-envelope(i) =  _*adsreg(attack(i),decay(i),sustain(i),release(i),gate,gain);
+envelope(i) =  adsreg(attack(i),decay(i),sustain(i),release(i),gate,gain);
 // envelope(i) =  _*adsre(attack(i),decay(i),sustain(i),release(i),gate);
 // envelope(i) = _*en.adsre(attack(i),decay(i),sustain(i),release(i),gate);
 
@@ -262,7 +274,7 @@ RMSn(n) = par(i, n, pow(2)) : meanN(n) : sqrt;
 opWithNInputs =
   case {
     (op,0) => 0:!;
-        (op,1) => _;
+      (op,1) => _;
     (op,2) => op;
     (op,N) => (opWithNInputs(op,N-1),_) : op;
   };
@@ -457,47 +469,47 @@ uniqueIfy =
 
 
 svf = environment {
-	    svf(T,F,Q,G) = tick ~ (_,_) : !,!,_,_,_ : si.dot(3, mix)
-	    with {
-		tick(ic1eq, ic2eq, v0) =
-		  2*v1 - ic1eq,
-		  2*v2 - ic2eq,
-		  v0, v1, v2
-		with {
-		v1 = ic1eq + g *(v0-ic2eq) : /(1 + g*(g+k));
-		v2 = ic2eq + g * v1;
-		};
-		A = pow(10.0, G / 40.0);
-		g = tan(F * ma.PI / ma.SR) : case {
-			  (7) => /(sqrt(A));
-			  (8) => *(sqrt(A));
-			  (t) => _;
+	      svf(T,F,Q,G) = tick ~ (_,_) : !,!,_,_,_ : si.dot(3, mix)
+	      with {
+		    tick(ic1eq, ic2eq, v0) =
+		      2*v1 - ic1eq,
+		      2*v2 - ic2eq,
+		      v0, v1, v2
+		    with {
+		    v1 = ic1eq + g *(v0-ic2eq) : /(1 + g*(g+k));
+		    v2 = ic2eq + g * v1;
+		    };
+		    A = pow(10.0, G / 40.0);
+		    g = tan(F * ma.PI / ma.SR) : case {
+			        (7) => /(sqrt(A));
+			        (8) => *(sqrt(A));
+			        (t) => _;
 } (T);
-		k = case {
-			  (6) => 1/(Q*A);
-			  (t) => 1/Q;
+		    k = case {
+			        (6) => 1/(Q*A);
+			        (t) => 1/Q;
 } (T);
-		mix = case {
-			    (0) => 0, 0, 1;
-			    (1) => 0, 1, 0;
-			    (2) => 1, -k, -1;
-			    (3) => 1, -k, 0;
-			    (4) => 1, -k, -2;
-			    (5) => 1, -2*k, 0;
-			    (6) => 1, k*(A*A-1), 0;
-			    (7) => 1, k*(A-1), A*A-1;
-			    (8) => A*A, k*(1-A)*A, 1-A*A;
+		    mix = case {
+			          (0) => 0, 0, 1;
+			          (1) => 0, 1, 0;
+			          (2) => 1, -k, -1;
+			          (3) => 1, -k, 0;
+			          (4) => 1, -k, -2;
+			          (5) => 1, -2*k, 0;
+			          (6) => 1, k*(A*A-1), 0;
+			          (7) => 1, k*(A-1), A*A-1;
+			          (8) => A*A, k*(1-A)*A, 1-A*A;
 } (T);
-	    };
-	    lp(f,q)		= svf(0, f,q,0);
-	    bp(f,q)		= svf(1, f,q,0);
-	    hp(f,q)		= svf(2, f,q,0);
-	    notch(f,q)	= svf(3, f,q,0);
-	    peak(f,q)	= svf(4, f,q,0);
-	    ap(f,q)		= svf(5, f,q,0);
-	    bell(f,q,g)	= svf(6, f,q,g);
-	    ls(f,q,g)	= svf(7, f,q,g);
-	    hs(f,q,g)	= svf(8, f,q,g);
+	      };
+	      lp(f,q)		= svf(0, f,q,0);
+	      bp(f,q)		= svf(1, f,q,0);
+	      hp(f,q)		= svf(2, f,q,0);
+	      notch(f,q)	= svf(3, f,q,0);
+	      peak(f,q)	= svf(4, f,q,0);
+	      ap(f,q)		= svf(5, f,q,0);
+	      bell(f,q,g)	= svf(6, f,q,g);
+	      ls(f,q,g)	= svf(7, f,q,g);
+	      hs(f,q,g)	= svf(8, f,q,g);
 };
 
 
@@ -558,7 +570,7 @@ CZ =
     resSaw(fund,res) = (((-1*(1-fund))*((cos((ma.decimal((max(1,res)*fund)+1))*2*ma.PI)*-.5)+.5))*2)+1;
     resTriangle(fund,res) = select2(fund<.5, 2-(fund*2), fund*2)*tmp*2-1
     with {
-	  tmp = ((fund*(res:max(1)))+1:ma.decimal)*2*ma.PI:cos*.5+.5;
+	    tmp = ((fund*(res:max(1)))+1:ma.decimal)*2*ma.PI:cos*.5+.5;
     };
     resTrap(fund, res) = (((1-fund)*2):min(1)*sin(ma.decimal(fund*(res:max(1)))*2*ma.PI));
   };
