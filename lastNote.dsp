@@ -44,10 +44,10 @@ process =
   // oneSumMixer(3,2,2);
   // fallbackMixer(7,5,3,(si.bus(5)));
   CZsynth;
-// (master,gate):oscillators(0);
+// (master,gate,gain):oscillators(0);
 // octaver(master,CZsaw,oscillatorIndex,oct);
 // os.lf_sawpos(440);///minOctMult*octaveMultiplier(oct):ma.decimal;
-// gate:CZparams(0);
+// (gate,gain):CZparams(0);
 // gate:oscParamsI(CZsawGroup,0);
 // envMixer(CZsawGroup,levelGroup,0,oscillatorLevel);
 
@@ -55,12 +55,12 @@ oct = hslider("oct", 0, minOct, maxOct, stepsize);
 minOct = -4;
 maxOct = 4;
 
-envMixer(group,subGroup,i,param,gate) =
-  par(j, nrEnvelopes, group(offset(envLevel(subGroup,j)),i), envelope(j,gate))
+envMixer(group,subGroup,i,param,gate,gain) =
+  par(j, nrEnvelopes, group(offset(envLevel(subGroup,j)),i), envelope(j,gate,gain))
   :mixer(nrEnvelopes,1,1) * group(offset(subGroup(param),i));
 // envMixer(group,i,param) = par(j, nrEnvelopes, group(offset(envLevel(j)),i), envelope(j)):mixer(nrEnvelopes,1,1);//*group(offset(param,i));
 nrEnvelopes = 4;
-envLevel(subGroup,i) = subGroup(vgroup("envelope mixer", hslider("envLevel %i", 0, -1, 1, stepsize)));
+envLevel(subGroup,i) = subGroup(vgroup("[-1]envelope mixer", hslider("envLevel %i", 0, -1, 1, stepsize)));
 
 ///////////////////////////////////////////////////////////////////////////////
 //                                    GUI                                    //
@@ -85,16 +85,16 @@ CZresSawGroup(x)      = oscillatorGroup(hgroup("[6]CZ resSaw", x));
 CZresTriangleGroup(x) = oscillatorGroup(hgroup("[7]CZ resTriangle", x));
 CZresTrapGroup(x)     = oscillatorGroup(hgroup("[8]CZ resTrap", x));
 sawGroup(x)           = oscillatorGroup(hgroup("[9]saw", x));
-levelGroup(x) = hgroup("level", x);
-indexGroup(x) = hgroup("index", x);
-octGroup(x) = hgroup("oct", x);
+levelGroup(x) = hgroup("[0]level", x);
+indexGroup(x) = hgroup("[1]index", x);
+octGroup(x)   = hgroup("[2]oct", x);
 //sliders//////////////////////////////////////////////////////////////////////
 masterPhase = hslider("masterPhase", 0, -1, 1, stepsize) :new_smooth(0.999);
 portamento = hslider("portamento[scale:log]", 0, 0, 1, stepsize);
 
-oscillatorIndex = hslider("index", 0, 0, 1, stepsize);
-oscillatorRes   = hslider("res", 0, 0, 64, stepsize);
-oscillatorLevel = hslider("Level", 0, -1, 1, stepsize);
+oscillatorLevel = hslider("[0]Level", 0, -1, 1, stepsize);
+oscillatorIndex = hslider("[1]index", 0, 0, 1, stepsize);
+oscillatorRes   = hslider("[1]res", 0, 0, 64, stepsize);
 // sawIndex = sawGroup(oscillatorIndex);
 // pulseIndex = pulseGroup(oscillatorIndex);
 attack(i)  = envelopeGroup(i,hslider("[0]attack", 0, 0, 1, stepsize));
@@ -104,7 +104,17 @@ release(i) = envelopeGroup(i,hslider("[3]release", 0.1, 0, 1, stepsize));
 
 
 lfo_amount = hslider("lfo amount", 0, 0, 1, stepsize):new_smooth(0.999);
-velocity(i) = midiGroup(select2(i>=0, 0, hslider("velocity of note %i [midi:key %i ]", 0, 0, 127, 1)));
+// velocity(i) = midiGroup(select2(i>=0, 0, hslider("velocity of note %i [midi:key %i ]", 0, 0, 127, 1)));
+// velocity(-1) = 0;
+// velocity(i) = midiGroup(hslider("velocity of note %i [midi:key %i ]", 0, 0, 127, 1));
+velocity(i) = VEL(i:max(-1):int) with {
+  VEL =
+    case {
+      (-1) => 0;
+      (i) => midiGroup(hslider("velocity of note %i [midi:key %i ]", 0, 0, 127, 1));
+    };
+};
+
 
 // pre-filter /////////////////////////////////////////////////////////////////
 LPfreq = hslider("LPfreq[scale:log]", 24000, 20, 24000, 1);
@@ -146,13 +156,13 @@ with {
 CZsynth = par(i, 2, CZsynthMono(i));
 
 CZsynthMono(i) =
-  (master,gate):oscillators(i) : filters(i) * envelope(-1,gate);
+  (master,gate,gain):oscillators(i) : filters(i) * envelope(-1,gate,gain);
 
-oscillators(i,fund,gate) =
+oscillators(i,fund,gate,gain) =
   (
     (fund
      <:si.bus(9))
-   ,(CZparams(i,gate))
+   ,(CZparams(i,gate,gain))
   ):(ro.crossnn(9),si.bus(2*9))
   : ro.interleave(9,4)
   :
@@ -169,17 +179,17 @@ oscillators(i,fund,gate) =
   )
   :fallbackMixer(8,1,1) ;
 
-CZparams(i,gate) =
+CZparams(i,gate,gain) =
   (
     0,0,0 // for routing
-    , oscParamsI(CZsawGroup,i,gate)
-    , oscParamsI(CZsquareGroup,i,gate)
-    , oscParamsI(CZpulseGroup,i,gate)
-    , oscParamsI(CZsinePulseGroup,i,gate)
-    , oscParamsI(CZhalfSineGroup,i,gate)
-    , oscParamsR(CZresSawGroup,i,gate)
-    , oscParamsR(CZresTriangleGroup,i,gate)
-    , oscParamsR(CZresTrapGroup,i,gate)
+    , oscParamsI(CZsawGroup,i,gate,gain)
+    , oscParamsI(CZsquareGroup,i,gate,gain)
+    , oscParamsI(CZpulseGroup,i,gate,gain)
+    , oscParamsI(CZsinePulseGroup,i,gate,gain)
+    , oscParamsI(CZhalfSineGroup,i,gate,gain)
+    , oscParamsR(CZresSawGroup,i,gate,gain)
+    , oscParamsR(CZresTriangleGroup,i,gate,gain)
+    , oscParamsR(CZresTrapGroup,i,gate,gain)
   )
   : ro.interleave(3,9);
 
@@ -199,13 +209,13 @@ oldCZparams(i) =
   )
   : ro.interleave(2,9);
 
-oscParamsI(group,i,gate) = envMixer(group,levelGroup,i,oscillatorLevel,gate)
-                         , envMixer(group,indexGroup,i,oscillatorIndex,gate)
-                         , envMixer(group,octGroup,i,oct,gate);
+oscParamsI(group,i,gate,gain) = envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
+                              , envMixer(group,indexGroup,i,oscillatorIndex,gate,gain)
+                              , envMixer(group,octGroup,i,oct,gate,gain);
 
-oscParamsR(group,i,gate) = envMixer(group,levelGroup,i,oscillatorLevel,gate)
-                         , envMixer(group,indexGroup,i,oscillatorRes,gate)
-                         , envMixer(group,octGroup,i,oct,gate);
+oscParamsR(group,i,gate,gain) = envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
+                              , envMixer(group,indexGroup,i,oscillatorRes,gate,gain)
+                              , envMixer(group,octGroup,i,oct,gate,gain);
 
 indexParam(i) = offset(oscillatorLevel,i)
               , (offset(oscillatorIndex,i));
@@ -256,7 +266,7 @@ OLDoscillators(i,fund) =
 
 
 filters(i) = _;
-envelope(i,gate) =  adsreg(attack(i),decay(i),sustain(i),release(i),gate,gain);
+envelope(i,gate,gain) =  adsreg(attack(i),decay(i),sustain(i),release(i),gate,gain);
 // envelope(i) =  _*adsre(attack(i),decay(i),sustain(i),release(i),gate);
 // envelope(i) = _*en.adsre(attack(i),decay(i),sustain(i),release(i),gate);
 
@@ -670,6 +680,6 @@ stepsize = 0.01;
 // smooth
 // stepsize = 0.001;
 
-// nrNotes = 127; // nr of midi notes
-nrNotes = 42; // for looking at bargraphs
+nrNotes = 127; // nr of midi notes
+// nrNotes = 42; // for looking at bargraphs
 // nrNotes = 4; // for block diagram
