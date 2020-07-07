@@ -78,8 +78,8 @@ oscillatorGroup(x) = tabs(vgroup("[00]oscillators", x));
 // envelopeGroup(x) = tabs(vgroup("[01]envelope", x));
 envelopeGroup(i,x) = tabs(vgroup("envelopes", hgroup("[%i]envelope %i", x)));
 midiGroup(x) = tabs(vgroup("[99]midi", x));
-mainGroup(x) = stereoGroup(hgroup("[0]main", x));
-offsetGroup(x) = stereoGroup(hgroup("[1]L-R offset", x));
+mainGroup(x) = stereoGroup(vgroup("[0]main", x));
+offsetGroup(x) = stereoGroup(vgroup("[1]L-R offset", x));
 stereoGroup(x) = tgroup("stereo", x);
 sineGroup(x)          = tabs(hgroup("[0]sine", x));
 CZsawGroup(x)         = tabs(hgroup("[1]CZ saw", x));
@@ -93,15 +93,19 @@ CZresTrapGroup(x)     = tabs(hgroup("[8]CZ resTrap", x));
 sawGroup(x)           = tabs(hgroup("[9]saw", x));
 
 
-allpassGroup(x)  = tabs(hgroup("[0]allpass", x));
-ms20Group(x)= tabs(hgroup("[1]ms20", x));
-oberheimGroup(x) = tabs(hgroup("[2]oberheim", x));
-normFreqGroup(x) = tabs(hgroup("[3]freq", x));
-QGroup(x) = tabs(hgroup("[4]Q", x));
+allpassGroup(x)  = preFilterGroup(hgroup("[0]allpass", x));
+ms20Group(x)     = preFilterGroup(hgroup("[1]ms20", x));
+oberheimGroup(x) = preFilterGroup(hgroup("[2]oberheim", x));
+normFreqGroup(x) = preFilterGroup(hgroup("[3]freq", x));
+QGroup(x)        = preFilterGroup(hgroup("[4]Q", x));
 
-levelGroup(x) = hgroup("[0]level", x);
-indexGroup(x) = hgroup("[1]index", x);
-octGroup(x)   = hgroup("[2]oct", x);
+levelGroup(x) = oscGroup(hgroup("[0]level", x));
+indexGroup(x) = oscGroup(hgroup("[1]index", x));
+octGroup(x)   = oscGroup(hgroup("[2]oct", x));
+
+oscGroup(x)       = hgroup("oscillator",x);
+preFilterGroup(x) = hgroup("preFilter",x);
+
 //sliders//////////////////////////////////////////////////////////////////////
 masterPhase = hslider("masterPhase", 0, -1, 1, stepsize) :new_smooth(0.999);
 portamento = hslider("portamento[scale:log]", 0, 0, 1, stepsize);
@@ -137,12 +141,13 @@ velocity(i) = VEL(i:max(-1):int) with {
 
 // pre-filter /////////////////////////////////////////////////////////////////
 LPfreq = hslider("LPfreq[scale:log]", 24000, 20, 24000, 1);
-normFreq = hslider("normFreq", 1, 0, 1, stepsize);
-Q = hslider("Q", 1, stepsize, 10, stepsize);
-filterBPlevel = hslider("filterBPlevel", 1, 0, 1, stepsize);
-allpassLevel = hslider("allpassLevel", 0, 0, 1, stepsize);
-ms20level = hslider("ms20level", 0, 0, 1, stepsize);
-oberheimLevel = hslider("oberheimLevel", 0, 0, 1, stepsize);
+
+filterBPlevel = vslider("filterBPlevel", 1, 0, 1, stepsize);
+allpassLevel  = vslider("allpassLevel", 0, 0, 1, stepsize);
+ms20level     = vslider("ms20level", 0, 0, 1, stepsize);
+oberheimLevel = vslider("oberheimLevel", 0, 0, 1, stepsize);
+normFreq      = vslider("normFreq", 1, 0, 1, stepsize);
+Q             = vslider("Q", 1, stepsize, 10, stepsize);
 ///////////////////////////////////////////////////////////////////////////////
 //                               implementation                              //
 ///////////////////////////////////////////////////////////////////////////////
@@ -405,7 +410,7 @@ RMSn(n) = par(i, n, pow(2)) : meanN(n) : sqrt;
 opWithNInputs =
   case {
     (op,0) => 0:!;
-      (op,1) => _;
+        (op,1) => _;
     (op,2) => op;
     (op,N) => (opWithNInputs(op,N-1),_) : op;
   };
