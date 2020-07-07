@@ -44,6 +44,7 @@ process =
   // oneSumMixer(3,2,2);
   // fallbackMixer(7,5,3,(si.bus(5)));
   CZsynth;
+// par(i, nrNotes, velocity(i)):>_;
 // freq;
 // (lastNote<:(master));
 // (lastNote<:(master,gate,gain)):oscillators(0);
@@ -53,7 +54,6 @@ process =
 // gate:oscParamsI(CZsawGroup,0);
 // envMixer(CZsawGroup,levelGroup,0,oscillatorLevel);
 
-oct = hslider("oct", 0, minOct, maxOct, stepsize);
 minOct = -4;
 maxOct = 4;
 
@@ -73,20 +73,20 @@ envLevel(subGroup,i) = subGroup(vgroup("[-1]envelope mixer", hslider("envLevel %
 tabs(x) = tgroup("CZsynth", x);
 oscillatorGroup(x) = tabs(vgroup("[00]oscillators", x));
 // envelopeGroup(x) = tabs(vgroup("[01]envelope", x));
-envelopeGroup(i,x) = tabs(vgroup("[%i]envelope %i", x));
+envelopeGroup(i,x) = tabs(vgroup("envelopes", hgroup("[%i]envelope %i", x)));
 midiGroup(x) = tabs(vgroup("[99]midi", x));
 mainGroup(x) = vgroup("[0]main", x);
 offsetGroup(x) = vgroup("[1]L-R offset", x);
-sineGroup(x)          = oscillatorGroup(hgroup("[0]sine", x));
-CZsawGroup(x)         = oscillatorGroup(hgroup("[1]CZ saw", x));
-CZsquareGroup(x)      = oscillatorGroup(hgroup("[2]CZ square", x));
-CZpulseGroup(x)       = oscillatorGroup(hgroup("[3]CZ pulse", x));
-CZsinePulseGroup(x)   = oscillatorGroup(hgroup("[4]CZ sinePulse", x));
-CZhalfSineGroup(x)    = oscillatorGroup(hgroup("[5]CZ halfSine", x));
-CZresSawGroup(x)      = oscillatorGroup(hgroup("[6]CZ resSaw", x));
-CZresTriangleGroup(x) = oscillatorGroup(hgroup("[7]CZ resTriangle", x));
-CZresTrapGroup(x)     = oscillatorGroup(hgroup("[8]CZ resTrap", x));
-sawGroup(x)           = oscillatorGroup(hgroup("[9]saw", x));
+sineGroup(x)          = tabs(hgroup("[0]sine", x));
+CZsawGroup(x)         = tabs(hgroup("[1]CZ saw", x));
+CZsquareGroup(x)      = tabs(hgroup("[2]CZ square", x));
+CZpulseGroup(x)       = tabs(hgroup("[3]CZ pulse", x));
+CZsinePulseGroup(x)   = tabs(hgroup("[4]CZ sinePulse", x));
+CZhalfSineGroup(x)    = tabs(hgroup("[5]CZ halfSine", x));
+CZresSawGroup(x)      = tabs(hgroup("[6]CZ resSaw", x));
+CZresTriangleGroup(x) = tabs(hgroup("[7]CZ resTriangle", x));
+CZresTrapGroup(x)     = tabs(hgroup("[8]CZ resTrap", x));
+sawGroup(x)           = tabs(hgroup("[9]saw", x));
 levelGroup(x) = hgroup("[0]level", x);
 indexGroup(x) = hgroup("[1]index", x);
 octGroup(x)   = hgroup("[2]oct", x);
@@ -94,15 +94,17 @@ octGroup(x)   = hgroup("[2]oct", x);
 masterPhase = hslider("masterPhase", 0, -1, 1, stepsize) :new_smooth(0.999);
 portamento = hslider("portamento[scale:log]", 0, 0, 1, stepsize);
 
-oscillatorLevel = hslider("[0]Level", 0, -1, 1, stepsize);
-oscillatorIndex = hslider("[1]index", 0, 0, 1, stepsize);
-oscillatorRes   = hslider("[1]res", 0, 0, 64, stepsize);
+oscillatorLevel = vslider("[0]Level", 0, -1, 1, stepsize);
+oscillatorIndex = vslider("[1]index", 0, 0, 1, stepsize);
+oscillatorRes   = vslider("[1]res", 0, 0, 64, stepsize);
+oct             = vslider("oct", 0, minOct, maxOct, stepsize);
+
 // sawIndex = sawGroup(oscillatorIndex);
 // pulseIndex = pulseGroup(oscillatorIndex);
-attack(i)  = envelopeGroup(i,hslider("[0]attack", 0, 0, 1, stepsize));
-decay(i)   = envelopeGroup(i,hslider("[1]decay", 0.1, 0, 1, stepsize));
-sustain(i) = envelopeGroup(i,hslider("[2]sustain", 0.8, 0, 1, stepsize));
-release(i) = envelopeGroup(i,hslider("[3]release", 0.1, 0, 1, stepsize));
+attack(i)  = envelopeGroup(i,vslider("[0]attack", 0, 0, 1, stepsize));
+decay(i)   = envelopeGroup(i,vslider("[1]decay", 0.1, 0, 1, stepsize));
+sustain(i) = envelopeGroup(i,vslider("[2]sustain", 0.8, 0, 1, stepsize));
+release(i) = envelopeGroup(i,vslider("[3]release", 0.1, 0, 1, stepsize));
 
 
 lfo_amount = hslider("lfo amount", 0, 0, 1, stepsize):new_smooth(0.999);
@@ -113,8 +115,11 @@ velocity(i) = VEL(i:max(-1):int) with {
   VEL =
     case {
       (-1) => 0;
-      (i) => midiGroup(hslider("velocity of note %i [midi:key %i ]", 0, 0, 127, 1));
+      (i) => midiGroup(midiTabs(tabNr(i),hslider("velocity of note %i [midi:key %i ]", 0, 0, 127, 1)));
     };
+  midiTabs(tabNr,x) = tgroup("velocity",vgroup("v %tabNr", x));
+  tabNr(i) = (i/nrTabs):floor;
+  nrTabs = int((nrNotes+1)/16);
 };
 
 
