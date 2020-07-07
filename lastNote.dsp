@@ -10,17 +10,17 @@ import("stdfaust.lib");
 phase = hslider("phase", 0, 0, 1, stepsize);
 // traditional faust synth:
 // freq = midiGroup(hslider("freq",440,0,24000,0.0001)) :new_smooth( ba.tau2pole(portamento));
-freq = midiGroup(hslider("freq",440,0,24000,0.0001)) :si.smooth(gate' * ba.tau2pole(portamento));
-gain = midiGroup(hslider("gain",0.5,0,1,stepsize));
-gate = midiGroup(button("gate"));
+// freq = midiGroup(hslider("freq",440,0,24000,0.0001)) :si.smooth(gate' * ba.tau2pole(portamento));
+// gain = midiGroup(hslider("gain",0.5,0,1,stepsize));
+// gate = midiGroup(button("gate"));
 
 // workaround for proper monophonic handling, increases compile-time massively and CPU usage with +/- 5%:
 // freq = lastNote:ba.pianokey2hz :new_smooth(ba.tau2pole(portamento));
 // freq = lastNote:ba.pianokey2hz :si.smooth(gate' * ba.tau2pole(portamento));
 
-// freq = lastNote:ba.pianokey2hz : enabled_smooth(gate' & gate , ba.tau2pole(portamento));
-// gain = (vel(lastNote)/127); // increases the cpu-usage, from 7% to 11%
-// gate = gain>0;
+freq = lastNote:ba.pianokey2hz : enabled_smooth(gate' & gate , ba.tau2pole(portamento));
+gain = (vel(lastNote)/127); // increases the cpu-usage, from 7% to 11%
+gate = gain>0;
 
 // gate = vel(lastNote)>0;
 // gain = (nrNotesPlaying>0); // no velocity, 7% cpu
@@ -43,17 +43,21 @@ process =
   // mixer(3,2,2);
   // oneSumMixer(3,2,2);
   // fallbackMixer(7,5,3,(si.bus(5)));
-  // CZsynth;
-  octaver(master,CZsaw,oscillatorIndex,oct);
+  CZsynth;
+// (master,gate):oscillators(0);
+// octaver(master,CZsaw,oscillatorIndex,oct);
 // os.lf_sawpos(440);///minOctMult*octaveMultiplier(oct):ma.decimal;
-// CZparams(0);
-// envMixer(CZsawGroup,0,oscillatorLevel);
+// gate:CZparams(0);
+// gate:oscParamsI(CZsawGroup,0);
+// envMixer(CZsawGroup,levelGroup,0,oscillatorLevel);
+
 oct = hslider("oct", 0, minOct, maxOct, stepsize);
 minOct = -4;
 maxOct = 4;
 
-envMixer(group,subGroup,i,param) =
-  par(j, nrEnvelopes, group(offset(envLevel(subGroup,j)),i), envelope(j)):mixer(nrEnvelopes,1,1)*group(offset(subGroup(param),i));
+envMixer(group,subGroup,i,param,gate) =
+  par(j, nrEnvelopes, group(offset(envLevel(subGroup,j)),i), envelope(j,gate))
+  :mixer(nrEnvelopes,1,1) * group(offset(subGroup(param),i));
 // envMixer(group,i,param) = par(j, nrEnvelopes, group(offset(envLevel(j)),i), envelope(j)):mixer(nrEnvelopes,1,1);//*group(offset(param,i));
 nrEnvelopes = 4;
 envLevel(subGroup,i) = subGroup(vgroup("envelope mixer", hslider("envLevel %i", 0, -1, 1, stepsize)));
@@ -116,8 +120,8 @@ oberheimLevel = hslider("oberheimLevel", 0, 0, 1, stepsize);
 
 octaver(fund,oscillator,params,oct) =
   (
-    ((f0,params):oscillator)
-  , ((f1,params):oscillator)
+    ((f0:preFilter,params):oscillator)
+  , ((f1:preFilter,params):oscillator)
 // ):it.interpolate_linear(oct:ma.decimal)
   ):it.interpolate_linear(oct:abs%1)
 with {
@@ -142,23 +146,22 @@ with {
 CZsynth = par(i, 2, CZsynthMono(i));
 
 CZsynthMono(i) =
-  oscillators(i,master) : filters(i) * envelope(-1);
+  (master,gate):oscillators(i) : filters(i) * envelope(-1,gate);
 
-oscillators(i,fund) =
+oscillators(i,fund,gate) =
   (
-    (fund :preFilter
-           <:si.bus(9))
-   ,(CZparams(i))
+    (fund
+     <:si.bus(9))
+   ,(CZparams(i,gate))
   ):(ro.crossnn(9),si.bus(2*9))
   : ro.interleave(9,4)
   :
-
   (
-    (!,(_*2*ma.PI:sin),!,!) // !'s' are for routing
+    (!,(_/minOctMult%1:preFilter*2*ma.PI:sin),!,!) // !'s' are for routing
   , (_,CZsawPO)
   , (_,CZsquarePO)
   , (_,CZpulsePO)
-  , (_,CZsinePOulsePO)
+  , (_,CZsinePulsePO)
   , (_,CZhalfSinePO)
   , (_,CZresSawO)
   , (_,CZresTriangleO)
@@ -166,12 +169,26 @@ oscillators(i,fund) =
   )
   :fallbackMixer(8,1,1) ;
 
-CZparams(i) =
+CZparams(i,gate) =
+  (
+    0,0,0 // for routing
+    , oscParamsI(CZsawGroup,i,gate)
+    , oscParamsI(CZsquareGroup,i,gate)
+    , oscParamsI(CZpulseGroup,i,gate)
+    , oscParamsI(CZsinePulseGroup,i,gate)
+    , oscParamsI(CZhalfSineGroup,i,gate)
+    , oscParamsR(CZresSawGroup,i,gate)
+    , oscParamsR(CZresTriangleGroup,i,gate)
+    , oscParamsR(CZresTrapGroup,i,gate)
+  )
+  : ro.interleave(3,9);
+
+oldCZparams(i) =
   (
     0,0 // for routing
-// , CZsawGroup(indexParam(i))
+    , CZsawGroup(indexParam(i))
 // , (envMixer(CZsawGroup),envMixer(CZsawGroup))
-    , oscParams(CZsawGroup,i)
+// , oscParams(CZsawGroup,i)
     , CZsquareGroup(indexParam(i))
     , CZpulseGroup(indexParam(i))
     , CZsinePulseGroup(indexParam(i))
@@ -182,13 +199,13 @@ CZparams(i) =
   )
   : ro.interleave(2,9);
 
-oscParamsI(group,i) = envMixer(group,levelGroup,i,oscillatorLevel)
-                    , envMixer(group,indexGroup,i,oscillatorIndex)
-                    , envMixer(group,octGroup,i,oct);
+oscParamsI(group,i,gate) = envMixer(group,levelGroup,i,oscillatorLevel,gate)
+                         , envMixer(group,indexGroup,i,oscillatorIndex,gate)
+                         , envMixer(group,octGroup,i,oct,gate);
 
-oscParamsR(group,i) = envMixer(group,levelGroup,i,oscillatorLevel)
-                    , envMixer(group,indexGroup,i,oscillatorRes)
-                    , envMixer(group,octGroup,i,oct);
+oscParamsR(group,i,gate) = envMixer(group,levelGroup,i,oscillatorLevel,gate)
+                         , envMixer(group,indexGroup,i,oscillatorRes,gate)
+                         , envMixer(group,octGroup,i,oct,gate);
 
 indexParam(i) = offset(oscillatorLevel,i)
               , (offset(oscillatorIndex,i));
@@ -239,7 +256,7 @@ OLDoscillators(i,fund) =
 
 
 filters(i) = _;
-envelope(i) =  adsreg(attack(i),decay(i),sustain(i),release(i),gate,gain);
+envelope(i,gate) =  adsreg(attack(i),decay(i),sustain(i),release(i),gate,gain);
 // envelope(i) =  _*adsre(attack(i),decay(i),sustain(i),release(i),gate);
 // envelope(i) = _*en.adsre(attack(i),decay(i),sustain(i),release(i),gate);
 
@@ -631,7 +648,7 @@ CZsquarePO(fund, index,oct) = octaver(fund,CZsquareP,index,oct);
 CZpulsePO(fund, index,oct) = octaver(fund,CZpulseP,index,oct);
 CZsinePulsePO(fund, index,oct) = octaver(fund,CZsinePulseP,index,oct);
 CZhalfSinePO(fund, index,oct) = octaver(fund,CZhalfSineP,index,oct);
-CZresSawO(fund,res,oct) = octaver(fund,CZresSawP,res,oct);
+CZresSawO(fund,res,oct) = octaver(fund,CZresSaw,res,oct);
 CZresTriangleO(fund,res,oct) = octaver(fund,CZresTriangle,res,oct);
 CZresTrapO(fund, res,oct) = octaver(fund,CZresTrap,res,oct);
 ///////////////////////////////////////////////////////////////////////////////
@@ -654,5 +671,5 @@ stepsize = 0.01;
 // stepsize = 0.001;
 
 // nrNotes = 127; // nr of midi notes
-// nrNotes = 42; // for looking at bargraphs
-nrNotes = 4; // for block diagram
+nrNotes = 42; // for looking at bargraphs
+// nrNotes = 4; // for block diagram
