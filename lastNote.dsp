@@ -18,9 +18,9 @@ phase = hslider("phase", 0, 0, 1, stepsize);
 // freq = lastNote:ba.pianokey2hz :new_smooth(ba.tau2pole(portamento));
 // freq = lastNote:ba.pianokey2hz :si.smooth(gate' * ba.tau2pole(portamento));
 
-freq = lastNote:ba.pianokey2hz : enabled_smooth(gate' & gate , ba.tau2pole(portamento));
-gain = (vel(lastNote)/127); // increases the cpu-usage, from 7% to 11%
-gate = gain>0;
+freq(lastNote) = lastNote:ba.pianokey2hz : enabled_smooth(gate(lastNote)' & gate(lastNote) , ba.tau2pole(portamento));
+gain(lastNote) = (vel(lastNote)/127); // increases the cpu-usage, from 7% to 11%
+gate(lastNote) = gain(lastNote)>0;
 
 // gate = vel(lastNote)>0;
 // gain = (nrNotesPlaying>0); // no velocity, 7% cpu
@@ -44,7 +44,9 @@ process =
   // oneSumMixer(3,2,2);
   // fallbackMixer(7,5,3,(si.bus(5)));
   CZsynth;
-// (master,gate,gain):oscillators(0);
+// freq;
+// (lastNote<:(master));
+// (lastNote<:(master,gate,gain)):oscillators(0);
 // octaver(master,CZsaw,oscillatorIndex,oct);
 // os.lf_sawpos(440);///minOctMult*octaveMultiplier(oct):ma.decimal;
 // (gate,gain):CZparams(0);
@@ -156,7 +158,13 @@ with {
 CZsynth = par(i, 2, CZsynthMono(i));
 
 CZsynthMono(i) =
-  (master,gate,gain):oscillators(i) : filters(i) * envelope(-1,gate,gain);
+  (lastNote<:(master,gate,gain)) :
+  (si.bus(3)<:si.bus(6)) :
+  (
+    (oscillators(i) : filters(i))
+  , (!,_,_)
+  )
+  :(_*envelope(-1));
 
 oscillators(i,fund,gate,gain) =
   (
@@ -271,8 +279,8 @@ envelope(i,gate,gain) =  adsreg(attack(i),decay(i),sustain(i),release(i),gate,ga
 // envelope(i) = _*en.adsre(attack(i),decay(i),sustain(i),release(i),gate);
 
 // master = lf_sawpos_reset(freq,reset) ;
-master = lf_sawpos_phase_reset(freq*minOctMult,masterPhase,reset) ;
-reset = gate:ba.impulsify;
+master(lastNote) = lf_sawpos_phase_reset(freq(lastNote)*minOctMult,masterPhase,reset(lastNote)) ;
+reset(lastNote) = gate(lastNote):ba.impulsify;
 
 offset(param,i) = mainGroup(param)+(offsetGroup(param) * select2(i,1,-1)) :new_smooth(0.999);
 
