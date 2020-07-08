@@ -43,10 +43,78 @@ process =
   // mixer(3,2,2);
   // oneSumMixer(3,2,2);
   // fallbackMixer(7,5,3,(si.bus(5)));
-  // preFilterParams(0);
-  // oscillators(0);
+  // si.bus(nrEnvelopes)<:
+  // si.bus(inputs(preFilterParams(0,(si.bus(nrEnvelopes)) ))):
+  // preFilterParams(0,(si.bus(nrEnvelopes)) );
+// oscillators(0);
   // octaverFilter(master,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZresTrap,oscillatorRes,oct);
-  CZsynth;
+  // CZsynth(master(lastNote),(0,1,2,3,4));
+  // CZsynth(-1,(0,1,2,3,4));
+  // CZsynthMono(0,-1,(-2,1,2,3,4));
+  // CZsynthMono(0,master(lastNote),(envelopes(lastNote)));
+  // CZsynth(master(lastNote),(envelopes(lastNote)));
+
+  // si.bus(nrEnvelopes)<:
+  // si.bus(inputs(preFilterParams(0,(si.bus(nrEnvelopes)) ))):
+  // preFilterParams(0,(si.bus(nrEnvelopes)) );
+  // ((inputs(CZsynth(_,(si.bus(nrEnvelopes+1)))))-1);
+
+  // inputs(CZsynth(_,(si.bus(nrEnvelopes+1))));
+  // (CZsynth(_,(si.bus(nrEnvelopes+1))));
+
+  // lastNote<:
+  // (_,
+  // (envelopes
+  // <:
+  // (si.bus((inputs(CZsynth(_,(si.bus(nrEnvelopes+1)))))-1))
+  // si.bus((nrEnvelopes+1)*2)
+  // )
+  // )
+  // :
+  // CZsynth(_,(si.bus(nrEnvelopes+1)))
+  // oscillators(0,-5,(1,2,3,4))
+  // inputs(preFilterParams(0,si.bus(4)))
+  // , 1
+  // , inputs(CZparams(0,si.bus(4)))
+  // ,1
+
+  // lastNote<:(master,envelopes)
+  // lastNote:fundPlusEnvelopes
+  // : monoRouting
+  // :CZsynthMono(0,_,si.bus(nrEnvelopes+1))
+  // ;
+
+  lastNote:fundPlusEnvelopes <: par(i, 2, monoRouting)
+  : (CZsynth(_,(si.bus(nrEnvelopes+1))));
+
+
+
+
+monoRouting =
+  (ro.crossNM(1,nrEnvelopes),_)
+  :
+  (
+    (
+      (si.bus(nrEnvelopes+1))
+      <:
+      (
+        (si.bus(nrEnvelopes+1):(si.bus(nrEnvelopes),!)<:si.bus(nrEnvelopes*45))
+      , (si.bus(nrEnvelopes+1):(par(i, nrEnvelopes, !),_))
+      , (si.bus(nrEnvelopes+1):(si.bus(nrEnvelopes),!)<:si.bus(nrEnvelopes*25))
+      )
+    )
+   ,_
+  );
+
+nrEnvelopes = 4;
+// master(lastNote),
+// envelopes(gain(lastNote),gate(lastNote));
+// CZsynthMono(0,-1,(0,1,2,3,4));
+// lastNote<:(master,gain,gate,(1,2,3,4));
+// oscillators(0,-1,(1,2,3,4));
+// (preFilterParams(0,(1,2,3,4)));
+// envMixer(CZsawGroup,allpassGroup,0,allpassLevel,(1,2,3,4));
+
 // par(i, nrNotes, velocity(i)):>_;
 // freq;
 // (lastNote<:(master));
@@ -55,19 +123,42 @@ process =
 // os.lf_sawpos(440);///minOctMult*octaveMultiplier(oct):ma.decimal;
 // (gate,gain):CZparams(0);
 // gate:oscParamsI(CZsawGroup,0);
-// envMixer(CZsawGroup,levelGroup,0,oscillatorLevel);
+// par(j, nrEnvelopes, envelope(j,1,1))
+// :
+// envMixer(CZsawGroup,levelGroup,0,oscillatorLevel,si.bus(nrEnvelopes));
+// varInputsFun(a,b,variableNrOfOtherInputs);
+// variableNrOfOtherInputs:varInputsFun(a,b,si.bus(nrOtherInputs));
+
+fundPlusEnvelopes(lastNote) =
+  // master(lastNote)
+  // ,envelopes(lastNote);
+  lastNote<:
+  (master
+  ,envelopes);
+
+varInputsFun(a,b,(head,tail)) =
+  head,a,tail,b,
+  head,a,tail,b;
+variableNrOfOtherInputs = par(i, nrOtherInputs, i+10); // just a demo
+nrOtherInputs = 4;
+a = -1;
+b = -2;
+c = -3;
+d = -4;
 
 minOct = -4;
 maxOct = 4;
 
-envMixer(group,subGroup,i,param,gate,gain) =
-  par(j, nrEnvelopes, group(offset(envLevel(subGroup,j)),i), envelope(j,gate,gain))
+envMixer(group,subGroup,i,param,(firstEnv,otherEnvs)) =
+  (
+    par(j, nrEnvelopes, group(offset(envLevel(subGroup,j)),i))
+   ,(firstEnv,otherEnvs)
+  )
+  :ro.interleave(nrEnvelopes,2)
   :mixer(nrEnvelopes,1,1)
 * group(offset(subGroup(masterGroup(param)),i))
-+ group(offset(subGroup(param),i))
-;
++ group(offset(subGroup(param),i));
 // envMixer(group,i,param) = par(j, nrEnvelopes, group(offset(envLevel(j)),i), envelope(j)):mixer(nrEnvelopes,1,1);//*group(offset(param,i));
-nrEnvelopes = 4;
 envLevel(subGroup,i) = subGroup(vgroup("[-1]envelope mixer", hslider("envLevel %i", 0, -1, 1, stepsize)));
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -194,25 +285,23 @@ smoothDelayedBy(d, s) = *(1.0 - sd) : + ~ *(sd)
 with {
   sd = s * ((1-1@d) < 1) ;
 };
-CZsynth = par(i, 2, CZsynthMono(i));
+CZsynth(fund,(firstEnv,otherEnvs)) = par(i, 2, CZsynthMono(i,fund,(firstEnv,otherEnvs)));
 
-CZsynthMono(i) =
-  (lastNote<:(master,gate,gain)) :
-  (si.bus(3)<:si.bus(6)) :
-  (
-    (oscillators(i) : filters(i))
-  , (!,_,_)
-  )
-  :(_*envelope(-1));
+CZsynthMono(i,fund,(firstEnv,otherEnvs)) =
+  (oscillators(i,fund,(otherEnvs))
+   : filters(i)
+  )*firstEnv;
 
-oscillators(i,fund,gate,gain) =
+envelopes(lastNote) = par(i, nrEnvelopes+1, envelope(i,gain(lastNote),gate(lastNote)));
+
+oscillators(i,fund,(firstEnv,otherEnvs)) =
   (
-    (preFilterParams(i,gate,gain))
+    (preFilterParams(i,(firstEnv,otherEnvs)))
    ,(
     (
       (fund
        <:si.bus(9))
-     ,(CZparams(i,gate,gain))
+     ,(CZparams(i,(firstEnv,otherEnvs)))
     ):(ro.crossnn(9),si.bus(2*9))
    )
   )
@@ -233,17 +322,17 @@ oscillators(i,fund,gate,gain) =
   :fallbackMixer(8,1,1)
 ;
 
-CZparams(i,gate,gain) =
+CZparams(i,(firstEnv,otherEnvs)) =
   (
-    0,0,envMixer(sineGroup,octGroup,i,oct,gate,gain) // for routing
-    , oscParamsI(CZsawGroup,i,gate,gain)
-    , oscParamsI(CZsquareGroup,i,gate,gain)
-    , oscParamsI(CZpulseGroup,i,gate,gain)
-    , oscParamsI(CZsinePulseGroup,i,gate,gain)
-    , oscParamsI(CZhalfSineGroup,i,gate,gain)
-    , oscParamsR(CZresSawGroup,i,gate,gain)
-    , oscParamsR(CZresTriangleGroup,i,gate,gain)
-    , oscParamsR(CZresTrapGroup,i,gate,gain)
+    0,0,envMixer(sineGroup,octGroup,i,oct,(firstEnv,otherEnvs)) // for routing
+    , oscParamsI(CZsawGroup,i,(firstEnv,otherEnvs))
+    , oscParamsI(CZsquareGroup,i,(firstEnv,otherEnvs))
+    , oscParamsI(CZpulseGroup,i,(firstEnv,otherEnvs))
+    , oscParamsI(CZsinePulseGroup,i,(firstEnv,otherEnvs))
+    , oscParamsI(CZhalfSineGroup,i,(firstEnv,otherEnvs))
+    , oscParamsR(CZresSawGroup,i,(firstEnv,otherEnvs))
+    , oscParamsR(CZresTriangleGroup,i,(firstEnv,otherEnvs))
+    , oscParamsR(CZresTrapGroup,i,(firstEnv,otherEnvs))
   )
   : ro.interleave(3,9);
 
@@ -263,36 +352,36 @@ oldCZparams(i) =
   )
   : ro.interleave(2,9);
 
-preFilterParams(i,gate,gain) =
+preFilterParams(i,(firstEnv,otherEnvs)) =
   (
-    oscPreFilterParams(sineGroup,i,gate,gain)
-  , oscPreFilterParams(CZsawGroup,i,gate,gain)
-  , oscPreFilterParams(CZsquareGroup,i,gate,gain)
-  , oscPreFilterParams(CZpulseGroup,i,gate,gain)
-  , oscPreFilterParams(CZsinePulseGroup,i,gate,gain)
-  , oscPreFilterParams(CZhalfSineGroup,i,gate,gain)
-  , oscPreFilterParams(CZresSawGroup,i,gate,gain)
-  , oscPreFilterParams(CZresTriangleGroup,i,gate,gain)
-  , oscPreFilterParams(CZresTrapGroup,i,gate,gain)
+    oscPreFilterParams(sineGroup,i,(firstEnv,otherEnvs))
+  , oscPreFilterParams(CZsawGroup,i,(firstEnv,otherEnvs))
+  , oscPreFilterParams(CZsquareGroup,i,(firstEnv,otherEnvs))
+  , oscPreFilterParams(CZpulseGroup,i,(firstEnv,otherEnvs))
+  , oscPreFilterParams(CZsinePulseGroup,i,(firstEnv,otherEnvs))
+  , oscPreFilterParams(CZhalfSineGroup,i,(firstEnv,otherEnvs))
+  , oscPreFilterParams(CZresSawGroup,i,(firstEnv,otherEnvs))
+  , oscPreFilterParams(CZresTriangleGroup,i,(firstEnv,otherEnvs))
+  , oscPreFilterParams(CZresTrapGroup,i,(firstEnv,otherEnvs))
   )
   : ro.interleave(5,9);
 
-oscPreFilterParams(group,i,gate,gain) =
-  envMixer(group,allpassGroup,i,allpassLevel,gate,gain)
-, envMixer(group,ms20Group,i,ms20level,gate,gain)
-, envMixer(group,oberheimGroup,i,oberheimLevel,gate,gain)
-, (envMixer(group,normFreqGroup,i,normFreq,gate,gain):max(0):min(1))
-, (envMixer(group,QGroup,i,Q,gate,gain):max(stepsize):min(10));
+oscPreFilterParams(group,i,(firstEnv,otherEnvs)) =
+  envMixer(group,allpassGroup,i,allpassLevel,(firstEnv,otherEnvs))
+, envMixer(group,ms20Group,i,ms20level,(firstEnv,otherEnvs))
+, envMixer(group,oberheimGroup,i,oberheimLevel,(firstEnv,otherEnvs))
+, (envMixer(group,normFreqGroup,i,normFreq,(firstEnv,otherEnvs)):max(0):min(1))
+, (envMixer(group,QGroup,i,Q,(firstEnv,otherEnvs)):max(stepsize):min(10));
 
-oscParamsI(group,i,gate,gain) =
-    envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
-  , envMixer(group,indexGroup,i,oscillatorIndex,gate,gain)
-  , envMixer(group,octGroup,i,oct,gate,gain);
+oscParamsI(group,i,(firstEnv,otherEnvs)) =
+  envMixer(group,levelGroup,i,oscillatorLevel,(firstEnv,otherEnvs))
+, envMixer(group,indexGroup,i,oscillatorIndex,(firstEnv,otherEnvs))
+, envMixer(group,octGroup,i,oct,(firstEnv,otherEnvs));
 
-oscParamsR(group,i,gate,gain) =
-  envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
-, envMixer(group,indexGroup,i,oscillatorRes,gate,gain)
-, envMixer(group,octGroup,i,oct,gate,gain);
+oscParamsR(group,i,(firstEnv,otherEnvs)) =
+  envMixer(group,levelGroup,i,oscillatorLevel,(firstEnv,otherEnvs))
+, envMixer(group,indexGroup,i,oscillatorRes,(firstEnv,otherEnvs))
+, envMixer(group,octGroup,i,oct,(firstEnv,otherEnvs));
 
 indexParam(i) = offset(oscillatorLevel,i)
               , (offset(oscillatorIndex,i));
@@ -570,87 +659,87 @@ lastNote =
 // , ((par(i, nrNotes, index(i)),uniqueIfy):ro.interleave(nrNotes,2):par(i, nrNotes, +))
   :find_max_index(nrNotes):(_,!)
   :ba.sAndH(nrNotesPlaying>0)
- ;
- // with {
- // an index to indicate the order of the note
- // it adds one for every additional note played
- // it resets to 0 when there are no notes playing
- // assume multiple notes can start at once
- orderIndex = ((_+nrNewNotes) * (nrNotesPlaying>1))~_;
- nrNewNotes = ((nrNotesPlaying-nrNotesPlaying')):max(0);
+;
+// with {
+// an index to indicate the order of the note
+// it adds one for every additional note played
+// it resets to 0 when there are no notes playing
+// assume multiple notes can start at once
+orderIndex = ((_+nrNewNotes) * (nrNotesPlaying>1))~_;
+nrNewNotes = ((nrNotesPlaying-nrNotesPlaying')):max(0);
 
- // the order index of note i
- // TODO: when multiple notes start at the same time, give each a unique index
- index(i) = orderIndex:(select2(noteStart(i),_,_)
-                        :select2(noteEnd(i)+(1:ba.impulsify),_,-1))~_;
+// the order index of note i
+// TODO: when multiple notes start at the same time, give each a unique index
+index(i) = orderIndex:(select2(noteStart(i),_,_)
+                       :select2(noteEnd(i)+(1:ba.impulsify),_,-1))~_;
 
- // we use this instead of:
- // hslider("frequency[midi:keyon 62]",0,0,nrNotes,1)
- // because keyon can come multiple times, and we only want the first
- noteStart(i) = noteIsOn(i):ba.impulsify;
- noteEnd(i) = (noteIsOn(i)'-noteIsOn(i)):max(0):ba.impulsify;
- //or do we?
- // noteStart(i) = (hslider("keyon[midi:keyon %i]",0,0,nrNotes,1)>0) :ba.impulsify;
- // ERROR : path '/lastNote/keyon' is already used
- // noteEnd(i) = ((hslider("keyon[midi:keyon %i]",0,0,nrNotes,1)>0)'-(hslider("keyon[midi:keyon %i]",0,0,nrNotes,1)>0)):max(0):ba.impulsify;
- // at the very least, the first implementation of noteStart(i) doesn't add another 127 sliders
+// we use this instead of:
+// hslider("frequency[midi:keyon 62]",0,0,nrNotes,1)
+// because keyon can come multiple times, and we only want the first
+noteStart(i) = noteIsOn(i):ba.impulsify;
+noteEnd(i) = (noteIsOn(i)'-noteIsOn(i)):max(0):ba.impulsify;
+//or do we?
+// noteStart(i) = (hslider("keyon[midi:keyon %i]",0,0,nrNotes,1)>0) :ba.impulsify;
+// ERROR : path '/lastNote/keyon' is already used
+// noteEnd(i) = ((hslider("keyon[midi:keyon %i]",0,0,nrNotes,1)>0)'-(hslider("keyon[midi:keyon %i]",0,0,nrNotes,1)>0)):max(0):ba.impulsify;
+// at the very least, the first implementation of noteStart(i) doesn't add another 127 sliders
 
- // from Julius Smith's acor.dsp:
- index_comparator(n,x,m,y) = select2((x>y),m,n), select2((x>y),y,x); // compare integer-labeled signals
- // take N number-value pairs and give the number with the maximum value
- find_max_index(N) = seq(i,N-2, (index_comparator,si.bus(2*(N-i-2)))) : index_comparator;
+// from Julius Smith's acor.dsp:
+index_comparator(n,x,m,y) = select2((x>y),m,n), select2((x>y),y,x); // compare integer-labeled signals
+// take N number-value pairs and give the number with the maximum value
+find_max_index(N) = seq(i,N-2, (index_comparator,si.bus(2*(N-i-2)))) : index_comparator;
 
- uniqueIfy =
-   (0:seq(i, nrNotes, myBus(i),(_-(noteIsOn(i-1)*(nrNewNotes>1))<:(_,_)) ):(si.bus(nrNotes),!));
+uniqueIfy =
+  (0:seq(i, nrNotes, myBus(i),(_-(noteIsOn(i-1)*(nrNewNotes>1))<:(_,_)) ):(si.bus(nrNotes),!));
 
- // };
- //////////////////////////////////////////////////////////////////////////////
- //                            from @idle on slack                            //
- //////////////////////////////////////////////////////////////////////////////
+// };
+//////////////////////////////////////////////////////////////////////////////
+//                            from @idle on slack                            //
+//////////////////////////////////////////////////////////////////////////////
 
 
- svf = environment {
-	       svf(T,F,Q,G) = tick ~ (_,_) : !,!,_,_,_ : si.dot(3, mix)
-	       with {
-		     tick(ic1eq, ic2eq, v0) =
-		       2*v1 - ic1eq,
-		       2*v2 - ic2eq,
-		       v0, v1, v2
-		     with {
-		     v1 = ic1eq + g *(v0-ic2eq) : /(1 + g*(g+k));
-		     v2 = ic2eq + g * v1;
-		     };
-		     A = pow(10.0, G / 40.0);
-		     g = tan(F * ma.PI / ma.SR) : case {
-			         (7) => /(sqrt(A));
-			         (8) => *(sqrt(A));
-			         (t) => _;
+svf = environment {
+	    svf(T,F,Q,G) = tick ~ (_,_) : !,!,_,_,_ : si.dot(3, mix)
+	    with {
+		tick(ic1eq, ic2eq, v0) =
+		  2*v1 - ic1eq,
+		  2*v2 - ic2eq,
+		  v0, v1, v2
+		with {
+		v1 = ic1eq + g *(v0-ic2eq) : /(1 + g*(g+k));
+		v2 = ic2eq + g * v1;
+		};
+		A = pow(10.0, G / 40.0);
+		g = tan(F * ma.PI / ma.SR) : case {
+			  (7) => /(sqrt(A));
+			  (8) => *(sqrt(A));
+			  (t) => _;
 } (T);
-		     k = case {
-			         (6) => 1/(Q*A);
-			         (t) => 1/Q;
+		k = case {
+			  (6) => 1/(Q*A);
+			  (t) => 1/Q;
 } (T);
-		     mix = case {
-			           (0) => 0, 0, 1;
-			           (1) => 0, 1, 0;
-			           (2) => 1, -k, -1;
-			           (3) => 1, -k, 0;
-			           (4) => 1, -k, -2;
-			           (5) => 1, -2*k, 0;
-			           (6) => 1, k*(A*A-1), 0;
-			           (7) => 1, k*(A-1), A*A-1;
-			           (8) => A*A, k*(1-A)*A, 1-A*A;
+		mix = case {
+			    (0) => 0, 0, 1;
+			    (1) => 0, 1, 0;
+			    (2) => 1, -k, -1;
+			    (3) => 1, -k, 0;
+			    (4) => 1, -k, -2;
+			    (5) => 1, -2*k, 0;
+			    (6) => 1, k*(A*A-1), 0;
+			    (7) => 1, k*(A-1), A*A-1;
+			    (8) => A*A, k*(1-A)*A, 1-A*A;
 } (T);
-	       };
-	       lp(f,q)		= svf(0, f,q,0);
-	       bp(f,q)		= svf(1, f,q,0);
-	       hp(f,q)		= svf(2, f,q,0);
-	       notch(f,q)	= svf(3, f,q,0);
-	       peak(f,q)	= svf(4, f,q,0);
-	       ap(f,q)		= svf(5, f,q,0);
-	       bell(f,q,g)	= svf(6, f,q,g);
-	       ls(f,q,g)	= svf(7, f,q,g);
-	       hs(f,q,g)	= svf(8, f,q,g);
+	    };
+	    lp(f,q)		= svf(0, f,q,0);
+	    bp(f,q)		= svf(1, f,q,0);
+	    hp(f,q)		= svf(2, f,q,0);
+	    notch(f,q)	= svf(3, f,q,0);
+	    peak(f,q)	= svf(4, f,q,0);
+	    ap(f,q)		= svf(5, f,q,0);
+	    bell(f,q,g)	= svf(6, f,q,g);
+	    ls(f,q,g)	= svf(7, f,q,g);
+	    hs(f,q,g)	= svf(8, f,q,g);
 };
 
 
@@ -658,118 +747,118 @@ lastNote =
 
 
 
- //////////////////////////////////////////////////////////////////////////////
- //           https://github.com/grame-cncm/faustlibraries/pull/47           //
- //////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////
+//           https://github.com/grame-cncm/faustlibraries/pull/47           //
+//////////////////////////////////////////////////////////////////////////////
 
- CZ =
-   environment {
-     saw(fund, index) = sawChooseP(fund, index, 0);
-     sawP(fund, index) = sawChooseP(fund, index, 1);
-     sawChooseP(fund, index, p) =
-       (((fnd(fund,allign,p)*((.5-tmp)/tmp)),(-1*fnd(fund,allign,p)+1)*((.5-tmp)/(1-tmp))):min+fnd(fund,allign,p))*2*ma.PI:cos
-     with {
-       tmp = (.5-(index*.5)):max(0.01):min(0.5);
-       allign = si.interpolate(index, 0.75, 0.5);
-     };
-     square(fund, index) = squareChooseP(fund, index, 0);
-     squareP(fund, index) = squareChooseP(fund, index, 1);
-     squareChooseP(fund, index, p) = (fnd(fund,allign,p)>=0.5), (ma.decimal((fnd(fund,allign,p)*2)+1)<:_-min(_,(-1*_+1)*((INDEX)/(1-INDEX)))) :+ *ma.PI:cos
-     with {
-       INDEX = index:max(ma.MIN):min(1-ma.MIN);
-       allign = si.interpolate(INDEX, -0.25, 0);
-     };
+CZ =
+  environment {
+    saw(fund, index) = sawChooseP(fund, index, 0);
+    sawP(fund, index) = sawChooseP(fund, index, 1);
+    sawChooseP(fund, index, p) =
+      (((fnd(fund,allign,p)*((.5-tmp)/tmp)),(-1*fnd(fund,allign,p)+1)*((.5-tmp)/(1-tmp))):min+fnd(fund,allign,p))*2*ma.PI:cos
+    with {
+      tmp = (.5-(index*.5)):max(0.01):min(0.5);
+      allign = si.interpolate(index, 0.75, 0.5);
+    };
+    square(fund, index) = squareChooseP(fund, index, 0);
+    squareP(fund, index) = squareChooseP(fund, index, 1);
+    squareChooseP(fund, index, p) = (fnd(fund,allign,p)>=0.5), (ma.decimal((fnd(fund,allign,p)*2)+1)<:_-min(_,(-1*_+1)*((INDEX)/(1-INDEX)))) :+ *ma.PI:cos
+    with {
+      INDEX = index:max(ma.MIN):min(1-ma.MIN);
+      allign = si.interpolate(INDEX, -0.25, 0);
+    };
 
-     pulse(fund, index) = pulseChooseP(fund, index, 0);
-     pulseP(fund, index) = pulseChooseP(fund, index, 1);
-     pulseChooseP(fund, index, p) = ((fnd(fund,allign,p)-min(fnd(fund,allign,p),((-1*fnd(fund,allign,p)+1)*(INDEX/(1-INDEX)))))*2*ma.PI):cos
-     with {
-       INDEX = index:min(0.99):max(0);
-       allign = si.interpolate(index, -0.25, 0.0);
-     };
+    pulse(fund, index) = pulseChooseP(fund, index, 0);
+    pulseP(fund, index) = pulseChooseP(fund, index, 1);
+    pulseChooseP(fund, index, p) = ((fnd(fund,allign,p)-min(fnd(fund,allign,p),((-1*fnd(fund,allign,p)+1)*(INDEX/(1-INDEX)))))*2*ma.PI):cos
+    with {
+      INDEX = index:min(0.99):max(0);
+      allign = si.interpolate(index, -0.25, 0.0);
+    };
 
-     sinePulse(fund, index) = sinePulseChooseP(fund, index, 0);
-     sinePulseP(fund, index) = sinePulseChooseP(fund, index, 1);
-     sinePulseChooseP(fund, index, p) = (min(fnd(fund,allign,p)*((0.5-INDEX)/INDEX),(-1*fnd(fund,allign,p)+1)*((.5-INDEX)/(1-INDEX)))+fnd(fund,allign,p))*4*ma.PI:cos
-     with {
-       INDEX = ((index*-0.49)+0.5);
-       allign = si.interpolate(index, -0.125, -0.25);
-     };
+    sinePulse(fund, index) = sinePulseChooseP(fund, index, 0);
+    sinePulseP(fund, index) = sinePulseChooseP(fund, index, 1);
+    sinePulseChooseP(fund, index, p) = (min(fnd(fund,allign,p)*((0.5-INDEX)/INDEX),(-1*fnd(fund,allign,p)+1)*((.5-INDEX)/(1-INDEX)))+fnd(fund,allign,p))*4*ma.PI:cos
+    with {
+      INDEX = ((index*-0.49)+0.5);
+      allign = si.interpolate(index, -0.125, -0.25);
+    };
 
-     halfSine(fund, index) = halfSineChooseP(fund, index, 0);
-     halfSineP(fund, index) = halfSineChooseP(fund, index, 1);
-     halfSineChooseP(fund, index, p) = (select2(fnd(fund,allign,p)<.5, .5*(fnd(fund,allign,p)-.5)/INDEX+.5, fnd(fund,allign,p)):min(1))*2*ma.PI:cos
-     with {
-       INDEX = (.5-(index*0.5)):min(.5):max(.01);
-       allign = si.interpolate(index:min(0.975), -0.25, -0.5);
-     };
-     fnd =
-       case {
-         (fund,allign,0) => fund;
-         (fund,allign,1) => (fund+allign) : ma.frac; // allign phase with fund
-       };
-     resSaw(fund,res) = (((-1*(1-fund))*((cos((ma.decimal((max(1,res)*fund)+1))*2*ma.PI)*-.5)+.5))*2)+1;
-     resTriangle(fund,res) = select2(fund<.5, 2-(fund*2), fund*2)*tmp*2-1
-     with {
-	     tmp = ((fund*(res:max(1)))+1:ma.decimal)*2*ma.PI:cos*.5+.5;
-     };
-     resTrap(fund, res) = (((1-fund)*2):min(1)*sin(ma.decimal(fund*(res:max(1)))*2*ma.PI));
-   };
+    halfSine(fund, index) = halfSineChooseP(fund, index, 0);
+    halfSineP(fund, index) = halfSineChooseP(fund, index, 1);
+    halfSineChooseP(fund, index, p) = (select2(fnd(fund,allign,p)<.5, .5*(fnd(fund,allign,p)-.5)/INDEX+.5, fnd(fund,allign,p)):min(1))*2*ma.PI:cos
+    with {
+      INDEX = (.5-(index*0.5)):min(.5):max(.01);
+      allign = si.interpolate(index:min(0.975), -0.25, -0.5);
+    };
+    fnd =
+      case {
+        (fund,allign,0) => fund;
+        (fund,allign,1) => (fund+allign) : ma.frac; // allign phase with fund
+      };
+    resSaw(fund,res) = (((-1*(1-fund))*((cos((ma.decimal((max(1,res)*fund)+1))*2*ma.PI)*-.5)+.5))*2)+1;
+    resTriangle(fund,res) = select2(fund<.5, 2-(fund*2), fund*2)*tmp*2-1
+    with {
+	  tmp = ((fund*(res:max(1)))+1:ma.decimal)*2*ma.PI:cos*.5+.5;
+    };
+    resTrap(fund, res) = (((1-fund)*2):min(1)*sin(ma.decimal(fund*(res:max(1)))*2*ma.PI));
+  };
 
- CZsaw(fund, index) = CZ.sawChooseP(fund, index, 0);
- CZsawP(fund, index) = CZ.sawChooseP(fund, index, 1);
- CZsquare(fund, index) = CZ.squareChooseP(fund, index, 0);
- CZsquareP(fund, index) = CZ.squareChooseP(fund, index, 1);
- CZpulse(fund, index) = CZ.pulseChooseP(fund, index, 0);
- CZpulseP(fund, index) = CZ.pulseChooseP(fund, index, 1);
- CZsinePulse(fund, index) = CZ.sinePulseChooseP(fund, index, 0);
- CZsinePulseP(fund, index) = CZ.sinePulseChooseP(fund, index, 1);
- CZhalfSine(fund, index) = CZ.halfSineChooseP(fund, index, 0);
- CZhalfSineP(fund, index) = CZ.halfSineChooseP(fund, index, 1);
- CZresSaw(fund,res) = CZ.resSaw(fund,res);
- CZresTriangle(fund,res) = CZ.resTriangle(fund,res);
- CZresTrap(fund, res) = CZ.resTrap(fund, res);
+CZsaw(fund, index) = CZ.sawChooseP(fund, index, 0);
+CZsawP(fund, index) = CZ.sawChooseP(fund, index, 1);
+CZsquare(fund, index) = CZ.squareChooseP(fund, index, 0);
+CZsquareP(fund, index) = CZ.squareChooseP(fund, index, 1);
+CZpulse(fund, index) = CZ.pulseChooseP(fund, index, 0);
+CZpulseP(fund, index) = CZ.pulseChooseP(fund, index, 1);
+CZsinePulse(fund, index) = CZ.sinePulseChooseP(fund, index, 0);
+CZsinePulseP(fund, index) = CZ.sinePulseChooseP(fund, index, 1);
+CZhalfSine(fund, index) = CZ.halfSineChooseP(fund, index, 0);
+CZhalfSineP(fund, index) = CZ.halfSineChooseP(fund, index, 1);
+CZresSaw(fund,res) = CZ.resSaw(fund,res);
+CZresTriangle(fund,res) = CZ.resTriangle(fund,res);
+CZresTrap(fund, res) = CZ.resTrap(fund, res);
 
- CZsawPO(fund, index,oct) = octaver(fund,CZsawP,index,oct);
- CZsquarePO(fund, index,oct) = octaver(fund,CZsquareP,index,oct);
- CZpulsePO(fund, index,oct) = octaver(fund,CZpulseP,index,oct);
- CZsinePulsePO(fund, index,oct) = octaver(fund,CZsinePulseP,index,oct);
- CZhalfSinePO(fund, index,oct) = octaver(fund,CZhalfSineP,index,oct);
- CZresSawO(fund,res,oct) = octaver(fund,CZresSaw,res,oct);
- CZresTriangleO(fund,res,oct) = octaver(fund,CZresTriangle,res,oct);
- CZresTrapO(fund, res,oct) = octaver(fund,CZresTrap,res,oct);
+CZsawPO(fund, index,oct) = octaver(fund,CZsawP,index,oct);
+CZsquarePO(fund, index,oct) = octaver(fund,CZsquareP,index,oct);
+CZpulsePO(fund, index,oct) = octaver(fund,CZpulseP,index,oct);
+CZsinePulsePO(fund, index,oct) = octaver(fund,CZsinePulseP,index,oct);
+CZhalfSinePO(fund, index,oct) = octaver(fund,CZhalfSineP,index,oct);
+CZresSawO(fund,res,oct) = octaver(fund,CZresSaw,res,oct);
+CZresTriangleO(fund,res,oct) = octaver(fund,CZresTriangle,res,oct);
+CZresTrapO(fund, res,oct) = octaver(fund,CZresTrap,res,oct);
 
 
- sinPOF(allpassLevel,ms20level,oberheimLevel,normFreq,Q,fund,index,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,sine,index,oct);
- sine(fund,index) = (fund*2*ma.PI:sin);
- // sine(fund,index) = (fund*2*ma.PI:sin),(index:!);
- CZsawPOF(allpassLevel,ms20level,oberheimLevel,normFreq,Q,fund,index,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZsawP,index,oct);
- CZsquarePOF(allpassLevel,ms20level,oberheimLevel,normFreq,Q,fund,index,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZsquareP,index,oct);
- CZpulsePOF(allpassLevel,ms20level,oberheimLevel,normFreq,Q,fund,index,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZpulseP,index,oct);
- CZsinePulsePOF(allpassLevel,ms20level,oberheimLevel,normFreq,Q,fund,index,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZsinePulseP,index,oct);
- CZhalfSinePOF(allpassLevel,ms20level,oberheimLevel,normFreq,Q,fund,index,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZhalfSineP,index,oct);
- CZresSawOF(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,res,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZresSaw,res,oct);
- CZresTriangleOF(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,res,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZresTriangle,res,oct);
- CZresTrapOF(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,res,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZresTrap,res,oct);
- ///////////////////////////////////////////////////////////////////////////////
- //                                oscs fom PR                                 //
- ///////////////////////////////////////////////////////////////////////////////
+sinPOF(allpassLevel,ms20level,oberheimLevel,normFreq,Q,fund,index,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,sine,index,oct);
+sine(fund,index) = (fund*2*ma.PI:sin);
+// sine(fund,index) = (fund*2*ma.PI:sin),(index:!);
+CZsawPOF(allpassLevel,ms20level,oberheimLevel,normFreq,Q,fund,index,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZsawP,index,oct);
+CZsquarePOF(allpassLevel,ms20level,oberheimLevel,normFreq,Q,fund,index,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZsquareP,index,oct);
+CZpulsePOF(allpassLevel,ms20level,oberheimLevel,normFreq,Q,fund,index,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZpulseP,index,oct);
+CZsinePulsePOF(allpassLevel,ms20level,oberheimLevel,normFreq,Q,fund,index,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZsinePulseP,index,oct);
+CZhalfSinePOF(allpassLevel,ms20level,oberheimLevel,normFreq,Q,fund,index,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZhalfSineP,index,oct);
+CZresSawOF(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,res,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZresSaw,res,oct);
+CZresTriangleOF(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,res,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZresTriangle,res,oct);
+CZresTrapOF(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,res,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZresTrap,res,oct);
+///////////////////////////////////////////////////////////////////////////////
+//                                oscs fom PR                                 //
+///////////////////////////////////////////////////////////////////////////////
 
- lf_sawpos_reset(freq,reset) = ma.frac * (reset == 0) ~ +(freq/ma.SR);
+lf_sawpos_reset(freq,reset) = ma.frac * (reset == 0) ~ +(freq/ma.SR);
 
- lf_sawpos_phase_reset(freq,phase,reset) = lf_sawpos_reset(freq,reset) +phase :ma.frac;
- // lf_sawpos_phase_reset(freq,phase,reset) = (+(phase-phase') : ma.frac * (reset == 0)) ~ +(freq/ma.SR);
+lf_sawpos_phase_reset(freq,phase,reset) = lf_sawpos_reset(freq,reset) +phase :ma.frac;
+// lf_sawpos_phase_reset(freq,phase,reset) = (+(phase-phase') : ma.frac * (reset == 0)) ~ +(freq/ma.SR);
 
- //////////////////////////////////////////////////////////////////////////////
- //                                 constants                                 //
- //////////////////////////////////////////////////////////////////////////////
- // fast
- // stepsize = 0.1;
- // medium
- stepsize = 0.01;
- // smooth
- // stepsize = 0.001;
+//////////////////////////////////////////////////////////////////////////////
+//                                 constants                                 //
+//////////////////////////////////////////////////////////////////////////////
+// fast
+// stepsize = 0.1;
+// medium
+stepsize = 0.01;
+// smooth
+// stepsize = 0.001;
 
- nrNotes = 127; // nr of midi notes
- // nrNotes = 42; // for looking at bargraphs
- // nrNotes = 4; // for block diagram
+nrNotes = 127; // nr of midi notes
+// nrNotes = 42; // for looking at bargraphs
+// nrNotes = 4; // for block diagram
