@@ -79,13 +79,20 @@ process =
   // ,1
 
   // lastNote<:(master,envelopes)
+
   // lastNote:fundPlusEnvelopes
   // : monoRouting
   // :CZsynthMono(0,_,si.bus(nrEnvelopes+1))
-  // ;
 
+  // ro.cross(2);
   lastNote:fundPlusEnvelopes <: par(i, 2, monoRouting)
   : (CZsynth(_,(si.bus(nrEnvelopes+1))));
+
+my_cross2 = (_,_)<:
+            ( (!,_) , (_,!) )
+            :>(_,_);
+
+
 
 
 
@@ -288,7 +295,7 @@ with {
 CZsynth(fund,(firstEnv,otherEnvs)) = par(i, 2, CZsynthMono(i,fund,(firstEnv,otherEnvs)));
 
 CZsynthMono(i,fund,(firstEnv,otherEnvs)) =
-  (oscillators(i,fund,(otherEnvs))
+  (oscillatorsE(i,fund,(otherEnvs))
    : filters(i)
   )*firstEnv;
 
@@ -318,6 +325,34 @@ oscillators(i,fund,(firstEnv,otherEnvs)) =
   , (_,CZresSawOF)
   , (_,CZresTriangleOF)
   , (_,CZresTrapOF)
+  )
+  :fallbackMixer(8,1,1)
+;
+
+oscillatorsE(i,fund,(firstEnv,otherEnvs)) =
+  (
+    (preFilterParams(i,(firstEnv,otherEnvs)))
+   ,(
+    (
+      (fund
+       <:si.bus(9))
+     ,(CZparams(i,(firstEnv,otherEnvs)))
+    ):(ro.crossnn(9),si.bus(2*9))
+   )
+  )
+  : (ro.crossNM(5*9,9),si.bus(3*9))
+  : ro.interleave(9,9) //9* osc by 9 params per osc
+  :
+  (
+    (!,sinPOF)
+  , ((_,CZsawPOF):enableIfVolume)
+  , ((_,CZsquarePOF):enableIfVolume)
+  , ((_,CZpulsePOF):enableIfVolume)
+  , ((_,CZsinePulsePOF):enableIfVolume)
+  , ((_,CZhalfSinePOF):enableIfVolume)
+  , ((_,CZresSawOF):enableIfVolume)
+  , ((_,CZresTriangleOF):enableIfVolume)
+  , ((_,CZresTrapOF):enableIfVolume)
   )
   :fallbackMixer(8,1,1)
 ;
@@ -441,14 +476,21 @@ master(lastNote) = lf_sawpos_phase_reset(freq(lastNote)*minOctMult,masterPhase,r
 reset(lastNote) = gate(lastNote):ba.impulsify;
 
 offset(param,i) = mainGroup(param)+(offsetGroup(param) * select2(i,1,-1)) :new_smooth(0.999);
+// offset =
+// case {
+// (param,0) => mainGroup(param)+(offsetGroup(param)) :new_smooth(0.999);
+// (param,1) => mainGroup(param)-(offsetGroup(param)) :new_smooth(0.999);
+// };
+
+
 
 preFilter(allpassLevel,ms20level,oberheimLevel,normFreq,Q) =
   _<:
   (
     _
-  , allpassLevel , fi.allpassnn(1,normFreq/2*ma.PI)
-  , ms20level , ve.korg35LPF(normFreq,Q)
-  , oberheimLevel , ve.oberheimLPF(normFreq,Q)
+  , ((allpassLevel , fi.allpassnn(1,normFreq/2*ma.PI)):enableIfVolume)
+  , ((ms20level , ve.korg35LPF(normFreq,Q)):enableIfVolume)
+  , ((oberheimLevel , ve.oberheimLPF(normFreq,Q)):enableIfVolume)
   )
   :fallbackMixer(3,1,1);
 
@@ -504,7 +546,7 @@ RMSn(n) = par(i, n, pow(2)) : meanN(n) : sqrt;
 opWithNInputs =
   case {
     (op,0) => 0:!;
-        (op,1) => _;
+      (op,1) => _;
     (op,2) => op;
     (op,N) => (opWithNInputs(op,N-1),_) : op;
   };
@@ -520,6 +562,14 @@ enabled_smooth(e,s) = si.smooth(s * e );
 //                               mixers from PR                              //
 ///////////////////////////////////////////////////////////////////////////////
 
+enableIfVolume =
+  si.bus(2)
+<:
+(
+(_,!)
+,(my_cross2 :(_,_!=0):control)
+)
+;
 //  (si.bus(nrSends),_) : monoMixerChannel(nrSends) : si.bus(nrSends);
 monoMixerChannel(nrSends) =
   (
@@ -527,7 +577,19 @@ monoMixerChannel(nrSends) =
   , (_<:si.bus(nrSends))
   )
   :ro.interleave(nrSends,2)
-  :par(i,nrSends,_*_);
+  :par(i,nrSends,
+       // enableIfVolume:
+       *
+// enableAndMult
+  ) with {
+  enableAndMult =
+    si.bus(2)<:
+    (
+      (_,!)
+     ,(my_cross2 :(_,_!=0):control)
+    ):*;
+  };
+
 
 oneSumMonoMixerChannel(nrSends) =
   (
@@ -699,47 +761,47 @@ uniqueIfy =
 
 
 svf = environment {
-	    svf(T,F,Q,G) = tick ~ (_,_) : !,!,_,_,_ : si.dot(3, mix)
-	    with {
-		tick(ic1eq, ic2eq, v0) =
-		  2*v1 - ic1eq,
-		  2*v2 - ic2eq,
-		  v0, v1, v2
-		with {
-		v1 = ic1eq + g *(v0-ic2eq) : /(1 + g*(g+k));
-		v2 = ic2eq + g * v1;
-		};
-		A = pow(10.0, G / 40.0);
-		g = tan(F * ma.PI / ma.SR) : case {
-			  (7) => /(sqrt(A));
-			  (8) => *(sqrt(A));
-			  (t) => _;
+	      svf(T,F,Q,G) = tick ~ (_,_) : !,!,_,_,_ : si.dot(3, mix)
+	      with {
+		    tick(ic1eq, ic2eq, v0) =
+		      2*v1 - ic1eq,
+		      2*v2 - ic2eq,
+		      v0, v1, v2
+		    with {
+		    v1 = ic1eq + g *(v0-ic2eq) : /(1 + g*(g+k));
+		    v2 = ic2eq + g * v1;
+		    };
+		    A = pow(10.0, G / 40.0);
+		    g = tan(F * ma.PI / ma.SR) : case {
+			        (7) => /(sqrt(A));
+			        (8) => *(sqrt(A));
+			        (t) => _;
 } (T);
-		k = case {
-			  (6) => 1/(Q*A);
-			  (t) => 1/Q;
+		    k = case {
+			        (6) => 1/(Q*A);
+			        (t) => 1/Q;
 } (T);
-		mix = case {
-			    (0) => 0, 0, 1;
-			    (1) => 0, 1, 0;
-			    (2) => 1, -k, -1;
-			    (3) => 1, -k, 0;
-			    (4) => 1, -k, -2;
-			    (5) => 1, -2*k, 0;
-			    (6) => 1, k*(A*A-1), 0;
-			    (7) => 1, k*(A-1), A*A-1;
-			    (8) => A*A, k*(1-A)*A, 1-A*A;
+		    mix = case {
+			          (0) => 0, 0, 1;
+			          (1) => 0, 1, 0;
+			          (2) => 1, -k, -1;
+			          (3) => 1, -k, 0;
+			          (4) => 1, -k, -2;
+			          (5) => 1, -2*k, 0;
+			          (6) => 1, k*(A*A-1), 0;
+			          (7) => 1, k*(A-1), A*A-1;
+			          (8) => A*A, k*(1-A)*A, 1-A*A;
 } (T);
-	    };
-	    lp(f,q)		= svf(0, f,q,0);
-	    bp(f,q)		= svf(1, f,q,0);
-	    hp(f,q)		= svf(2, f,q,0);
-	    notch(f,q)	= svf(3, f,q,0);
-	    peak(f,q)	= svf(4, f,q,0);
-	    ap(f,q)		= svf(5, f,q,0);
-	    bell(f,q,g)	= svf(6, f,q,g);
-	    ls(f,q,g)	= svf(7, f,q,g);
-	    hs(f,q,g)	= svf(8, f,q,g);
+	      };
+	      lp(f,q)		= svf(0, f,q,0);
+	      bp(f,q)		= svf(1, f,q,0);
+	      hp(f,q)		= svf(2, f,q,0);
+	      notch(f,q)	= svf(3, f,q,0);
+	      peak(f,q)	= svf(4, f,q,0);
+	      ap(f,q)		= svf(5, f,q,0);
+	      bell(f,q,g)	= svf(6, f,q,g);
+	      ls(f,q,g)	= svf(7, f,q,g);
+	      hs(f,q,g)	= svf(8, f,q,g);
 };
 
 
@@ -800,7 +862,7 @@ CZ =
     resSaw(fund,res) = (((-1*(1-fund))*((cos((ma.decimal((max(1,res)*fund)+1))*2*ma.PI)*-.5)+.5))*2)+1;
     resTriangle(fund,res) = select2(fund<.5, 2-(fund*2), fund*2)*tmp*2-1
     with {
-	  tmp = ((fund*(res:max(1)))+1:ma.decimal)*2*ma.PI:cos*.5+.5;
+	    tmp = ((fund*(res:max(1)))+1:ma.decimal)*2*ma.PI:cos*.5+.5;
     };
     resTrap(fund, res) = (((1-fund)*2):min(1)*sin(ma.decimal(fund*(res:max(1)))*2*ma.PI));
   };
@@ -859,6 +921,6 @@ stepsize = 0.01;
 // smooth
 // stepsize = 0.001;
 
-nrNotes = 127; // nr of midi notes
-// nrNotes = 42; // for looking at bargraphs
+// nrNotes = 127; // nr of midi notes
+nrNotes = 42; // for looking at bargraphs
 // nrNotes = 4; // for block diagram
