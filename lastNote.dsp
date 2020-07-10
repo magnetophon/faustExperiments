@@ -10,7 +10,6 @@ import("stdfaust.lib");
 phase = hslider("phase", 0, 0, 1, stepsize);
 // traditional faust synth:
 // freq = midiGroup(hslider("freq",440,0,24000,0.0001)) :new_smooth( ba.tau2pole(portamento));
-// freq = midiGroup(hslider("freq",440,0,24000,0.0001)) :si.smooth(gate' * ba.tau2pole(portamento));
 // gain = midiGroup(hslider("gain",0.5,0,1,stepsize));
 // gate = midiGroup(button("gate"));
 
@@ -36,29 +35,8 @@ gate(lastNote) = gain(lastNote)>0;
 ///////////////////////////////////////////////////////////////////////////////
 
 process =
-  // no.noise*0.5<:(ve.oberheimLPF(normFreq,Q),fi.lowpass(4,LPfreq));
-  // oneSumMonoMixerChannel(3);
-  // oneSumMixer(5,3,4);
-  // oneSumMixer(3,2,1);
-  // mixer(3,2,2);
-  // oneSumMixer(3,2,2);
-  // fallbackMixer(7,5,3,(si.bus(5)));
-  // preFilterParams(0);
-  // oscillators(0);
-  // octaverFilter(master,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZresTrap,oscillatorRes,oct);
   CZsynth;
-// par(i, nrNotes, velocity(i)):>_;
-// freq;
-// (lastNote<:(master));
-// (lastNote<:(master,gate,gain)):oscillators(0);
-// octaver(master,CZsaw,oscillatorIndex,oct);
-// os.lf_sawpos(440);///minOctMult*octaveMultiplier(oct):ma.decimal;
-// (gate,gain):CZparams(0);
-// gate:oscParamsI(CZsawGroup,0);
-// envMixer(CZsawGroup,levelGroup,0,oscillatorLevel);
 
-minOct = -4;
-maxOct = 4;
 
 envMixer(group,subGroup,i,param,gate,gain) =
   par(j, nrEnvelopes, group(offset(envLevel(subGroup,j)),i), envelope(j,gate,gain))
@@ -66,8 +44,6 @@ envMixer(group,subGroup,i,param,gate,gain) =
 * group(offset(subGroup(masterGroup(param)),i))
 + group(offset(subGroup(param),i))
 ;
-// envMixer(group,i,param) = par(j, nrEnvelopes, group(offset(envLevel(j)),i), envelope(j)):mixer(nrEnvelopes,1,1);//*group(offset(param,i));
-nrEnvelopes = 4;
 envLevel(subGroup,i) = subGroup(vgroup("[-1]envelope mixer", hslider("envLevel %i", 0, -1, 1, stepsize)));
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -194,6 +170,7 @@ smoothDelayedBy(d, s) = *(1.0 - sd) : + ~ *(sd)
 with {
   sd = s * ((1-1@d) < 1) ;
 };
+
 CZsynth = par(i, 2, CZsynthMono(i));
 
 CZsynthMono(i) =
@@ -221,17 +198,17 @@ oscillators(i,fund,gate,gain) =
   :
   (
     (!,sinPOF)
-  , (_,CZsawPOF)
-  , (_,CZsquarePOF)
-  , (_,CZpulsePOF)
-  , (_,CZsinePulsePOF)
-  , (_,CZhalfSinePOF)
-  , (_,CZresSawOF)
-  , (_,CZresTriangleOF)
-  , (_,CZresTrapOF)
+  , ((_,CZsawPOF):enableIfVolume)
+  , ((_,CZsquarePOF):enableIfVolume)
+  , ((_,CZpulsePOF):enableIfVolume)
+  , ((_,CZsinePulsePOF):enableIfVolume)
+  , ((_,CZhalfSinePOF):enableIfVolume)
+  , ((_,CZresSawOF):enableIfVolume)
+  , ((_,CZresTriangleOF):enableIfVolume)
+  , ((_,CZresTrapOF):enableIfVolume)
   )
   :fallbackMixer(8,1,1)
-;
+    ;
 
 CZparams(i,gate,gain) =
   (
@@ -285,9 +262,9 @@ oscPreFilterParams(group,i,gate,gain) =
 , (envMixer(group,QGroup,i,Q,gate,gain):max(stepsize):min(10));
 
 oscParamsI(group,i,gate,gain) =
-    envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
-  , envMixer(group,indexGroup,i,oscillatorIndex,gate,gain)
-  , envMixer(group,octGroup,i,oct,gate,gain);
+  envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
+, envMixer(group,indexGroup,i,oscillatorIndex,gate,gain)
+, envMixer(group,octGroup,i,oct,gate,gain);
 
 oscParamsR(group,i,gate,gain) =
   envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
@@ -372,6 +349,11 @@ lfo = 0.5*(1+os.osc(0.5));
 vel(x) = x:chooseFromFixed(nrNotes,velocity);
 //par(i, nrNotes, velocity(i)*(i==x)):>_ ;
 
+enableIfVolume =
+  si.bus(2) <:
+  ((_,!)
+  ,(ro.cross(2) :(_,_!=0):control)) ;
+// enableIfVolume = si.bus(2);
 ///////////////////////////////////////////////////////////////////////////////
 //                                still to PR:                               //
 ///////////////////////////////////////////////////////////////////////////////
@@ -568,7 +550,7 @@ noteIsOn(i) = velocity(i)>0;
 lastNote =
   par(i, nrNotes, i, index(i))
 // , ((par(i, nrNotes, index(i)),uniqueIfy):ro.interleave(nrNotes,2):par(i, nrNotes, +))
-  :find_max_index(nrNotes):(_,!)
+  :find_max_index(nrNotes)
   :ba.sAndH(nrNotesPlaying>0)
  ;
  // with {
@@ -598,7 +580,7 @@ lastNote =
  // from Julius Smith's acor.dsp:
  index_comparator(n,x,m,y) = select2((x>y),m,n), select2((x>y),y,x); // compare integer-labeled signals
  // take N number-value pairs and give the number with the maximum value
- find_max_index(N) = seq(i,N-2, (index_comparator,si.bus(2*(N-i-2)))) : index_comparator;
+ find_max_index(N) = seq(i,N-2, (index_comparator,si.bus(2*(N-i-2)))) : index_comparator :(_,!);
 
  uniqueIfy =
    (0:seq(i, nrNotes, myBus(i),(_-(noteIsOn(i-1)*(nrNewNotes>1))<:(_,_)) ):(si.bus(nrNotes),!));
@@ -763,6 +745,12 @@ lastNote =
  //////////////////////////////////////////////////////////////////////////////
  //                                 constants                                 //
  //////////////////////////////////////////////////////////////////////////////
+
+ nrEnvelopes = 4;
+
+ minOct = -4;
+ maxOct = 4;
+
  // fast
  // stepsize = 0.1;
  // medium
@@ -770,6 +758,9 @@ lastNote =
  // smooth
  // stepsize = 0.001;
 
- nrNotes = 127; // nr of midi notes
+ nrNotes = notes(diagram);
+ notes(0) = 127; // nr of midi notes
+ notes(1) = 4; // for block diagram
  // nrNotes = 42; // for looking at bargraphs
- // nrNotes = 4; // for block diagram
+
+ diagram = 0;
