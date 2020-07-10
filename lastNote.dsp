@@ -36,14 +36,41 @@ gate(lastNote) = gain(lastNote)>0;
 
 process =
   CZsynth;
+// envMixer(CZsawGroup,levelGroup,1,oscillatorLevel);
 
+mono  =  envM*envMidmaster+midAmount;
+left  = (envM*envMidmaster + envS*envSideMaster) + midAmount + sideAmount;
+right = (envM*envMidmaster - envS*envSideMaster) + midAmount - sideAmount;
+
+// envMixer(group,subGroup,0,param,gate,gain) =
+// par(j, nrEnvelopes, group(offset(envLevel(subGroup,j)),i), envelope(j,gate,gain))
+// :mixer(nrEnvelopes,1,1)
+// * group(offset(subGroup(masterGroup(param)),i))
+// + group(offset(subGroup(param),i)) ;
 
 envMixer(group,subGroup,i,param,gate,gain) =
+  ((((env(M)*envMaster(M)) , (env(S)*envMaster(S)))) :op(i))
++ ((amount(M), amount(S)) : op(i))
+with {
+  env(MSgroup) = par(j, nrEnvelopes,
+                     (group(MSgroup(envLevel(subGroup,j))):si.smooth(0.999))
+                     , envelope(j,gate,gain))
+                 :mixer(nrEnvelopes,1,1);
+  envMaster(MSgroup) = group(MSgroup(subGroup(masterGroup(param)))):si.smooth(0.999);
+  amount(MSgroup) = group(MSgroup(subGroup(param))):si.smooth(0.999);
+  M = mainGroup;
+  S = offsetGroup;
+  op(0) = +;
+op(1) = -;
+};
+
+
+OLDenvMixer(group,subGroup,i,param,gate,gain) =
   par(j, nrEnvelopes, group(offset(envLevel(subGroup,j)),i), envelope(j,gate,gain))
   :mixer(nrEnvelopes,1,1)
 * group(offset(subGroup(masterGroup(param)),i))
-+ group(offset(subGroup(param),i))
-;
++ group(offset(subGroup(param),i)) ;
+
 envLevel(subGroup,i) = subGroup(vgroup("[-1]envelope mixer", hslider("envLevel %i", 0, -1, 1, stepsize)));
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -208,7 +235,7 @@ oscillators(i,fund,gate,gain) =
   , ((_,CZresTrapOF):enableIfVolume)
   )
   :fallbackMixer(8,1,1)
-    ;
+;
 
 CZparams(i,gate,gain) =
   (
