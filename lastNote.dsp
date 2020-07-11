@@ -35,8 +35,13 @@ gate(lastNote) = gain(lastNote)>0;
 ///////////////////////////////////////////////////////////////////////////////
 
 process =
-CZsynth;
+  // oscillators(0,fund,gai,gat);
+  // CZparams(0,gat,gai) ;
+  CZsynth;
 // envMixer(CZsawGroup,levelGroup,1,oscillatorLevel);
+fund = 0.1;
+gai=0.2;
+gat=0.3;
 
 mono  =  envM*envMidmaster+midAmount;
 left  = (envM*envMidmaster + envS*envSideMaster) + midAmount + sideAmount;
@@ -184,6 +189,20 @@ with {
   f1 = fund:octaveSwitcher(oct:floor+(oct>0));
   octaveSwitcher(oct) = _*(octaveMultiplier(oct)/minOctMult)%1;
 };
+
+octaverFilter_No_Osc(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,oct) =
+  (
+    (f0:preFilter(allpassLevel,ms20level,oberheimLevel,normFreq,Q))
+  , (f1:preFilter(allpassLevel,ms20level,oberheimLevel,normFreq,Q))
+  , (oct:abs%1)
+  )
+with {
+  f0 = fund:octaveSwitcher(oct:floor+((oct<0) & (oct!=(oct:floor))));
+  f1 = fund:octaveSwitcher(oct:floor+(oct>0));
+  octaveSwitcher(oct) = _*(octaveMultiplier(oct)/minOctMult)%1;
+};
+
+
 octaveMultiplier	=
   int<:
   (
@@ -212,35 +231,29 @@ CZsynthMono(i) =
 
 oscillators(i,fund,gate,gain) =
   (
-    (preFilterParams(i,gate,gain))
-   ,(
-    (
-      (fund
-       <:si.bus(9))
-     ,(CZparams(i,gate,gain))
-    ):(ro.crossnn(9),si.bus(2*9))
-   )
+    preFilterOct(i,fund,gate,gain)
+   ,CZparams(i,gate,gain)
   )
-  : (ro.crossNM(5*9,9),si.bus(3*9))
-  : ro.interleave(9,9) //9* osc by 9 params per osc
+  : (ro.crossNM(3*9,9),si.bus(9))
+  : ro.interleave(9,5) //9* osc by 9 params per osc
   :
   (
-    (!,sinPOF)
-  , ((_,CZsawPOF):enableIfVolume)
-  , ((_,CZsquarePOF):enableIfVolume)
-  , ((_,CZpulsePOF):enableIfVolume)
-  , ((_,CZsinePulsePOF):enableIfVolume)
-  , ((_,CZhalfSinePOF):enableIfVolume)
-  , ((_,CZresSawOF):enableIfVolume)
-  , ((_,CZresTriangleOF):enableIfVolume)
-  , ((_,CZresTrapOF):enableIfVolume)
+    (!,sinPPF)
+  , ((_,CZsawPPF):enableIfVolume)
+  , ((_,CZsquarePPF):enableIfVolume)
+  , ((_,CZpulsePPF):enableIfVolume)
+  , ((_,CZsinePulsePPF):enableIfVolume)
+  , ((_,CZhalfSinePPF):enableIfVolume)
+  , ((_,CZresSawPF):enableIfVolume)
+  , ((_,CZresTrianglePF):enableIfVolume)
+  , ((_,CZresTrapPF):enableIfVolume)
   )
   :fallbackMixer(8,1,1)
 ;
 
 CZparams(i,gate,gain) =
   (
-    0,0,envMixer(globalGroup,octGroup,i,oct,gate,gain) // for routing
+    0,0 // for routing
     , oscParamsI(CZsawGroup,i,gate,gain)
     , oscParamsI(CZsquareGroup,i,gate,gain)
     , oscParamsI(CZpulseGroup,i,gate,gain)
@@ -249,6 +262,20 @@ CZparams(i,gate,gain) =
     , oscParamsR(CZresSawGroup,i,gate,gain)
     , oscParamsR(CZresTriangleGroup,i,gate,gain)
     , oscParamsR(CZresTrapGroup,i,gate,gain)
+  )
+  : ro.interleave(2,9);
+
+CZparams_oct(i,gate,gain) =
+  (
+    0,0,envMixer(globalGroup,octGroup,i,oct,gate,gain) // for routing
+    , oscParamsI_oct(CZsawGroup,i,gate,gain)
+    , oscParamsI_oct(CZsquareGroup,i,gate,gain)
+    , oscParamsI_oct(CZpulseGroup,i,gate,gain)
+    , oscParamsI_oct(CZsinePulseGroup,i,gate,gain)
+    , oscParamsI_oct(CZhalfSineGroup,i,gate,gain)
+    , oscParamsR_oct(CZresSawGroup,i,gate,gain)
+    , oscParamsR_oct(CZresTriangleGroup,i,gate,gain)
+    , oscParamsR_oct(CZresTrapGroup,i,gate,gain)
   )
   : ro.interleave(3,9);
 
@@ -282,19 +309,13 @@ preFilterParamsLocal(i,gate,gain) =
   )
   : ro.interleave(5,9);
 
-preFilterParams(i,gate,gain) =
+preFilterOct(i,fund,gate,gain) =
   (
-    oscPreFilterParams(globalGroup,i,gate,gain)
-  , oscPreFilterParams(globalGroup,i,gate,gain)
-  , oscPreFilterParams(globalGroup,i,gate,gain)
-  , oscPreFilterParams(globalGroup,i,gate,gain)
-  , oscPreFilterParams(globalGroup,i,gate,gain)
-  , oscPreFilterParams(globalGroup,i,gate,gain)
-  , oscPreFilterParams(globalGroup,i,gate,gain)
-  , oscPreFilterParams(globalGroup,i,gate,gain)
-  , oscPreFilterParams(globalGroup,i,gate,gain)
+    (fund,oscPreFilterParams(globalGroup,i,gate,gain),oct)
+    : octaverFilter_No_Osc //(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,oct)
   )
-  : ro.interleave(5,9);
+  <: ro.interleave(3,9)
+;
 
 oscPreFilterParams(group,i,gate,gain) =
   envMixer(group,allpassGroup,i,allpassLevel,gate,gain)
@@ -303,15 +324,23 @@ oscPreFilterParams(group,i,gate,gain) =
 , (envMixer(group,normFreqGroup,i,normFreq,gate,gain):max(0):min(1))
 , (envMixer(group,QGroup,i,Q,gate,gain):max(stepsize):min(10));
 
-oscParamsI(group,i,gate,gain) =
+oscParamsI_oct(group,i,gate,gain) =
   envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
 , envMixer(group,indexGroup,i,oscillatorIndex,gate,gain)
 , envMixer(globalGroup,octGroup,i,oct,gate,gain);
 
-oscParamsR(group,i,gate,gain) =
+oscParamsR_oct(group,i,gate,gain) =
   envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
 , envMixer(group,indexGroup,i,oscillatorRes,gate,gain)
 , envMixer(group,octGroup,i,oct,gate,gain);
+
+oscParamsI(group,i,gate,gain) =
+  envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
+, envMixer(group,indexGroup,i,oscillatorIndex,gate,gain);
+
+oscParamsR(group,i,gate,gain) =
+  envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
+, envMixer(group,indexGroup,i,oscillatorRes,gate,gain);
 
 indexParam(i) = offset(oscillatorLevel,i)
               , (offset(oscillatorIndex,i));
@@ -775,6 +804,19 @@ lastNote =
  CZresSawOF(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,res,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZresSaw,res,oct);
  CZresTriangleOF(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,res,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZresTriangle,res,oct);
  CZresTrapOF(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,res,oct) = octaverFilter(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,CZresTrap,res,oct);
+
+
+ sinPPF(f0,f1,oct,index) = oscPPF(f0,f1,index,oct,sine);
+ CZsawPPF(f0,f1,oct,index) = oscPPF(f0,f1,index,oct,CZsawP);
+ CZsquarePPF(f0,f1,oct,index) = oscPPF(f0,f1,index,oct,CZsquareP);
+ CZpulsePPF(f0,f1,oct,index) = oscPPF(f0,f1,index,oct,CZpulseP);
+ CZsinePulsePPF(f0,f1,index,oct) = oscPPF(f0,f1,index,oct,CZsinePulseP);
+ CZhalfSinePPF(f0,f1,index,oct) = oscPPF(f0,f1,index,oct,CZhalfSineP);
+ CZresSawPF(f0,f1,oct,res) = oscPPF(f0,f1,res,oct,CZresSaw);
+ CZresTrianglePF(f0,f1,oct,res) = oscPPF(f0,f1,res,oct,CZresTriangle);
+ CZresTrapPF(f0,f1,oct,res) = oscPPF(f0,f1,res,oct,CZresTrap);
+
+ oscPPF(f0,f1,index,oct,oscil) = (((f0,index):oscil),((f1,index):oscil)):si.interpolate(oct);
  ///////////////////////////////////////////////////////////////////////////////
  //                                oscs fom PR                                 //
  ///////////////////////////////////////////////////////////////////////////////
@@ -805,5 +847,5 @@ lastNote =
  notes(1) = 4; // for block diagram
  // nrNotes = 42; // for looking at bargraphs
 
- diagram = 0;
- // diagram = 1;
+ // diagram = 0;
+ diagram = 1;
