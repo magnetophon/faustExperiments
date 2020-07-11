@@ -35,7 +35,7 @@ gate(lastNote) = gain(lastNote)>0;
 ///////////////////////////////////////////////////////////////////////////////
 
 process =
-  CZsynth;
+CZsynth;
 // envMixer(CZsawGroup,levelGroup,1,oscillatorLevel);
 
 mono  =  envM*envMidmaster+midAmount;
@@ -87,6 +87,7 @@ midiGroup(x) = tabs(vgroup("[99]midi", x));
 mainGroup(x) = stereoGroup(vgroup("[0]main", x));
 offsetGroup(x) = stereoGroup(vgroup("[1]L-R offset", x));
 stereoGroup(x) = tgroup("stereo", x);
+globalGroup(x)        = tabs(hgroup("[-1]global", x));
 sineGroup(x)          = tabs(hgroup("[0]sine", x));
 CZsawGroup(x)         = tabs(hgroup("[1]CZ saw", x));
 CZsquareGroup(x)      = tabs(hgroup("[2]CZ square", x));
@@ -239,7 +240,7 @@ oscillators(i,fund,gate,gain) =
 
 CZparams(i,gate,gain) =
   (
-    0,0,envMixer(sineGroup,octGroup,i,oct,gate,gain) // for routing
+    0,0,envMixer(globalGroup,octGroup,i,oct,gate,gain) // for routing
     , oscParamsI(CZsawGroup,i,gate,gain)
     , oscParamsI(CZsquareGroup,i,gate,gain)
     , oscParamsI(CZpulseGroup,i,gate,gain)
@@ -267,7 +268,7 @@ oldCZparams(i) =
   )
   : ro.interleave(2,9);
 
-preFilterParams(i,gate,gain) =
+preFilterParamsLocal(i,gate,gain) =
   (
     oscPreFilterParams(sineGroup,i,gate,gain)
   , oscPreFilterParams(CZsawGroup,i,gate,gain)
@@ -281,6 +282,20 @@ preFilterParams(i,gate,gain) =
   )
   : ro.interleave(5,9);
 
+preFilterParams(i,gate,gain) =
+  (
+    oscPreFilterParams(globalGroup,i,gate,gain)
+  , oscPreFilterParams(globalGroup,i,gate,gain)
+  , oscPreFilterParams(globalGroup,i,gate,gain)
+  , oscPreFilterParams(globalGroup,i,gate,gain)
+  , oscPreFilterParams(globalGroup,i,gate,gain)
+  , oscPreFilterParams(globalGroup,i,gate,gain)
+  , oscPreFilterParams(globalGroup,i,gate,gain)
+  , oscPreFilterParams(globalGroup,i,gate,gain)
+  , oscPreFilterParams(globalGroup,i,gate,gain)
+  )
+  : ro.interleave(5,9);
+
 oscPreFilterParams(group,i,gate,gain) =
   envMixer(group,allpassGroup,i,allpassLevel,gate,gain)
 , envMixer(group,ms20Group,i,ms20level,gate,gain)
@@ -291,7 +306,7 @@ oscPreFilterParams(group,i,gate,gain) =
 oscParamsI(group,i,gate,gain) =
   envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
 , envMixer(group,indexGroup,i,oscillatorIndex,gate,gain)
-, envMixer(group,octGroup,i,oct,gate,gain);
+, envMixer(globalGroup,octGroup,i,oct,gate,gain);
 
 oscParamsR(group,i,gate,gain) =
   envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
@@ -791,3 +806,4 @@ lastNote =
  // nrNotes = 42; // for looking at bargraphs
 
  diagram = 0;
+ // diagram = 1;
