@@ -35,9 +35,10 @@ gate(lastNote) = gain(lastNote)>0;
 ///////////////////////////////////////////////////////////////////////////////
 
 process =
-  // oscillators(0,fund,gai,gat);
+  // oscillator(0,fund,gai,gat);
   // CZparams(0,gat,gai) ;
-  CZsynth;
+  // CZsynth;
+  CZsynthSingleOsc;
 // envMixer(CZsawGroup,levelGroup,1,oscillatorLevel);
 fund = 0.1;
 gai=0.2;
@@ -131,10 +132,10 @@ oct             = vslider("oct", 0, minOct, maxOct, stepsize);
 
 // sawIndex = sawGroup(oscillatorIndex);
 // pulseIndex = pulseGroup(oscillatorIndex);
-attack(i)  = envelopeGroup(i,hslider("[0]attack", 0, 0, 1, stepsize));
-decay(i)   = envelopeGroup(i,hslider("[1]decay", 0.1, 0, 1, stepsize));
+attack(i)  = envelopeGroup(i,hslider("[0]attack", 0, 0, maxAttack, stepsize));
+decay(i)   = envelopeGroup(i,hslider("[1]decay", 0.1, 0, maxDecay, stepsize));
 sustain(i) = envelopeGroup(i,hslider("[2]sustain", 0.8, 0, 1, stepsize));
-release(i) = envelopeGroup(i,hslider("[3]release", 0.1, 0, 1, stepsize));
+release(i) = envelopeGroup(i,hslider("[3]release", 0.1, 0, maxRelease, stepsize));
 
 
 lfo_amount = hslider("lfo amount", 0, 0, 1, stepsize):new_smooth(0.999);
@@ -218,20 +219,27 @@ with {
   sd = s * ((1-1@d) < 1) ;
 };
 
-CZsynth = par(i, 2, CZsynthMono(i));
-
-CZsynthMono(i) =
+CZsynth =
   (lastNote<:(master,gate,gain)) :
   (si.bus(3)<:si.bus(6)) :
-  (
-    (oscillators(i) : filters(i))
-  , (!,_,_)
-  )
-  :(_*envelope(-1));
+  par(i, 2, CZsynthMono(i));
+
+CZsynthSingleOsc =
+  (lastNote<:(master,gate,gain)) :
+  (si.bus(3)<:si.bus(6)) :
+  par(i, 2, CZsynthMonoSingleOsc(i));
+
+CZsynthMono(i,fund,gate,gain) =
+  (oscillators(i,fund,gate,gain) : filters(i))
+* envelope(-1,gate,gain);
+
+CZsynthMonoSingleOsc(i,fund,gate,gain) =
+  (oscillator(i,fund,gate,gain) : filters(i))
+* envelope(-1,gate,gain);
 
 oscillators(i,fund,gate,gain) =
   (
-    preFilterOct(i,fund,gate,gain)
+    (preFilterOct(i,fund,gate,gain)  <: ro.interleave(3,9))
    ,CZparams(i,gate,gain)
   )
   : (ro.crossNM(3*9,9),si.bus(9))
@@ -250,6 +258,30 @@ oscillators(i,fund,gate,gain) =
   )
   :fallbackMixer(8,1,1)
 ;
+
+oscillator(i,fund,gate,gain) =
+  (
+    preFilterOct(i,fund,gate,gain)
+   ,envMixer(globalGroup,indexGroup,i,oscillatorIndex,gate,gain)
+  )
+: oscillatorSelector
+;
+
+oscillatorSelector =
+  si.bus(4)<:
+  (
+    sinPPF
+  , CZsawPPF
+  , CZsquarePPF
+  , CZpulsePPF
+  , CZsinePulsePPF
+  , CZhalfSinePPF
+  , CZresSawPF
+  , CZresTrianglePF
+  , CZresTrapPF
+  ) : enableOneOfN(9,hslider("type", 0, 0, 8, 1));
+
+enableOneOfN(maxN,N) = par(i, maxN, control(i==N)*(i==N)):>_;
 
 CZparams(i,gate,gain) =
   (
@@ -314,7 +346,6 @@ preFilterOct(i,fund,gate,gain) =
     (fund,oscPreFilterParams(globalGroup,i,gate,gain),oct)
     : octaverFilter_No_Osc //(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,oct)
   )
-  <: ro.interleave(3,9)
 ;
 
 oscPreFilterParams(group,i,gate,gain) =
@@ -810,8 +841,8 @@ lastNote =
  CZsawPPF(f0,f1,oct,index) = oscPPF(f0,f1,index,oct,CZsawP);
  CZsquarePPF(f0,f1,oct,index) = oscPPF(f0,f1,index,oct,CZsquareP);
  CZpulsePPF(f0,f1,oct,index) = oscPPF(f0,f1,index,oct,CZpulseP);
- CZsinePulsePPF(f0,f1,index,oct) = oscPPF(f0,f1,index,oct,CZsinePulseP);
- CZhalfSinePPF(f0,f1,index,oct) = oscPPF(f0,f1,index,oct,CZhalfSineP);
+ CZsinePulsePPF(f0,f1,oct,index) = oscPPF(f0,f1,index,oct,CZsinePulseP);
+ CZhalfSinePPF(f0,f1,oct,index) = oscPPF(f0,f1,index,oct,CZhalfSineP);
  CZresSawPF(f0,f1,oct,res) = oscPPF(f0,f1,res,oct,CZresSaw);
  CZresTrianglePF(f0,f1,oct,res) = oscPPF(f0,f1,res,oct,CZresTriangle);
  CZresTrapPF(f0,f1,oct,res) = oscPPF(f0,f1,res,oct,CZresTrap);
@@ -847,5 +878,9 @@ lastNote =
  notes(1) = 4; // for block diagram
  // nrNotes = 42; // for looking at bargraphs
 
- // diagram = 0;
- diagram = 1;
+ diagram = 0;
+ // diagram = 1;
+
+ maxAttack = 10;
+ maxDecay = 10;
+ maxRelease = 10;
