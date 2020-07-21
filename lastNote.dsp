@@ -99,6 +99,7 @@ midiGroup(x) = tabs(hgroup("[99]midi", x));
 mainGroup(x) = stereoGroup(vgroup("[0]main", x));
 offsetGroup(x) = stereoGroup(vgroup("[1]L-R offset", x));
 stereoGroup(x) = tgroup("stereo", x);
+filterGroup(x)        = tabs(hgroup("[-2]filter", x));
 globalGroup(x)        = tabs(hgroup("[-1]global", x));
 sineGroup(x)          = tabs(hgroup("[0]sine", x));
 CZsawGroup(x)         = tabs(hgroup("[1]CZ saw", x));
@@ -119,8 +120,9 @@ normFreqGroup(x) = preFilterGroup(hgroup("[3]freq", x));
 QGroup(x)        = preFilterGroup(hgroup("[4]Q", x));
 
 levelGroup(x) = oscGroup(hgroup("[0]level", x));
-indexGroup(x) = oscGroup(hgroup("[1]index", x));
-octGroup(x)   = oscGroup(hgroup("[2]oct", x));
+phaseGroup(x) = oscGroup(hgroup("[1]phase", x));
+indexGroup(x) = oscGroup(hgroup("[2]index", x));
+octGroup(x)   = oscGroup(hgroup("[3]oct", x));
 
 oscGroup(x)       = hgroup("oscillator",x);
 preFilterGroup(x) = hgroup("preFilter",x);
@@ -132,8 +134,9 @@ masterPhase = hslider("masterPhase", 0, -1, 1, stepsize) :new_smooth(0.999);
 portamento = hslider("portamento[scale:log]", 0, 0, 1, stepsize);
 
 oscillatorLevel = vslider("[0]Level", 0, -1, 1, stepsize);
-oscillatorIndex = vslider("[1]index", 0, 0, 1, stepsize);
-oscillatorRes   = vslider("[1]res", 0, 0, 64, stepsize);
+oscillatorPhase   = vslider("[1]phase", 0, -64, 64, stepsize);
+oscillatorIndex = vslider("[2]index", 0, 0, 1, stepsize);
+oscillatorRes   = vslider("[2]res", 0, 0, 64, stepsize);
 oct             = vslider("oct", 0, minOct, maxOct, stepsize);
 
 // sawIndex = sawGroup(oscillatorIndex);
@@ -152,11 +155,11 @@ velocity(i) = VEL(i:max(-1):int) with {
   VEL =
     case {
       (-1) => 0;
-      (i) => midiGroup(midiTabs(tabNr(i),vslider("velocity of note %i [midi:key %i ]", 0, 0, 127, 1)));
+      (i) => midiGroup(midiTabs(tabNr(i),vslider("vel %i [midi:key %i ]", 0, 0, 127, 1)));
     };
   midiTabs(tabNr,x) = tgroup("velocity",hgroup("v %tabNr", x));
   tabNr(i) = (i/nrTabs):floor;
-  nrTabs = int((nrNotes+1)/16)+1;
+  nrTabs = int((nrNotes+1)/32)+1;
 };
 
 
@@ -210,7 +213,7 @@ with {
 };
 
 
-octaveMultiplier	=
+octaveMultiplier =
   int<:
   (
     (_ <0) / pow(2,abs),
@@ -287,10 +290,10 @@ vectorOsc(i,fund,gate,gain,ab,cd) =
     (
       preFilterOct(i,fund,gate,gain)<:
       (
-        (si.bus(3),envMixer(A,indexGroup,i,oscillatorIndex,gate,gain))
-       ,(si.bus(3),envMixer(B,indexGroup,i,oscillatorIndex,gate,gain))
-       ,(si.bus(3),envMixer(C,indexGroup,i,oscillatorIndex,gate,gain))
-       ,(si.bus(3),envMixer(D,indexGroup,i,oscillatorIndex,gate,gain))
+        oscParams(A,i,gate,gain)
+      , oscParams(B,i,gate,gain)
+      , oscParams(C,i,gate,gain)
+      , oscParams(D,i,gate,gain)
       )
     )
     :
@@ -320,33 +323,12 @@ topRight = 1,1
 
 
 vectorMixer(ab,cd) =
-  // meta
-  // (
-  // _*( invert(ab)*(wrap(cd):hbargraph("wrap(cd)", 0, 1)) )
-    // , _*( ab*(wrap(cd)) )
-    // , _*( (wrap(ab):hbargraph("wrap(ab)", 0, 1))*invert(cd) )
-    // , _*( (wrap(ab))*(cd) )
-
-  // ):>_
-  si.bus(4)
-  : (
+si.bus(4)
+: (
   (si.interpolate(ab))
 , (si.interpolate(ab))
-  )
-  : (si.interpolate(cd))
-with {
-  ins = inputs(oscil);
-  meta =
-    (ab*2-(ab*2:ma.frac))
-+
-(cd*2-(cd*2:ma.frac))
-  ;
-  // wrap(x) = x*2-(x*2:ma.frac);
-  wrap(x) = select2( x>0.5
-                   , x*2
-                   ,2-(x*2));
-  invert(x) = (x*-1)+1;
-};
+)
+: (si.interpolate(cd));
 
 // TODO: optional latch for osc type change when vol is not 0
 // TODO: phase coherent pitchdrop for kicks: start envelope at phase=-1000
@@ -361,64 +343,6 @@ F =
 +
 [C*(64+Y)+D*(64-Y)]*(64-|X|)
 
-
-a = invert(ab)*wrap(cd)
-b = ab*wrap(cd)
-c = wrap(ab)*invert(cd)
-d = wrap(ab)*cd
-
-meta =
-if cd = 0.5: 0 else 1
-if ab = 0.5: 1 else 0
-
-ab = 1;
-cd = 0.5;
-a = 0;
-b = 1;
-c = 0;
-d = 0;
-
-ab = 0;
-cd = 0.5;
-a = 1;
-b = 0;
-c = 0;
-d = 0;
-
-ab = 0.5;
-cd = 0;
-a = 0;
-b = 0;
-c = 1;
-d = 0;
-
-ab = 0;
-cd = 0;
-a = 0.5;
-b = 0;
-c = 0.5;
-d = 0;
-
-ab = 1;
-cd = 1;
-a = 0;
-b = 0.5;
-c = 0;
-d = 0.5;
-
-ab = 0.25;
-cd = 0.75;
-a = ;
-b = ;
-c = ;
-d = ;
-
-ab = 0.75;
-cd = 0.25;
-a = ;
-b = ;
-c = ;
-d = ;
 */
 
 oscillatorSelector =
@@ -469,8 +393,6 @@ oldCZparams(i) =
   (
     0,0 // for routing
     , CZsawGroup(indexParam(i))
-// , (envMixer(CZsawGroup),envMixer(CZsawGroup))
-// , oscParams(CZsawGroup,i)
     , CZsquareGroup(indexParam(i))
     , CZpulseGroup(indexParam(i))
     , CZsinePulseGroup(indexParam(i))
@@ -497,7 +419,7 @@ preFilterParamsLocal(i,gate,gain) =
 
 preFilterOct(i,fund,gate,gain) =
   (
-    (fund,oscPreFilterParams(globalGroup,i,gate,gain),oct)
+    (fund,oscPreFilterParams(filterGroup,i,gate,gain),oct)
     : octaverFilter_No_Osc //(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,oct)
   )
 ;
@@ -526,6 +448,17 @@ oscParamsI(group,i,gate,gain) =
 oscParamsR(group,i,gate,gain) =
   envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
 , envMixer(group,indexGroup,i,oscillatorRes,gate,gain);
+
+oscParams(group,i,gate,gain) =
+  ((_+phase):ma.frac)
+, ((_+phase):ma.frac)
+, _
+, CZparam
+with {
+  phase = envMixer(group,phaseGroup,i,oscillatorPhase,gate,gain);
+  CZparam = envMixer(group,indexGroup,i,oscillatorIndex,gate,gain);
+};
+
 
 indexParam(i) = offset(oscillatorLevel,i)
               , (offset(oscillatorIndex,i));
@@ -653,7 +586,7 @@ RMSn(n) = par(i, n, pow(2)) : meanN(n) : sqrt;
 opWithNInputs =
   case {
     (op,0) => 0:!;
-        (op,1) => _;
+      (op,1) => _;
     (op,2) => op;
     (op,N) => (opWithNInputs(op,N-1),_) : op;
   };
@@ -848,47 +781,47 @@ uniqueIfy =
 
 
 svf = environment {
-	    svf(T,F,Q,G) = tick ~ (_,_) : !,!,_,_,_ : si.dot(3, mix)
-	    with {
-		tick(ic1eq, ic2eq, v0) =
-		  2*v1 - ic1eq,
-		  2*v2 - ic2eq,
-		  v0, v1, v2
-		with {
-		v1 = ic1eq + g *(v0-ic2eq) : /(1 + g*(g+k));
-		v2 = ic2eq + g * v1;
-		};
-		A = pow(10.0, G / 40.0);
-		g = tan(F * ma.PI / ma.SR) : case {
-			  (7) => /(sqrt(A));
-			  (8) => *(sqrt(A));
-			  (t) => _;
+	      svf(T,F,Q,G) = tick ~ (_,_) : !,!,_,_,_ : si.dot(3, mix)
+	      with {
+		    tick(ic1eq, ic2eq, v0) =
+		      2*v1 - ic1eq,
+		      2*v2 - ic2eq,
+		      v0, v1, v2
+		    with {
+		    v1 = ic1eq + g *(v0-ic2eq) : /(1 + g*(g+k));
+		    v2 = ic2eq + g * v1;
+		    };
+		    A = pow(10.0, G / 40.0);
+		    g = tan(F * ma.PI / ma.SR) : case {
+			        (7) => /(sqrt(A));
+			        (8) => *(sqrt(A));
+			        (t) => _;
 } (T);
-		k = case {
-			  (6) => 1/(Q*A);
-			  (t) => 1/Q;
+		    k = case {
+			        (6) => 1/(Q*A);
+			        (t) => 1/Q;
 } (T);
-		mix = case {
-			    (0) => 0, 0, 1;
-			    (1) => 0, 1, 0;
-			    (2) => 1, -k, -1;
-			    (3) => 1, -k, 0;
-			    (4) => 1, -k, -2;
-			    (5) => 1, -2*k, 0;
-			    (6) => 1, k*(A*A-1), 0;
-			    (7) => 1, k*(A-1), A*A-1;
-			    (8) => A*A, k*(1-A)*A, 1-A*A;
+		    mix = case {
+			          (0) => 0, 0, 1;
+			          (1) => 0, 1, 0;
+			          (2) => 1, -k, -1;
+			          (3) => 1, -k, 0;
+			          (4) => 1, -k, -2;
+			          (5) => 1, -2*k, 0;
+			          (6) => 1, k*(A*A-1), 0;
+			          (7) => 1, k*(A-1), A*A-1;
+			          (8) => A*A, k*(1-A)*A, 1-A*A;
 } (T);
-	    };
-	    lp(f,q)		= svf(0, f,q,0);
-	    bp(f,q)		= svf(1, f,q,0);
-	    hp(f,q)		= svf(2, f,q,0);
-	    notch(f,q)	= svf(3, f,q,0);
-	    peak(f,q)	= svf(4, f,q,0);
-	    ap(f,q)		= svf(5, f,q,0);
-	    bell(f,q,g)	= svf(6, f,q,g);
-	    ls(f,q,g)	= svf(7, f,q,g);
-	    hs(f,q,g)	= svf(8, f,q,g);
+	      };
+	      lp(f,q)		= svf(0, f,q,0);
+	      bp(f,q)		= svf(1, f,q,0);
+	      hp(f,q)		= svf(2, f,q,0);
+	      notch(f,q)	= svf(3, f,q,0);
+	      peak(f,q)	= svf(4, f,q,0);
+	      ap(f,q)		= svf(5, f,q,0);
+	      bell(f,q,g)	= svf(6, f,q,g);
+	      ls(f,q,g)	= svf(7, f,q,g);
+	      hs(f,q,g)	= svf(8, f,q,g);
 };
 
 
@@ -949,7 +882,7 @@ CZ =
     resSaw(fund,res) = (((-1*(1-fund))*((cos((ma.decimal((max(1,res)*fund)+1))*2*ma.PI)*-.5)+.5))*2)+1;
     resTriangle(fund,res) = select2(fund<.5, 2-(fund*2), fund*2)*tmp*2-1
     with {
-	  tmp = ((fund*(res:max(1)))+1:ma.decimal)*2*ma.PI:cos*.5+.5;
+	    tmp = ((fund*(res:max(1)))+1:ma.decimal)*2*ma.PI:cos*.5+.5;
     };
     resTrap(fund, res) = (((1-fund)*2):min(1)*sin(ma.decimal(fund*(res:max(1)))*2*ma.PI));
   };
@@ -1010,6 +943,27 @@ lf_sawpos_reset(freq,reset) = ma.frac * (reset == 0) ~ +(freq/ma.SR);
 
 lf_sawpos_phase_reset(freq,phase,reset) = lf_sawpos_reset(freq,reset) +phase :ma.frac;
 // lf_sawpos_phase_reset(freq,phase,reset) = (+(phase-phase') : ma.frac * (reset == 0)) ~ +(freq/ma.SR);
+
+///////////////////////////////////////////////////////////////////////////////
+//                                 from vince                                //
+///////////////////////////////////////////////////////////////////////////////
+
+//MIDICLOCK to BEAT (AMOUNT OF SAMPLES IN 1 BEAT) to BPM
+//////////////////////////////////
+midiclock2beat = vgroup("MIDI Clock (MC)",((clocker, play)) : attach  : midi2count : s2bpm)
+with{
+
+	clocker   = checkbox("[3]Clock Signal[midi:clock]") ;  // create a square signal (1/0), changing state at each received clock
+	play      = checkbox("[2]Start/Stop Signal[midi:start] [midi:stop]") ; // just to show start stop signal
+
+	midi2count = _ <: _ != _@1 : countup(88200,_) : result1 <: _==0,_@1 : SH : result2 : _* 24;
+
+	result1 = _ ; // : vbargraph("samplecount midi", 0, 88200);
+	result2 = _ ; //: vbargraph("sampleholder midi", 0, 88200);
+
+
+};
+
 
 //////////////////////////////////////////////////////////////////////////////
 //                                 constants                                 //
