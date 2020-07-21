@@ -41,7 +41,7 @@ process =
   CZsynthVectorOsc;
 // vectorMixer(hslider("ab", 0, 0, 1, stepsize),hslider("cd", 0, 0, 1, stepsize));
 // vectorOsc(0,fund,gat,gai,ab,cd) ;
-// envMixer(CZsawGroup,levelGroup,1,oscillatorLevel);
+// modMixer(CZsawGroup,levelGroup,1,oscillatorLevel);
 fund = 0.1;
 gai=0.2;
 gat=0.3;
@@ -54,21 +54,27 @@ mono  =  envM*envMidmaster+midAmount;
 left  = (envM*envMidmaster + envS*envSideMaster) + midAmount + sideAmount;
 right = (envM*envMidmaster - envS*envSideMaster) + midAmount - sideAmount;
 
-// envMixer(group,subGroup,0,param,gate,gain) =
+// modMixer(group,subGroup,0,param,gate,gain) =
 // par(j, nrEnvelopes, group(offset(envLevel(subGroup,j)),i), envelope(j,gate,gain))
 // :mixer(nrEnvelopes,1,1)
 // * group(offset(subGroup(masterGroup(param)),i))
 // + group(offset(subGroup(param),i)) ;
 
-envMixer(group,subGroup,i,param,gate,gain) =
-  ((((env(M)*envMaster(M)) , (env(S)*envMaster(S)))) :op(i))
+modMixer(group,subGroup,i,param,gate,gain) =
+  ((((envMix(M)*envMaster(M)) , (envMix(S)*envMaster(S)))) :op(i))
++ ((((lfoMix(M)*lfoMaster(M)) , (lfoMix(S)*lfoMaster(S)))) :op(i))
 + ((amount(M), amount(S)) : op(i))
 with {
-  env(MSgroup) = par(j, nrEnvelopes,
-                     (group(MSgroup(envLevel(subGroup,j))):si.smooth(0.999))
-                     , envelope(j,gate,gain))
+  envMix(MSgroup) = par(j, nrEnvelopes,
+                        (group(MSgroup(envLevel(subGroup,j))):si.smooth(0.999))
+                        , envelope(j,gate,gain))
                  :mixer(nrEnvelopes,1,1);
   envMaster(MSgroup) = group(MSgroup(subGroup(masterGroup(param)))):si.smooth(0.999);
+  lfoMix(MSgroup) = par(j, nrLFOs,
+                        (group(MSgroup(lfoLevel(subGroup,j))):si.smooth(0.999))
+                        , lfo(j,gate,gain))
+                    :mixer(nrLFOs,1,1);
+  lfoMaster(MSgroup) = group(MSgroup(subGroup(masterGroup(param)))):si.smooth(0.998);
   amount(MSgroup) = group(MSgroup(subGroup(param))):si.smooth(0.999);
   M = mainGroup;
   S = offsetGroup;
@@ -77,13 +83,14 @@ op(1) = -;
 };
 
 
-OLDenvMixer(group,subGroup,i,param,gate,gain) =
+OLDmodMixer(group,subGroup,i,param,gate,gain) =
   par(j, nrEnvelopes, group(offset(envLevel(subGroup,j)),i), envelope(j,gate,gain))
   :mixer(nrEnvelopes,1,1)
 * group(offset(subGroup(masterGroup(param)),i))
 + group(offset(subGroup(param),i)) ;
 
-envLevel(subGroup,i) = subGroup(vgroup("[-1]envelope mixer", hslider("envLevel %i", 0, -1, 1, stepsize)));
+envLevel(subGroup,i) = subGroup(vgroup("[-2]envelope mixer", hslider("envLevel %i", 0, -1, 1, stepsize)));
+lfoLevel(subGroup,i) = subGroup(vgroup("[-1]lfo mixer", hslider("lfoLevel %i", 0, -1, 1, stepsize)));
 
 ///////////////////////////////////////////////////////////////////////////////
 //                                    GUI                                    //
@@ -95,6 +102,7 @@ tabs(x) = tgroup("CZsynth", x);
 oscillatorGroup(x) = tabs(vgroup("[00]oscillators", x));
 // envelopeGroup(x) = tabs(vgroup("[01]envelope", x));
 envelopeGroup(i,x) = tabs(vgroup("envelopes", hgroup("[%i]envelope %i", x)));
+lfoGroup(i,x) = tabs(vgroup("lfos", hgroup("[%i]lfo %i", x)));
 midiGroup(x) = tabs(hgroup("[99]midi", x));
 mainGroup(x) = stereoGroup(vgroup("[0]main", x));
 offsetGroup(x) = stereoGroup(vgroup("[1]L-R offset", x));
@@ -146,6 +154,7 @@ decay(i)   = envelopeGroup(i,hslider("[1]decay", 0.1, 0, maxDecay, stepsize));
 sustain(i) = envelopeGroup(i,hslider("[2]sustain", 0.8, 0, 1, stepsize));
 release(i) = envelopeGroup(i,hslider("[3]release", 0.1, 0, maxRelease, stepsize));
 
+lfo_freq(i) = lfoGroup(i,hslider("[0]freq", 1, 0, 99, stepsize));
 
 lfo_amount = hslider("lfo amount", 0, 0, 1, stepsize):new_smooth(0.999);
 // velocity(i) = midiGroup(select2(i>=0, 0, hslider("velocity of note %i [midi:key %i ]", 0, 0, 127, 1)));
@@ -280,7 +289,7 @@ oscillators(i,fund,gate,gain) =
 oscillator(i,fund,gate,gain) =
   (
     preFilterOct(i,fund,gate,gain)
-   ,envMixer(globalGroup,indexGroup,i,oscillatorIndex,gate,gain)
+   ,modMixer(globalGroup,indexGroup,i,oscillatorIndex,gate,gain)
   )
   : oscillatorSelector
 ;
@@ -377,7 +386,7 @@ CZparams(i,gate,gain) =
 
 CZparams_oct(i,gate,gain) =
   (
-    0,0,envMixer(globalGroup,octGroup,i,oct,gate,gain) // for routing
+    0,0,modMixer(globalGroup,octGroup,i,oct,gate,gain) // for routing
     , oscParamsI_oct(CZsawGroup,i,gate,gain)
     , oscParamsI_oct(CZsquareGroup,i,gate,gain)
     , oscParamsI_oct(CZpulseGroup,i,gate,gain)
@@ -425,29 +434,29 @@ preFilterOct(i,fund,gate,gain) =
 ;
 
 oscPreFilterParams(group,i,gate,gain) =
-  envMixer(group,allpassGroup,i,allpassLevel,gate,gain)
-, envMixer(group,ms20Group,i,ms20level,gate,gain)
-, envMixer(group,oberheimGroup,i,oberheimLevel,gate,gain)
-, (envMixer(group,normFreqGroup,i,normFreq,gate,gain):max(0):min(1))
-, (envMixer(group,QGroup,i,Q,gate,gain):max(stepsize):min(10));
+  modMixer(group,allpassGroup,i,allpassLevel,gate,gain)
+, modMixer(group,ms20Group,i,ms20level,gate,gain)
+, modMixer(group,oberheimGroup,i,oberheimLevel,gate,gain)
+, (modMixer(group,normFreqGroup,i,normFreq,gate,gain):max(0):min(1))
+, (modMixer(group,QGroup,i,Q,gate,gain):max(stepsize):min(10));
 
 oscParamsI_oct(group,i,gate,gain) =
-  envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
-, envMixer(group,indexGroup,i,oscillatorIndex,gate,gain)
-, envMixer(globalGroup,octGroup,i,oct,gate,gain);
+  modMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
+, modMixer(group,indexGroup,i,oscillatorIndex,gate,gain)
+, modMixer(globalGroup,octGroup,i,oct,gate,gain);
 
 oscParamsR_oct(group,i,gate,gain) =
-  envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
-, envMixer(group,indexGroup,i,oscillatorRes,gate,gain)
-, envMixer(group,octGroup,i,oct,gate,gain);
+  modMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
+, modMixer(group,indexGroup,i,oscillatorRes,gate,gain)
+, modMixer(group,octGroup,i,oct,gate,gain);
 
 oscParamsI(group,i,gate,gain) =
-  envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
-, envMixer(group,indexGroup,i,oscillatorIndex,gate,gain);
+  modMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
+, modMixer(group,indexGroup,i,oscillatorIndex,gate,gain);
 
 oscParamsR(group,i,gate,gain) =
-  envMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
-, envMixer(group,indexGroup,i,oscillatorRes,gate,gain);
+  modMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
+, modMixer(group,indexGroup,i,oscillatorRes,gate,gain);
 
 oscParams(group,i,gate,gain) =
   ((_+phase):ma.frac)
@@ -455,8 +464,8 @@ oscParams(group,i,gate,gain) =
 , _
 , CZparam
 with {
-  phase = envMixer(group,phaseGroup,i,oscillatorPhase,gate,gain);
-  CZparam = envMixer(group,indexGroup,i,oscillatorIndex,gate,gain);
+  phase = modMixer(group,phaseGroup,i,oscillatorPhase,gate,gain);
+  CZparam = modMixer(group,indexGroup,i,oscillatorIndex,gate,gain);
 };
 
 
@@ -513,6 +522,7 @@ envelope(i,gate,gain) =  adsreg(attack(i),decay(i),sustain(i),release(i),gate,ga
 // envelope(i) =  _*adsre(attack(i),decay(i),sustain(i),release(i),gate);
 // envelope(i) = _*en.adsre(attack(i),decay(i),sustain(i),release(i),gate);
 
+lfo(i,gate,gain) =  os.osc(lfo_freq(i));
 // master = lf_sawpos_reset(freq,reset) ;
 master(lastNote) = lf_sawpos_phase_reset(freq(lastNote)*minOctMult,masterPhase,reset(lastNote)) ;
 reset(lastNote) = gate(lastNote):ba.impulsify;
@@ -533,7 +543,7 @@ preFilter(allpassLevel,ms20level,oberheimLevel,normFreq,Q) =
 // par(i, nrInChan, si.bus(nrSends),si.bus(nrOutChan)) : mixer(nrInChan,nrOutChan,nrSends) : par(i, nrSends, si.bus(nrOutChan));
 
 
-lfo = 0.5*(1+os.osc(0.5));
+// lfo = 0.5*(1+os.osc(0.5));
 // vel(x) = chooseFromFixed(nrNotes,velocity,x);
 vel(x) = x:chooseFromFixed(nrNotes,velocity);
 //par(i, nrNotes, velocity(i)*(i==x)):>_ ;
@@ -970,6 +980,7 @@ with{
 //////////////////////////////////////////////////////////////////////////////
 
 nrEnvelopes = 4;
+nrLFOs = nrEnvelopes;
 
 minOct = -4;
 maxOct = 4;
