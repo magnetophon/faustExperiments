@@ -297,13 +297,10 @@ oscillator(i,fund,gate,gain) =
 vectorOsc(i,fund,gate,gain,ab,cd) =
   (
     (
-      preFilterOct(i,fund,gate,gain)<:
-      (
-        oscParams(A,i,gate,gain)
-      , oscParams(B,i,gate,gain)
-      , oscParams(C,i,gate,gain)
-      , oscParams(D,i,gate,gain)
-      )
+      oscParams(A,i,fund,gate,gain)
+    , oscParams(B,i,fund,gate,gain)
+    , oscParams(C,i,fund,gate,gain)
+    , oscParams(D,i,fund,gate,gain)
     )
     :
     (
@@ -458,10 +455,8 @@ oscParamsR(group,i,gate,gain) =
   modMixer(group,levelGroup,i,oscillatorLevel,gate,gain)
 , modMixer(group,indexGroup,i,oscillatorRes,gate,gain);
 
-oscParams(group,i,gate,gain) =
-  ((_+phase):ma.frac)
-, ((_+phase):ma.frac)
-, _
+oscParams(group,i,fund,gate,gain) =
+  preFilterOct(i,((fund+phase):ma.frac),gate,gain)
 , CZparam
 with {
   phase = modMixer(group,phaseGroup,i,oscillatorPhase,gate,gain);
