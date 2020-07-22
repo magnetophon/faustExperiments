@@ -74,7 +74,7 @@ with {
                         (group(MSgroup(lfoLevel(subGroup,j))):si.smooth(0.999))
                         , lfo(j,gate,gain))
                     :mixer(nrLFOs,1,1);
-  lfoMaster(MSgroup) = group(MSgroup(subGroup(masterGroup(param)))):si.smooth(0.998);
+  lfoMaster(MSgroup) = group(MSgroup(subGroup(masterGroup(param)))):si.smooth(0.999);
   amount(MSgroup) = group(MSgroup(subGroup(param))):si.smooth(0.999);
   M = mainGroup;
   S = offsetGroup;
@@ -430,6 +430,14 @@ preFilterOct(i,fund,gate,gain) =
   )
 ;
 
+preFilterOctG(group,i,fund,gate,gain) =
+  (
+    (fund,oscPreFilterParams(filterGroup,i,gate,gain),octave)
+    : octaverFilter_No_Osc //(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,oct)
+  ) with {
+  octave = modMixer(group,octGroup,i,oct,gate,gain);
+  };
+
 oscPreFilterParams(group,i,gate,gain) =
   modMixer(group,allpassGroup,i,allpassLevel,gate,gain)
 , modMixer(group,ms20Group,i,ms20level,gate,gain)
@@ -456,7 +464,7 @@ oscParamsR(group,i,gate,gain) =
 , modMixer(group,indexGroup,i,oscillatorRes,gate,gain);
 
 oscParams(group,i,fund,gate,gain) =
-  preFilterOct(i,((fund+phase):ma.frac),gate,gain)
+  preFilterOctG(group,i,((fund+phase):ma.frac),gate,gain)
 , CZparam
 with {
   phase = modMixer(group,phaseGroup,i,oscillatorPhase,gate,gain);
