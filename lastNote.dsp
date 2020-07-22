@@ -153,6 +153,7 @@ attack(i)  = envelopeGroup(i,hslider("[0]attack", 0, 0, maxAttack, stepsize));
 decay(i)   = envelopeGroup(i,hslider("[1]decay", 0.1, 0, maxDecay, stepsize));
 sustain(i) = envelopeGroup(i,hslider("[2]sustain", 0.8, 0, 1, stepsize));
 release(i) = envelopeGroup(i,hslider("[3]release", 0.1, 0, maxRelease, stepsize));
+velSens(i) = envelopeGroup(i,hslider("[4]vel sens", 0, 0, 1, stepsize));
 
 lfo_freq(i) = lfoGroup(i,hslider("[0]freq", 1, 0, 99, stepsize));
 
@@ -521,9 +522,12 @@ OLDoscillators(i,fund) =
 
 
 filters(i) = _;
-envelope(i,gate,gain) =  adsreg(attack(i),decay(i),sustain(i),release(i),gate,gain);
-// envelope(i) =  _*adsre(attack(i),decay(i),sustain(i),release(i),gate);
-// envelope(i) = _*en.adsre(attack(i),decay(i),sustain(i),release(i),gate);
+
+envelope(i,gate,gain) =  adsreg(attack(i),decay(i),sustain(i),release(i),gate,GAIN)
+with {
+  GAIN = si.interpolate(velSens(i),1,gain);
+};
+
 
 lfo(i,gate,gain) =  os.osc(lfo_freq(i));
 // master = lf_sawpos_reset(freq,reset) ;
