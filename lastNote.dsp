@@ -19,7 +19,9 @@ phase = hslider("phase", 0, 0, 1, stepsize);
 
 freq(lastNote) = lastNote:ba.pianokey2hz : enabled_smooth(gate(lastNote)' & gate(lastNote) , ba.tau2pole(portamento));
 gain(lastNote) = (vel(lastNote)/127); // increases the cpu-usage, from 7% to 11%
-gate(lastNote) = gain(lastNote)>0;
+gate(lastNote) =
+  gain(lastNote)>0;
+// (gain(lastNote)>0)*(lastNote==lastNote');
 
 // gate = vel(lastNote)>0;
 // gain = (nrNotesPlaying>0); // no velocity, 7% cpu
@@ -28,7 +30,7 @@ gate(lastNote) = gain(lastNote)>0;
 // from https://github.com/timowest/analogue/blob/master/faust/midi.dsp
 // freq = hslider("/h:midi/pitch", 64, 32, 100, 1):ba.pianokey2hz;
 // gain = hslider("/h:midi/gain", 1, 0, 1, 0.01);
-// gate = button("/h:midi/gate");
+// gate(lastNote) = button("/h:midi/gate");
 
 ///////////////////////////////////////////////////////////////////////////////
 //                                  process                                  //
@@ -142,10 +144,11 @@ masterPhase = hslider("masterPhase", 0, -1, 1, stepsize) :new_smooth(0.999);
 portamento = hslider("portamento[scale:log]", 0, 0, 1, stepsize);
 
 oscillatorLevel = vslider("[0]Level", 0, -1, 1, stepsize);
-oscillatorPhase   = vslider("[1]phase", 0, -64, 64, stepsize);
+oscillatorPhase = vslider("[1]phase", 0, -64, 64, stepsize);
 oscillatorIndex = vslider("[2]index", 0, 0, 1, stepsize);
 oscillatorRes   = vslider("[2]res", 0, 0, 64, stepsize);
 oct             = vslider("oct", 0, minOct, maxOct, stepsize);
+type            = vslider("type", 0, 0, 8, 1);
 
 // sawIndex = sawGroup(oscillatorIndex);
 // pulseIndex = pulseGroup(oscillatorIndex);
@@ -364,7 +367,7 @@ oscillatorSelector =
   , CZresSawPF
   , CZresTrianglePF
   , CZresTrapPF
-  ) : enableOneOfN(9,vslider("type", 0, 0, 8, 1));
+  ) : enableOneOfN(9,type);
 
 enableOneOfN(maxN,N) = par(i, maxN, control(i==N)*(i==N)):>_;
 
@@ -469,7 +472,12 @@ oscParams(group,i,fund,gate,gain) =
 , CZparam
 with {
   phase = modMixer(group,phaseGroup,i,oscillatorPhase,gate,gain);
-  CZparam = modMixer(group,indexGroup,i,oscillatorIndex,gate,gain);
+  CZparam = modMixer(group,indexGroup,i,oscillatorIndex,gate,gain)*resMult;
+  resMult = select2(group(type)>5,1,64); // workaround:
+  // there are 2 types of osc:
+  // the ones with an index parameter and the ones with a res parameter
+  // index is 0..1
+  // res is 0..64
 };
 
 
@@ -525,9 +533,15 @@ filters(i) = _;
 
 envelope(i,gate,gain) =  adsreg(attack(i),decay(i),sustain(i),release(i),gate,GAIN)
 with {
+  // GATE = gate*(lastNote==lastNote');
   GAIN = si.interpolate(velSens(i),1,gain);
 };
 
+// envelopeR(i,gate,gain,lastNote) =  adsreg(attack(i),decay(i),sustain(i),release(i),GATE,GAIN)
+// with {
+// GATE = gate*(lastNote==lastNote');
+// GAIN = si.interpolate(velSens(i),1,gain);
+// };
 
 lfo(i,gate,gain) =  os.osc(lfo_freq(i));
 // master = lf_sawpos_reset(freq,reset) ;
