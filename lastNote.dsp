@@ -554,15 +554,71 @@ preFilter(allpassLevel,ms20level,oberheimLevel,normFreq,Q) =
   _<:
   (
     _
-  , allpassLevel , fi.allpassnn(1,normFreq/2*ma.PI)
-  , ms20level , ve.korg35LPF(normFreq,Q)
-  , oberheimLevel , ve.oberheimLPF(normFreq,Q)
+  , allpassLevel , svf.lp(freq,Q)
+// , allpassLevel , fi.allpassnn(1,normFreq/2*ma.PI)
+  , ms20level , korg35LPF(freq,Q)
+  , oberheimLevel , oberheimLPFf(freq,Q)
   )
-  :fallbackMixer(3,1,1);
+  :fallbackMixer(3,1,1)
+with {
+  freq = normFreq*127:ba.pianokey2hz
+         :max(0)
+         :min(ma.SR/2-10); // oberheim has artifacts with high freqs, they go away when compiling with -quad, but also when I limit the range.
+};
+
 
 // oneSumMixer(nrInChan,nrOutChan,nrSends) =
 // par(i, nrInChan, si.bus(nrSends),si.bus(nrOutChan)) : mixer(nrInChan,nrOutChan,nrSends) : par(i, nrSends, si.bus(nrOutChan));
 
+
+declare oberheim author "Eric Tarr";
+declare oberheim license "MIT-style STK-4.3 license";
+oberheimF(freq,Q) = _<:(s1,s2,ybsf,ybpf,yhpf,ylpf) : !,!,_,_,_,_
+letrec{
+  's1 = _-s2:_-(s1*FBs1):_*alpha0:_*g<:_,(_+s1:ef.cubicnl(0.0,0)):>_;
+  's2 = _-s2:_-(s1*FBs1):_*alpha0:_*g:_+s1:ef.cubicnl(0.0,0):_*g*2:_+s2;
+  // Compute the BSF, BPF, HPF, LPF outputs
+  'ybsf = _-s2:_-(s1*FBs1):_*alpha0<:(_*g:_+s1:ef.cubicnl(0.0,0):_*g:_+s2),_:>_;
+  'ybpf = _-s2:_-(s1*FBs1):_*alpha0:_*g:_+s1:ef.cubicnl(0.0,0);
+  'yhpf = _-s2:_-(s1*FBs1):_*alpha0;
+  'ylpf = _-s2:_-(s1*FBs1):_*alpha0:_*g :_+s1:ef.cubicnl(0.0,0):_*g:_+s2;
+}
+with{
+  // freq = 2*(10^(3*normFreq+1));
+  wd = 2*ma.PI*freq;
+  T = 1/ma.SR;
+  wa = (2/T)*tan(wd*T/2);
+  g = wa*T/2;
+  G = g/(1.0 + g);
+  R = 1/(2*Q);
+  FBs1 = (2*R+g);
+  alpha0 = 1/(1 + 2*R*g + g*g);
+};
+
+oberheimLPFf(normFreq,Q) = oberheimF(normFreq,Q):!,!,!,_;
+
+declare korg35LPF author "Eric Tarr";
+declare korg35LPF license "MIT-style STK-4.3 license";
+korg35LPF(freq,Q) = _ <: (s1,s2,s3,y) : !,!,!,_
+letrec{
+  's1 = _-s1:_*(alpha*2):_+s1;
+  's2 = _-s1:_*alpha:_+s1:_+(s3*B3):_+(s2*B2):_*alpha0:_-s3:_*alpha:_+s3:_*K:_-s2:_*(alpha*2):_+s2;
+  's3 = _-s1:_*alpha:_+s1:_+(s3*B3):_+(s2*B2):_*alpha0:_-s3:_*(alpha*2):_+s3;
+  'y = _-s1:_*alpha:_+s1:_+(s3*B3):_+(s2*B2) :_*alpha0:_-s3:_*alpha:_+s3;
+}
+with{
+  // freq = 2*(10^(3*normFreq+1));
+  K = 2.0*(Q - 0.707)/(10.0 - 0.707);
+  wd = 2*ma.PI*freq;
+  T = 1/ma.SR;
+  wa = (2/T)*tan(wd*T/2);
+  g = wa*T/2;
+  G = g/(1.0 + g);
+  alpha = G;
+  B3 = (K - K*G)/(1 + g);
+  B2 = -1/(1 + g);
+  alpha0 = 1/(1 - K*G + K*G*G);
+};
 
 // lfo = 0.5*(1+os.osc(0.5));
 // vel(x) = chooseFromFixed(nrNotes,velocity,x);
