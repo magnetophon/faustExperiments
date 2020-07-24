@@ -41,6 +41,8 @@ process =
   // CZparams(0,gat,gai) ;
   // CZsynth;
   CZsynthVectorOsc;
+// lastNote<:
+// (resetX(lastNote,gate(lastNote),gain(lastNote)),gate(lastNote)) ;
 // vectorMixer(hslider("ab", 0, 0, 1, stepsize),hslider("cd", 0, 0, 1, stepsize));
 // vectorOsc(0,fund,gat,gai,ab,cd) ;
 // modMixer(CZsawGroup,levelGroup,1,oscillatorLevel);
@@ -70,7 +72,7 @@ with {
   envMix(MSgroup) = par(j, nrEnvelopes,
                         (group(MSgroup(envLevel(subGroup,j))):si.smooth(0.999))
                         , envelope(j,gate,gain))
-                 :mixer(nrEnvelopes,1,1);
+                    :mixer(nrEnvelopes,1,1);
   envMaster(MSgroup) = group(MSgroup(subGroup(masterGroup(param)))):si.smooth(0.999);
   lfoMix(MSgroup) = par(j, nrLFOs,
                         (group(MSgroup(lfoLevel(subGroup,j))):si.smooth(0.999))
@@ -213,16 +215,21 @@ with {
   octaveSwitcher(oct) = _*(octaveMultiplier(oct)/minOctMult)%1;
 };
 
-octaverFilter_No_Osc(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,oct) =
+octaverFilter_No_Osc(fund,phase,allpassLevel,ms20level,oberheimLevel,normFreq,Q,oct) =
   (
     (f0:preFilter(allpassLevel,ms20level,oberheimLevel,normFreq,Q))
   , (f1:preFilter(allpassLevel,ms20level,oberheimLevel,normFreq,Q))
   , (oct:abs%1)
   )
 with {
-  f0 = fund:octaveSwitcher(oct:floor+((oct<0) & (oct!=(oct:floor))));
-  f1 = fund:octaveSwitcher(oct:floor+(oct>0));
+  f0 = (fund+phaseM(oct0):ma.frac):octaveSwitcher(oct0);
+  f1 = (fund+phaseM(oct1):ma.frac):octaveSwitcher(oct1);
+  oct0 = oct:floor+((oct<0) & (oct!=(oct:floor)));
+  oct1 = oct:floor+(oct>0);
   octaveSwitcher(oct) = _*(octaveMultiplier(oct)/minOctMult)%1;
+  phaseM(oct) = phase*octMult(oct);
+  octMult(oct)=
+    octaveMultiplier(minOct)/(1/pow(2,oct*-1));
 };
 
 
@@ -242,19 +249,26 @@ with {
 };
 
 CZsynth =
-  (lastNote<:(master,gate,gain)) :
+  masterGateGain(lastNote) :
   (si.bus(3)<:si.bus(6)) :
   par(i, 2, CZsynthMono(i));
 
 CZsynthSingleOsc =
-  (lastNote<:(master,gate,gain)) :
+  masterGateGain(lastNote) :
   (si.bus(3)<:si.bus(6)) :
   par(i, 2, CZsynthMonoSingleOsc(i));
 
 CZsynthVectorOsc =
-  (lastNote<:(master,gate,gain)) :
+  masterGateGain(lastNote) :
   (si.bus(3)<:si.bus(6)) :
   par(i, 2, CZsynthMonoVectorOsc(i));
+
+// masterGateGain(lastNote) =
+// (lastNote<:(master,gate,gain));
+
+masterGateGain(lastNote) =
+  (lastNote<:(_,gate,gain))
+  <:(masterReset,!,_,_);
 
 CZsynthMono(i,fund,gate,gain) =
   (oscillators(i,fund,gate,gain) : filters(i))
@@ -343,6 +357,7 @@ si.bus(4)
 // TODO: optional latch for osc type change when vol is not 0
 // TODO: phase coherent pitchdrop for kicks: start envelope at phase=-1000
 // TODO: crossfade to blep at high index, high being dependant on note
+// TODO: if attack==0 and release still going: optional auto-attack-increase
 
 /*
 
@@ -436,11 +451,16 @@ preFilterOct(i,fund,gate,gain) =
 
 preFilterOctG(group,i,fund,gate,gain) =
   (
-    (fund,oscPreFilterParams(filterGroup,i,gate,gain),octave)
+    (fund,phase,oscPreFilterParams(filterGroup,i,gate,gain),octave)
     : octaverFilter_No_Osc //(fund,allpassLevel,ms20level,oberheimLevel,normFreq,Q,oct)
   ) with {
   octave = modMixer(group,octGroup,i,oct,gate,gain);
+  phase = modMixer(group,phaseGroup,i,oscillatorPhase,gate,gain);
   };
+// -4 = 1
+// -3 = .5
+// -2 = .25
+// -1 = .125
 
 oscPreFilterParams(group,i,gate,gain) =
   modMixer(group,allpassGroup,i,allpassLevel,gate,gain)
@@ -468,10 +488,9 @@ oscParamsR(group,i,gate,gain) =
 , modMixer(group,indexGroup,i,oscillatorRes,gate,gain);
 
 oscParams(group,i,fund,gate,gain) =
-  preFilterOctG(group,i,((fund+phase):ma.frac),gate,gain)
+  preFilterOctG(group,i,((fund):ma.frac),gate,gain)
 , CZparam
 with {
-  phase = modMixer(group,phaseGroup,i,oscillatorPhase,gate,gain);
   CZparam = modMixer(group,indexGroup,i,oscillatorIndex,gate,gain)*resMult;
   resMult = select2(group(type)>5,1,64); // workaround:
   // there are 2 types of osc:
@@ -546,7 +565,18 @@ with {
 lfo(i,gate,gain) =  os.osc(lfo_freq(i));
 // master = lf_sawpos_reset(freq,reset) ;
 master(lastNote) = lf_sawpos_phase_reset(freq(lastNote)*minOctMult,masterPhase,reset(lastNote)) ;
-reset(lastNote) = gate(lastNote):ba.impulsify;
+masterReset(lastNote,gate,gain) = lf_sawpos_phase_reset(freq(lastNote)*minOctMult,masterPhase,resetX(lastNote,gate,gain)) ;
+// reset(lastNote) = gate(lastNote):ba.impulsify;
+reset(lastNote) =
+  envelope(-1,gate(lastNote),gain(lastNote))>(0.01*hslider("comp", 0, 0, 1, 0.000001)):ba.impulsify;
+
+resetX(lastNote,gate,gain) =
+  isSilent' &
+(gate:ba.impulsify)
+& checkbox("retrigger")
+with {
+  isSilent = envelope(-1,gate,gain)<(hslider("comp", 0, 0, 1, 0.000001));
+};
 
 offset(param,i) = mainGroup(param)+(offsetGroup(param) * select2(i,1,-1)) :new_smooth(0.999);
 
@@ -868,47 +898,47 @@ uniqueIfy =
 
 
 svf = environment {
-	      svf(T,F,Q,G) = tick ~ (_,_) : !,!,_,_,_ : si.dot(3, mix)
-	      with {
-		    tick(ic1eq, ic2eq, v0) =
-		      2*v1 - ic1eq,
-		      2*v2 - ic2eq,
-		      v0, v1, v2
-		    with {
-		    v1 = ic1eq + g *(v0-ic2eq) : /(1 + g*(g+k));
-		    v2 = ic2eq + g * v1;
-		    };
-		    A = pow(10.0, G / 40.0);
-		    g = tan(F * ma.PI / ma.SR) : case {
-			        (7) => /(sqrt(A));
-			        (8) => *(sqrt(A));
-			        (t) => _;
+  svf(T,F,Q,G) = tick ~ (_,_) : !,!,_,_,_ : si.dot(3, mix)
+  with {
+    tick(ic1eq, ic2eq, v0) =
+      2*v1 - ic1eq,
+      2*v2 - ic2eq,
+      v0, v1, v2
+    with {
+        v1 = ic1eq + g *(v0-ic2eq) : /(1 + g*(g+k));
+        v2 = ic2eq + g * v1;
+    };
+    A = pow(10.0, G / 40.0);
+    g = tan(F * ma.PI / ma.SR) : case {
+          (7) => /(sqrt(A));
+          (8) => *(sqrt(A));
+          (t) => _;
 } (T);
-		    k = case {
-			        (6) => 1/(Q*A);
-			        (t) => 1/Q;
+k = case {
+      (6) => 1/(Q*A);
+      (t) => 1/Q;
 } (T);
-		    mix = case {
-			          (0) => 0, 0, 1;
-			          (1) => 0, 1, 0;
-			          (2) => 1, -k, -1;
-			          (3) => 1, -k, 0;
-			          (4) => 1, -k, -2;
-			          (5) => 1, -2*k, 0;
-			          (6) => 1, k*(A*A-1), 0;
-			          (7) => 1, k*(A-1), A*A-1;
-			          (8) => A*A, k*(1-A)*A, 1-A*A;
+mix = case {
+        (0) => 0, 0, 1;
+        (1) => 0, 1, 0;
+        (2) => 1, -k, -1;
+        (3) => 1, -k, 0;
+        (4) => 1, -k, -2;
+        (5) => 1, -2*k, 0;
+        (6) => 1, k*(A*A-1), 0;
+        (7) => 1, k*(A-1), A*A-1;
+        (8) => A*A, k*(1-A)*A, 1-A*A;
 } (T);
-	      };
-	      lp(f,q)		= svf(0, f,q,0);
-	      bp(f,q)		= svf(1, f,q,0);
-	      hp(f,q)		= svf(2, f,q,0);
-	      notch(f,q)	= svf(3, f,q,0);
-	      peak(f,q)	= svf(4, f,q,0);
-	      ap(f,q)		= svf(5, f,q,0);
-	      bell(f,q,g)	= svf(6, f,q,g);
-	      ls(f,q,g)	= svf(7, f,q,g);
-	      hs(f,q,g)	= svf(8, f,q,g);
+};
+  lp(f,q)		= svf(0, f,q,0);
+  bp(f,q)		= svf(1, f,q,0);
+  hp(f,q)		= svf(2, f,q,0);
+  notch(f,q)	= svf(3, f,q,0);
+  peak(f,q)	= svf(4, f,q,0);
+  ap(f,q)		= svf(5, f,q,0);
+  bell(f,q,g)	= svf(6, f,q,g);
+  ls(f,q,g)	= svf(7, f,q,g);
+  hs(f,q,g)	= svf(8, f,q,g);
 };
 
 
@@ -950,7 +980,7 @@ CZ =
     sinePulseP(fund, index) = sinePulseChooseP(fund, index, 1);
     sinePulseChooseP(fund, index, p) = (min(fnd(fund,allign,p)*((0.5-INDEX)/INDEX),(-1*fnd(fund,allign,p)+1)*((.5-INDEX)/(1-INDEX)))+fnd(fund,allign,p))*4*ma.PI:cos
     with {
-      INDEX = ((index*-0.49)+0.5);
+      INDEX = ((index:max(0):min(1)*-0.49)+0.5);
       allign = si.interpolate(index, -0.125, -0.25);
     };
 
@@ -969,7 +999,7 @@ CZ =
     resSaw(fund,res) = (((-1*(1-fund))*((cos((ma.decimal((max(1,res)*fund)+1))*2*ma.PI)*-.5)+.5))*2)+1;
     resTriangle(fund,res) = select2(fund<.5, 2-(fund*2), fund*2)*tmp*2-1
     with {
-	    tmp = ((fund*(res:max(1)))+1:ma.decimal)*2*ma.PI:cos*.5+.5;
+	  tmp = ((fund*(res:max(1)))+1:ma.decimal)*2*ma.PI:cos*.5+.5;
     };
     resTrap(fund, res) = (((1-fund)*2):min(1)*sin(ma.decimal(fund*(res:max(1)))*2*ma.PI));
   };
@@ -1040,13 +1070,13 @@ lf_sawpos_phase_reset(freq,phase,reset) = lf_sawpos_reset(freq,reset) +phase :ma
 midiclock2beat = vgroup("MIDI Clock (MC)",((clocker, play)) : attach  : midi2count : s2bpm)
 with{
 
-	clocker   = checkbox("[3]Clock Signal[midi:clock]") ;  // create a square signal (1/0), changing state at each received clock
-	play      = checkbox("[2]Start/Stop Signal[midi:start] [midi:stop]") ; // just to show start stop signal
+  clocker   = checkbox("[3]Clock Signal[midi:clock]") ;  // create a square signal (1/0), changing state at each received clock
+  play      = checkbox("[2]Start/Stop Signal[midi:start] [midi:stop]") ; // just to show start stop signal
 
-	midi2count = _ <: _ != _@1 : countup(88200,_) : result1 <: _==0,_@1 : SH : result2 : _* 24;
+  midi2count = _ <: _ != _@1 : countup(88200,_) : result1 <: _==0,_@1 : SH : result2 : _* 24;
 
-	result1 = _ ; // : vbargraph("samplecount midi", 0, 88200);
-	result2 = _ ; //: vbargraph("sampleholder midi", 0, 88200);
+  result1 = _ ; // : vbargraph("samplecount midi", 0, 88200);
+  result2 = _ ; //: vbargraph("sampleholder midi", 0, 88200);
 
 
 };
