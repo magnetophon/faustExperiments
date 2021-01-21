@@ -43,9 +43,17 @@ NLAGS = MAXPER-MINPER+1;
 
 lag2hz(lag) = float(ma.SR)/float(lag);
 
-// acor(L) = _ <: _,@(L) : * <: select3(hslider("exp,rectL,rectNLAGS", 0, 0, 2, 1), fi.pole(0.9999), ba.slidingSum(L*mult), ba.slidingSum(NLAGS*mult));
-acor(L) = _ <: _,@(L) : * <: select2(checkbox("rect"), fi.pole(0.9999), ba.slidingSum(NLAGS*mult));
 // FIXME: should use rect smoothing window, not exp
+// acor(L) = _ <: _,@(L) : * <: select3(hslider("exp,rectL,rectNLAGS", 0, 0, 2, 1), fi.pole(0.9999), ba.slidingSum(L*mult), ba.slidingSum(NLAGS*mult));
+// acor(L) = _ <: _,@(L) : * <: select2(checkbox("rect"), fi.pole(0.9999), ba.slidingSum(NLAGS*mult));
+JuliusAcor(L) = _ <: _,@(L) : * <: select2(checkbox("rect"), fi.pole(0.9999), _);
+// Bitstream Autocorrelation
+// https://www.cycfi.com/2018/03/fast-and-efficient-pitch-detection-bitstream-autocorrelation/
+BitAcor(L) = int(zeroCross) <: _,@(L) : xnor <: select2(checkbox("rect"), fi.pole(0.9999), _);
+zeroCross(x) = ((x>=0) & (x'<0)) | ((x>0) & (x'<=0));
+xnor = 1-xor(_,_);
+acor(L) = BitAcor(L);
+// acor(L) = JuliusAcor(L);
 mult = hslider("mult", 1, 1, 100, 0.1);
 
 macor(MINP,MAXP) = _ <: par(i,NLAGS,(MINP+i,acor(MINP+i)));
