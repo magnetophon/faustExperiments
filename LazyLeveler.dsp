@@ -14,7 +14,7 @@ N = 2;
 // nr of lookahead samples
 // lookahead = pow(2,LA);
 lookahead = 1<<LA;
-LA = 9;
+LA = 22;
 // table of indexes when to start a new ramp
 indexes(N,lookahead, input) = par(i, N, rwtable(size+1, init, windex, input, rindex)) with {
   windex = (_%lookahead)~(_+trig);
@@ -60,7 +60,7 @@ with {
     (getNewIndex<: newGain,_,(_>0)*direction)
   with {
     getNewIndex =
-      select2((index>oldIndex) & (direction!=oldDirection)
+      select2((index>oldIndex)// & (direction!=oldDirection)
              ,oldIndex-1
              ,index
              );
@@ -73,6 +73,10 @@ with {
 };
 
 getIndexAndDirection =
+  (
+    si.bus(LA)
+  , prep
+  ):
   (ro.crossNM(LA+2,2)
    :
    (
@@ -88,7 +92,11 @@ getIndexAndDirection =
   )
   :
   find_Nmin(LA+1)
-;
+  with {
+  prep(lowestGain,prevGain,prevIndex,prevDirection) =
+    (lowestGain,prevGain,prevIndex,select2(prevGain<=lowestGain, prevDirection, ma.INFINITY));
+};
+
 minGRmeter = min(1):max(-1):hbargraph("minGRmeter", -1, 1);
 
 SimpleLimiter =
