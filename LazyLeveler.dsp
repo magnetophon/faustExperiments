@@ -12,7 +12,8 @@ import("stdfaust.lib");
 // nr of channels
 N = 2;
 // nr of lookahead samples
-lookahead = pow(2,LA);
+// lookahead = pow(2,LA);
+lookahead = 1<<LA;
 LA = 9;
 // table of indexes when to start a new ramp
 indexes(N,lookahead, input) = par(i, N, rwtable(size+1, init, windex, input, rindex)) with {
@@ -39,10 +40,11 @@ Limiter =
   // getNewGain
   (
     ro.crossn1(3)
-    :( sequentialMinimumParOut(LA), (_<:(_,_)),_,_)
+    :( sequentialMinimumParOut(LA), ((split,split,split):ro.interleave(2,3)))
     : getIndexAndDirection,_,_,_:getNewGain
   )~si.bus(3):(_,_/lookahead,_*lookahead)
 with {
+  split = (_<:(_,_));
   getDirection =
     (
       si.bus(LA+1)
@@ -55,7 +57,7 @@ with {
       : minOfN(LA+1)
     );
   getNewGain(index, direction, oldGain, oldIndex, oldDirection) =
-    (getNewIndex<: newGain,_), direction
+    (getNewIndex<: newGain,_,(_>0)*direction)
   with {
     getNewIndex =
       select2((index>oldIndex) & (direction!=oldDirection)
@@ -71,18 +73,22 @@ with {
 };
 
 getIndexAndDirection =
-  (
-    si.bus(LA+1)
-  , (_ <: si.bus(LA+1))
+  (ro.crossNM(LA+2,2)
+   :
+   (
+     si.bus(LA+3)
+   , (_ <: si.bus(LA+1))
+   )
   )
   :
+  (_,_),
   (
     ro.interleave(LA+1,2)
-    // : par(i, LA+1,- / (1<<i) )
     : par(i, LA+1, (1<<i),(- / (1<<i)) )
-    :find_Nmin(LA)
-     // : minOfN(LA+1)
-  );
+  )
+  :
+  find_Nmin(LA+1)
+;
 minGRmeter = min(1):max(-1):hbargraph("minGRmeter", -1, 1);
 
 SimpleLimiter =
