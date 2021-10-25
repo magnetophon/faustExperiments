@@ -14,7 +14,7 @@ N = 2;
 // nr of lookahead samples
 // lookahead = pow(2,LA);
 lookahead = 1<<LA;
-LA = 22;
+LA = 9;
 // table of indexes when to start a new ramp
 indexes(N,lookahead, input) = par(i, N, rwtable(size+1, init, windex, input, rindex)) with {
   windex = (_%lookahead)~(_+trig);
@@ -37,12 +37,15 @@ find_Nmin(N) = seq(i,N-1, (Ncomparator,si.bus(2*(N-i-1)))) : Ncomparator;
 Ncomparator(n,x,m,y) = select2((x<=y),m,n), select2((x<=y),y,x); // compare integer-labeled signals
 
 Limiter =
-  // getNewGain
+  // getNewOutputs
   (
     ro.crossn1(3)
-    :( sequentialMinimumParOut(LA), ((split,split,split):ro.interleave(2,3)))
-    : getIndexAndDirection,_,_,_:getNewGain
-  )~si.bus(3):(_,_/lookahead,_*lookahead)
+    :
+    (( sequentialMinimumParOut(LA), ((split,split,split):ro.interleave(2,3)))
+     : (si.bus(LA),split,si.bus(6))
+     : (si.bus(LA+1),ro.crossNM(1,6))
+     : getIndexAndDirection,si.bus(4):getNewOutputs
+    ))~si.bus(3):(_,_/lookahead,_*lookahead)
 with {
   split = (_<:(_,_));
   getDirection =
@@ -56,19 +59,31 @@ with {
       : par(i, LA+1,(- / (1<<i)) )
       : minOfN(LA+1)
     );
-  getNewGain(index, direction, oldGain, oldIndex, oldDirection) =
-    (getNewIndex<: newGain,_,(_>0)*direction)
+  getNewOutputs(index, direction, oldGain, oldIndex, oldDirection,lowestGain) =
+    (getNewIndex<: (newAttack:newRelease),_,(_>0)*direction)
   with {
     getNewIndex =
       select2((index>oldIndex)// & (direction!=oldDirection)
              ,oldIndex-1
              ,index
              );
-    newGain =
+    newAttack =
       // !:(button("reset")==0)*direction+oldGain;
-      (_>0)*direction+oldGain;
+      indexToGainMulti*direction+oldGain;
+    indexToGainMulti(index) =
+      // (index/lookahead)*-1+1;
+      (index>0);
+    newRelease(newAttack) =
+      select2(newAttack<lowestGain
+             , newAttack
+             , (lowestGain-oldGain)/hslider("release", lookahead, 1, lookahead*4, 1)+oldGain
+             );
+
   };
 
+  attack                  = hslider("[2]attack shape[tooltip: 0 gives a linear attack (slow), 1 a strongly exponential one (fast)]", 1 , 0, 1 , 0.001);
+  attackShaper(x)= ma.tanh(x:pow(attack:attackScale)*(attack*5+.1))/ma.tanh(attack*5+.1);
+  attackScale(x) = (x+1):pow(7); //from 0-1 to 1-128, just to make the knob fit the aural experience better
   // (oldGain, index, direction );
 };
 
@@ -92,7 +107,7 @@ getIndexAndDirection =
   )
   :
   find_Nmin(LA+1)
-  with {
+with {
   prep(lowestGain,prevGain,prevIndex,prevDirection) =
     (lowestGain,prevGain,prevIndex,select2(prevGain<=lowestGain, prevDirection, ma.INFINITY));
 };
