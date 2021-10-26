@@ -38,14 +38,29 @@ Ncomparator(n,x,m,y) = select2((x<=y),m,n), select2((x<=y),y,x); // compare inte
 
 Limiter =
   // getNewOutputs
+  split
+  :(
+  (ro.crossn1(6),_
+                 // ,si.bus(4)
+  )
+  :(si.bus(4),ro.crossn1(3))
+  :
   (
-    ro.crossn1(3)
-    :
     (( sequentialMinimumParOut(LA), ((split,split,split):ro.interleave(2,3)))
      : (si.bus(LA),split,si.bus(6))
      : (si.bus(LA+1),ro.crossNM(1,6))
-     : getIndexAndDirection,si.bus(4):getNewOutputs
-    ))~si.bus(3):(_,_/lookahead,_*lookahead)
+     : getIndexAndDirectionLin,si.bus(4):getNewOutputs
+    )
+  ,
+    (( sequentialMinimumParOut(LA), ((split,split,split):ro.interleave(2,3)))
+     : (si.bus(LA),split,si.bus(6))
+     : (si.bus(LA+1),ro.crossNM(1,6))
+     : getIndexAndDirectionShaped,si.bus(4):getNewOutputs
+    ))
+)~si.bus(6)
+  :(_,_/lookahead,!,_,_/lookahead,!)
+  :(_,ro.cross(2),_)
+  :(max,_,_)
 with {
   split = (_<:(_,_));
   getDirection =
@@ -74,9 +89,9 @@ with {
       // (index/lookahead)*-1+1;
       (index>0);
     newRelease(newAttack) =
-      select2(newAttack<lowestGain
-             , newAttack
-             , (lowestGain-oldGain)/hslider("release", lookahead, 1, lookahead*4, 1)+oldGain
+      select2(oldGain<=lowestGain
+             , newAttack:max(lowestGain)
+             , (lowestGain-oldGain)/hslider("release", lookahead/4, 1, lookahead*4, 1)+oldGain
              );
 
   };
@@ -87,7 +102,7 @@ with {
   // (oldGain, index, direction );
 };
 
-getIndexAndDirection =
+getIndexAndDirectionLin =
   (
     si.bus(LA)
   , prep
@@ -109,7 +124,33 @@ getIndexAndDirection =
   find_Nmin(LA+1)
 with {
   prep(lowestGain,prevGain,prevIndex,prevDirection) =
-    (lowestGain,prevGain,prevIndex,select2(prevGain<=lowestGain, prevDirection, ma.INFINITY));
+    (lowestGain,prevGain,prevIndex,select2(prevGain<lowestGain, prevDirection, ma.INFINITY));
+};
+
+getIndexAndDirectionShaped =
+  (
+    si.bus(LA)
+  , prep
+  ):
+  (ro.crossNM(LA+2,2)
+   :
+   (
+     si.bus(LA+3)
+   , (_ <: si.bus(LA+1))
+   , paramArray(bottom,mid,band,top)
+   )
+  )
+  :
+  (_,_),
+  (
+    ro.interleave(LA+1,3)
+    : par(i, LA+1, (1<<i),(((- / (1<<i)),_):*) )
+  )
+  :
+  find_Nmin(LA+1)
+with {
+  prep(lowestGain,prevGain,prevIndex,prevDirection) =
+    (lowestGain,prevGain,prevIndex,select2(prevGain<lowestGain, prevDirection, ma.INFINITY));
 };
 
 minGRmeter = min(1):max(-1):hbargraph("minGRmeter", -1, 1);
@@ -167,9 +208,23 @@ myBus(0) = 0:!;
 
 selectFromN(N, sel) = par(i, N, _*(i==sel)):>_;
 
+paramArray(bottom,mid,band,top) =
+  par(i, (LA+1), select2(band<=i+1,midToBottomVal(i),midToTopVal(i)))
+with {
+  midToBottomVal(i) = (midToBottom(i)*bottom) + (((midToBottom(i)*-1)+1)*mid);
+  midToBottom(i) = (band-(i+1))/(band-1);
+
+  midToTopVal(i) = (midToTop(i)*top) + (((midToTop(i)*-1)+1)*mid);
+  midToTop(i) = (i+1-band)/((LA+1)-band);
+};
+
+bottom =  hslider("bottom", 4.2, 1, 20, 0.1);
+mid = hslider("mid", 0.2, 0, 1, 0.01);
+band = hslider("band", (LA-(LA/8)):int, 0, LA+1, 1);
+top = hslider("top", 0.01, 0, 1, 0.01);
 
 
 GR = no.lfnoise0(lookahead *t * (no.lfnoise0(lookahead/2):max(0.1) )):pow(3)*(1-noiseLVL) +(no.lfnoise(rate):pow(3) *noiseLVL):min(0);//(no.noise:min(0)):ba.sAndH(t)
-                                                                                                                               t= hslider("time", 0.1, 0, 1, 0.001);
-                                                                                                                               noiseLVL = hslider("noise", 0, 0, 1, 0.01);
-                                                                                                                               rate = hslider("rate", 20, 10, 20000, 10);
+                                                                                                                               t= hslider("time", 4.2, 0.1, 10, 0.1);
+                                                                                                                               noiseLVL = hslider("noise", 0.9, 0, 1, 0.01);
+                                                                                                                               rate = hslider("rate", 420, 10, 20000, 10);
