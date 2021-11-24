@@ -5,36 +5,37 @@ declare license "GPLv3";
 
 import("stdfaust.lib");
 
-Oprocess =
+process =
   // attackArray(LA)
   // : par(i, LA, hbargraph("lev%i",0,1.4))
-  // LazyLeveler(LA,testSig(LA+5))~_
-  // testSig(LA)<:(slidingMin(hslider("Looka", 0, 0, lookahead(LA), 1),lookahead(LA)))
-  // testSig(LA)<:(slidingMin(4,4)
-  slidingReduce(min,1,2,ma.INFINITY)
-  // testSig(LA)<:(ba.slidingMin(hslider("Looka", 0, 0, lookahead(LA), 1),lookahead(LA)-1)
-  // ,_
-  // @lookahead(LA)
-  // )
-  // :par(i, 3, _@200000)
-  // :par(i, 5, _*.5)
+  LazyLeveler(LA,testSig(LA+5))~_
+                                // testSig(LA)<:(slidingMin(hslider("Looka", 0, 0, lookahead(LA), 1),lookahead(LA)))
+                                // testSig(LA)<:(slidingMin(4,4)
+                                // testSig(LA)<:(slidingMin(Lookah,lookahead(LA))
+                                // ,_
+                                // @Lookah
+                                // )
+                                // :par(i, 3, _@200000)
+                                // :par(i, 5, _*.5)
 with {
-  LA = 4;
+  Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
+  LA = 3;
 };
 
 //TODO: each stage caries it's GR and its properly delayed audio
 
 LazyLeveler(LA,x,prevGain) =
-  // linearAttack(LA,x,prevGain)
-  convexAttack(LA,x,prevGain)
+  linearAttack(LA,x,prevGain)
+  // convexAttack(LA,x,prevGain)
   // shapedAttack(LA,x,prevGain)
 ;
 
 
 convexAttack(LA,x,prevGain) =
   (
-    paramArray(attackConvexVal(LA),0,attackConvexBand(LA),0,LA)
-    : par(i, LA, hbargraph("hold%i",0,maxHold(LA)))
+    // paramArray(attackConvexVal(LA),0,attackConvexBand(LA),0,LA)
+    // : par(i, LA, hbargraph("hold%i",0,maxHold(LA)))
+    par(i, LA, Lookah:hbargraph("hold%i",0,maxHold(LA+4)))
   , (x<:si.bus(LA))
   )
   :ro.interleave(LA,2)
@@ -43,13 +44,14 @@ convexAttack(LA,x,prevGain) =
       (hold(LA)
        :
        linAtt(i+1:max(3),prevGain)
-       @(lookahead(LA)+1-(1<<(i+1)))
+       // @(lookahead(LA)+1-(1<<(i+1)))
       )
      )
   // :maxOfN(LA)
   : ba.selectn(LA,hslider("sel", 0, 0, LA, 1))
 , x@lookahead(LA)
 with {
+  Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
   attackConvexBand(LA) = (attack*LA);
   attackConvexVal(LA) = pow(2,(attackConvexBand(LA)-3));
   hold(LA,holdTime) = slidingMin(HT(LA),maxHold(LA))@(maxHold(LA)-HT(LA)) with {
@@ -231,11 +233,11 @@ with {
   // but this version also works for N == 0
   // 'works' in this case means 'does the same as reduce'
   useVal(i) =
-    _ <: select2(
-      (i==0) & (N==0),
-      select2(isUsed(i), disabledVal, _)
-      , _
-    )
+    // _ <: select2(
+    // (i==0) & (N==0),
+    select2(isUsed(i), disabledVal, _)
+    // , _
+    // )
   ;
 
   // useVal(i) =
@@ -255,21 +257,3 @@ with {
 };
 
 slidingMin(n,maxn) = slidingReduce(min,n,maxn,ma.INFINITY);
-
-process =
-  // (int2bin(N,maxN+1) : par(j, int2nrOfBits(maxN)+1, hbargraph("%j",0,1)))
-  // ,
-  // sequentialOperatorParOut(int2nrOfBits(maxN+1)-1,min)
-  // ,
-  // (par(i, int2nrOfBits(maxN+1) ,
-  // isUsed(i,N,maxN):hbargraph("use%i",0,1)
-  // ))
-
-  (testSig(3):
-   slidingReduce(min,N,maxN,ma.INFINITY)
-  )
-, testSig(3)
-with {
-  N=hslider("N", 0, 0, maxN, 1);
-  maxN = lookahead(18)-1;
-};
