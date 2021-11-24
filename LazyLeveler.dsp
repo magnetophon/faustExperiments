@@ -52,7 +52,7 @@ convexAttack(LA,x,prevGain) =
 with {
   attackConvexBand(LA) = (attack*LA);
   attackConvexVal(LA) = pow(2,(attackConvexBand(LA)-3));
-  hold(LA,holdTime) = ba.slidingMin(HT(LA),maxHold(LA))@(maxHold(LA)-HT(LA)) with {
+  hold(LA,holdTime) = slidingMin(HT(LA),maxHold(LA))@(maxHold(LA)-HT(LA)) with {
     HT(LA) = holdTime:int:max(0):min(maxHold(LA));
   };
   maxHold(LA) = 1<<(LA-1);
@@ -207,62 +207,69 @@ noiseLVL = hslider("[8]noise level", 0, 0, 1, 0.01);
 rate = hslider("[9]rate [scale:log]", 420, 10, 10000, 1);
 
 
-slidingReduce(op,N,maxN,disabledVal,x) =
-  x:sequentialOperatorParOut(maxNrBits(maxN)-1,op)
-  : par(i,maxNrBits(maxN),_@sumOfPrevBlockSizes(N,maxN,i)
-                          : useVal(i,N,maxN,disabledVal)) : combine(op,maxNrBits(maxN))
+slidingReduce(op,N,0,disabledVal) = _;
+slidingReduce(op,N,maxN,disabledVal) =
+  sequentialOperatorParOut(maxNrBits(maxN+1)-1,op)
+  :
+  par(i,maxNrBits(maxN+1)
+      , _@sumOfPrevBlockSizes(i)
+        : useVal(i)
+     ) : combine(maxNrBits(maxN+1))
 with {
-
-
   // The sum of all the sizes of the previous blocks
-  sumOfPrevBlockSizes(N,maxN,0) = 0;
-  sumOfPrevBlockSizes(N,maxN,i) = (ba.subseq((allBlockSizes(N,maxN)),0,i):>_);
-  allBlockSizes(N,maxN) = par(i, maxNrBits(maxN), (pow2(i)) * isUsed(i,N,maxN));
-  maxNrBits(maxN) = int2nrOfBits(maxN);
+  sumOfPrevBlockSizes(0) = 0;
+  sumOfPrevBlockSizes(i) = (ba.subseq((allBlockSizes),0,i):>_);
+  allBlockSizes = par(i, maxNrBits(maxN), (pow2(i)) * isUsed(i));
+  maxNrBits(n) = int2nrOfBits(n);
 
   // Apply <op> to <N> parallel input signals
-  combine(op,2) = op;
-  combine(op,N) = op(combine(op,N-1),_);
+  combine(2) = op;
+  combine(N) = op(combine(N-1),_);
 
   // Decide wether or not to use a certain value, based on N
   // Basically only the second <select2> is needed,
   // but this version also works for N == 0
   // 'works' in this case means 'does the same as reduce'
-  useVal(i,N,maxN,disabledVal) =
+  useVal(i) =
     _ <: select2(
       (i==0) & (N==0),
-      select2(isUsed(i,N,maxN), disabledVal, _),
-      _
-    );
+      select2(isUsed(i), disabledVal, _)
+      , _
+    )
+  ;
 
   // useVal(i) =
   //     select2(isUsed(i), disabledVal,_);
-  // isUsed(0) = 1;
-  isUsed(i,N,maxN) = ba.take(i+1, (int2bin(N+1,maxN*2+1)));
+  // isUsed(0,N,maxN) = 1;
+  isUsed(i) = ba.take(i+1, (int2bin(N+1,maxN*2+1)));
   pow2(i) = 1<<i;
   // same as:
   // pow2(i) = int(pow(2,i));
   // but in the block diagram, it will be displayed as a number, instead of a formula
 
   // convert N into a list of ones and zeros
-  int2bin(N,maxN) = par(j, int2nrOfBits(maxN), int(floor((N)/(pow2(j))))%2);
+  int2bin(N,maxN) = par(j, maxNrBits(maxN), int(floor((N)/(pow2(j))))%2);
+  // int2bin(N,maxN) = par(j, maxNrBits(maxN), int(floor((N)/(pow2(j))))%2);
   // calculate how many ones and zeros are needed to represent maxN
-  int2nrOfBits(N) = int(floor(log(N)/log(2))+1):max(1);
+  int2nrOfBits(N) = int(floor(log(N)/log(2))+1);
 };
 
 slidingMin(n,maxn) = slidingReduce(min,n,maxn,ma.INFINITY);
 
 process =
-  // (int2bin(N,maxN) : par(j, int2nrOfBits(maxN), hbargraph("%j",0,1)))
-  // ,(par(i, int2nrOfBits(maxN) ,
+  // (int2bin(N,maxN+1) : par(j, int2nrOfBits(maxN)+1, hbargraph("%j",0,1)))
+  // ,
+  // sequentialOperatorParOut(int2nrOfBits(maxN+1)-1,min)
+  // ,
+  // (par(i, int2nrOfBits(maxN+1) ,
   // isUsed(i,N,maxN):hbargraph("use%i",0,1)
   // ))
 
-  (testSig(2):
+  (testSig(3):
    slidingReduce(min,N,maxN,ma.INFINITY)
   )
-, testSig(2)
+, testSig(3)
 with {
   N=hslider("N", 0, 0, maxN, 1);
-  maxN = 8;
+  maxN = lookahead(18)-1;
 };
