@@ -5,363 +5,152 @@ declare license "GPLv3";
 
 import("stdfaust.lib");
 
-///////////////////////////////////////////////////////////////////////////////
-//                                 variables                                 //
-///////////////////////////////////////////////////////////////////////////////
-
-// nr of channels
-N = 2;
-// nr of lookahead samples
-// lookahead = pow(2,LA);
-lookahead = 1<<LA;
-LA = 14;
-// LA = 4;
-LAconvex = 128;
-SEQnr = 32;
-// table of indexes when to start a new ramp
-indexes(N,lookahead, input) = par(i, N, rwtable(size+1, init, windex, input, rindex)) with {
-  windex = (_%lookahead)~(_+trig);
+Oprocess =
+  // attackArray(LA)
+  // : par(i, LA, hbargraph("lev%i",0,1.4))
+  // LazyLeveler(LA,testSig(LA+5))~_
+  // testSig(LA)<:(slidingMin(hslider("Looka", 0, 0, lookahead(LA), 1),lookahead(LA)))
+  // testSig(LA)<:(slidingMin(4,4)
+  slidingReduce(min,1,2,ma.INFINITY)
+  // testSig(LA)<:(ba.slidingMin(hslider("Looka", 0, 0, lookahead(LA), 1),lookahead(LA)-1)
+  // ,_
+  // @lookahead(LA)
+  // )
+  // :par(i, 3, _@200000)
+  // :par(i, 5, _*.5)
+with {
+  LA = 4;
 };
 
-attack = hslider("[1]attack", 1, 0, 1, 0.01);
-attackConvexBand = (attack*LA);
-attackConvexVal = pow(2,(attackConvexBand-3));
-// 1=2
-// 2=3
-// 4=4
-// 8=5
-// 16=6
-// 32=7
-// 64=8
-// 128=9
-// 256=10
-// 512=11
-// 1024=12
-// 2048=13
+//TODO: each stage caries it's GR and its properly delayed audio
 
-///////////////////////////////////////////////////////////////////////////////
-//                               implementation                              //
-///////////////////////////////////////////////////////////////////////////////
-
-process(x,y) =
-  (x@(maxHold+((2*lookahead)-1))*lim(x,y))
-, (y@(maxHold+((2*lookahead)-1))*lim(x,y))
-, (lim(x,y):ba.linear2db/(thresh*-1))
-
-  // testSig@(maxHold+((2*lookahead)-1))
-  // , (testSig:LimiterConvex(LA) :Limiter(1,LA))
-  // , (testSig:LimiterConvex(LA)@(lookahead))
+LazyLeveler(LA,x,prevGain) =
+  // linearAttack(LA,x,prevGain)
+  convexAttack(LA,x,prevGain)
+  // shapedAttack(LA,x,prevGain)
 ;
-// getIndexAndDirection(0,LA);
-// find_Nmin(LA);
-// (
-// ((GR:sequentialLinMinimumParOut(LAconvex))
-// , (_<:si.bus(LAconvex+2))
-// )
-// : (ro.interleave(LAconvex+1,2),_)
-// : (par(i, LAconvex+1, -/(i+1)),_)
-// : (maxOfN(LAconvex+1),_)
-// :+)~_
-// ,GR@(LAconvex)
 
-// hold(10)
-// (GR:LimiterConvex(LA)),
-// ,(GR:hold(tCon):Limiter(0,LA-1)@(lookahead-(1<<(LA-1)))),
-// (GR:hold(bCon):Limiter(0,LA-2)@(lookahead-(1<<(LA-2))))
 
-// (GR:ba.slidingMin(LAconvex,LAconvex))
-// , (GR:ba.slidingMin(64,LAconvex)@64)
-// , (GR:ba.slidingMin(32,LAconvex)@96)
-// , GR@LAconvex
-//
-// GR@(3*lookahead-3)
-// ,((GR: Limiter@(2*lookahead-2)))
-// , (GR: Limiter: Limiter@(lookahead-1))
-// , (GR: Limiter: Limiter: Limiter)
-//
-// GR@(SEQnr*lookahead-offset)
-// , (GR<:seq(i, SEQnr, select2((i+1)<=SEQamount,_@(lookahead-1), Limiter)<:(_,_) ))
-SEQamount = hslider("seq amount", 1, 1, SEQnr, 1);
-offset = hslider("offset", 0, -2*SEQnr, 2*SEQnr, 1);
-conCurve = hslider("conCurve", 3, 1, 5, 0.01);
-maxHold = 1<<(LA-1);
-holdTime = hslider("holdTime", 0, 0, maxHold, 1);
-// (GR:SimpleLimiter);
-
-GR(x,y) =
-  max(abs(x),abs(y)): ba.linear2db : gain_computer(strength,thresh,knee)
-with {
-  gain_computer(strength,thresh,knee,level) =
-    select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2))),
-            0,
-            ((level-thresh+(knee/2)):pow(2)/(2*knee)),
-            (level-thresh)) : max(0)*-strength;
-};
-strength = 1;
-thresh = hslider("[0]thresh", 0, -60, 12, 0.1);
-knee = hslider("[3]knee", 0, 0, 60, 0.1);
-autoGain = checkbox("[4]autoGain");
-
-peak_compression_gain_mono(strength,thresh,att,rel,knee,prePost) =
-  abs:ba.bypass1(prePost,si.lag_ud(att,rel)) : ba.linear2db : gain_computer(strength,thresh,knee):ba.bypass1((prePost*-1)+1,si.lag_ud(rel,att)) : ba.db2linear
-with {
-  gain_computer(strength,thresh,knee,level) =
-    select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2))),
-            0,
-            ((level-thresh+(knee/2)):pow(2)/(2*knee)),
-            (level-thresh)) : max(0)*-strength;
-};
-
-lim(x,y) = (GR(x,y):LimiterConvex(LA):Limiter(1,LA)-(autoGain*thresh@(maxHold+((2*lookahead)-1))):ba.db2linear);
-
-find_Nmin(N) = seq(i,N-1, (Ncomparator,si.bus(2*(N-i-1)))) : Ncomparator;
-
-Ncomparator(n,x,m,y) = select2((x<=y),m,n), select2((x<=y),y,x); // compare integer-labeled signals
-
-LimiterConvex(LA) =
+convexAttack(LA,x,prevGain) =
   (
-    paramArray(attackConvexVal,0,attackConvexBand,0,LA)
-    // par(i, LA, 10)
-    // , (_:ba.slidingMin(lookahead,lookahead)<:si.bus(LA))
-  , (_<:si.bus(LA))
-  ):ro.interleave(LA,2)
-  :par(i, LA,
-       (hold:Limiter(0,i+1)@(lookahead-(1<<(i+1))))
+    paramArray(attackConvexVal(LA),0,attackConvexBand(LA),0,LA)
+    : par(i, LA, hbargraph("hold%i",0,maxHold(LA)))
+  , (x<:si.bus(LA))
+  )
+  :ro.interleave(LA,2)
+  :
+  par(i, LA,
+      (hold(LA)
+       :
+       linAtt(i+1:max(3),prevGain)
+       @(lookahead(LA)+1-(1<<(i+1)))
       )
-  :maxOfN(LA)
-;
-bCon = hslider("bottom", 0, 0, maxHold, 1);
-mCon = hslider("mid", 0, 0, maxHold, 1);
-tCon = hslider("top", 0, 0, maxHold, 1);
-
-LimiterDuo(LA) =
-  _<:max(
-    Limiter(0,LA)
-  , (hold(holdTime):Limiter(1,LA-1))
-    // , (ba.slidingMin(holdTime,maxHold):Limiter(1,LA-1)@(maxHold-holdTime))
-  );
-hold(holdTime) = ba.slidingMin(HT,maxHold)@(maxHold-HT) with {
-  HT = holdTime:int:max(0):min(maxHold);
+     )
+  // :maxOfN(LA)
+  : ba.selectn(LA,hslider("sel", 0, 0, LA, 1))
+, x@lookahead(LA)
+with {
+  attackConvexBand(LA) = (attack*LA);
+  attackConvexVal(LA) = pow(2,(attackConvexBand(LA)-3));
+  hold(LA,holdTime) = ba.slidingMin(HT(LA),maxHold(LA))@(maxHold(LA)-HT(LA)) with {
+    HT(LA) = holdTime:int:max(0):min(maxHold(LA));
+  };
+  maxHold(LA) = 1<<(LA-1);
 };
 
 
-LimiterDuoOLD(LA) =
-  // getNewOutputs
-  split
-  :(
-  (ro.crossn1(6),_
-                 // ,si.bus(4)
-  )
-  :(si.bus(4),ro.crossn1(3))
-  :
-  (
-    (( sequentialMinimumParOut(LA), ((split,split,split):ro.interleave(2,3)))
-     : (si.bus(LA),split,si.bus(6))
-     : (si.bus(LA+1),ro.crossNM(1,6))
-     : getIndexAndDirection(0,LA),si.bus(4):getNewOutputs
+  shapedAttack(LA,x,prevGain) =
+    (x:sequentialMinimumParOutDelayed(LA)
+       // :(par(i, LA, !),_)
+     : (!,si.bus(LA))
+     : par(i, LA, getDirection(i+1,prevGain))
+     : ( ro.interleave(2,LA) , attackArray(LA)
+       )
+     : (si.bus(LA),ro.crossnn(LA))
+     : (ro.interleave(LA,2),si.bus(LA))
+     : (par(i, LA, *), si.bus(LA))
+     : ro.interleave(LA,2)
+     : find_Nmin(LA)
+       // :> (_,_)
+       // : ro.interleave(2,LA)
+       // : par(i, 2, minOfN(LA))
+     : (getGain(LA,x,prevGain))
     )
-  ,
-    (( sequentialMinimumParOut(LA), ((split,split,split):ro.interleave(2,3)))
-     : (si.bus(LA),split,si.bus(6))
-     : (si.bus(LA+1),ro.crossNM(1,6))
-     : getIndexAndDirection(1,LA),si.bus(4):getNewOutputs
-    ))
-)~si.bus(6)
-  :(_,_/lookahead,!,_,_/lookahead,!)
-  :(_,ro.cross(2),_)
-   // :(max,_,_)
-  :(max,_,_)
-with {
-  split = (_<:(_,_));
-  getDirection =
-    (
-      si.bus(LA+1)
-    , (_ <: si.bus(LA+1))
-    )
-    :
-    (
-      ro.interleave(LA+1,2)
-      : par(i, LA+1,(- / (1<<i)) )
-      : minOfN(LA+1)
-    );
-  getNewOutputs(index, direction, oldGain, oldIndex, oldDirection,lowestGain) =
-    (getNewIndex<: (newAttack:newRelease),_,(_>0)*direction)
+  , (x@lookahead(LA))
   with {
-    getNewIndex =
-      select2((index>oldIndex)// & (direction!=oldDirection)
-             ,oldIndex-1
-             ,index
-             );
-    newAttack =
-      // !:(button("reset")==0)*direction+oldGain;
-      indexToGainMulti*direction+oldGain;
-    indexToGainMulti(index) =
-      // (index/lookahead)*-1+1;
-      (index>0);
-    // newRelease(newAttack) =
-    // select2(oldGain<=lowestGain
-    // , newAttack:max(lowestGain)
-    // , lowestGain
-    // );
-    newRelease(newAttack) =
-      select2(oldGain<lowestGain
-             , newAttack:max(lowestGain)
-             , (lowestGain-oldGain)/rel+oldGain
-             );
-    rel = select2(checkbox("[5]att = rel"),hslider("[2]release", lookahead/8, 1, lookahead, 1),attackConvexVal);
+    // getGain(LA,x,prevGain,index,direction,minGain)=
+    getGain(LA,x,prevGain,direction,minGain)=
+      direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
+    , minGain
+      // , (index/lookahead(LA))
+    ;
   };
 
-  // attack                 = hslider("[1]attack shape[tooltip: 0 gives a linear attack (slow), 1 a strongly exponential one (fast)]", 1 , 0, 1 , 0.001);
-  // attackShaper(x)= ma.tanh(x:pow(attack:attackScale)*(attack*5+.1))/ma.tanh(attack*5+.1);
-  // attackScale(x) = (x+1):pow(7); //from 0-1 to 1-128, just to make the knob fit the aural experience better
-  // (oldGain, index, direction );
+linAtt(LA,prevGain,x) = linearAttack(LA,x,prevGain):(_,!,!);
+
+linearAttack(LA,x,prevGain) =
+  (x:sequentialMinimumParOutDelayed(LA)
+     // :(par(i, LA, !),_)
+   : (!,si.bus(LA))
+   : par(i, LA, getDirection(i+1,prevGain))
+   : find_Nmin(LA)
+     // : ro.interleave(2,LA)
+     // : par(i, 2, minOfN(LA))
+   : (getGain(LA,x,prevGain))
+  )
+, (x@lookahead(LA))
+with {
+  // getGain(LA,x,prevGain,index,direction,minGain)=
+  getGain(LA,x,prevGain,direction,minGain)=
+    direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
+  , minGain
+    // , (index/lookahead(LA))
+  ;
 };
 
-Limiter(Shaped,LA) =
-  // getNewOutputs
-  (
-    (ro.crossn1(3)
-     // ,si.bus(4)
-    )
-    :
-    (( sequentialMinimumParOut(LA), ((split,split,split):ro.interleave(2,3)))
-     // : (si.bus(LA),split,si.bus(6))
-     : ((par(i, LA+1, split):ro.interleave(2,LA+1):(si.bus(LA+1),ba.selectn(LA+1,attackConvexBand))),si.bus(6))
-     : (si.bus(LA+1),ro.crossNM(1,6))
-     : getIndexAndDirection(Shaped,LA),si.bus(4):getNewOutputs
-    )
-  )~si.bus(3)
-    :(_,!,!)
+
+
+getDirection(LA,prevGain,minGain) =
+  (getIndexAndDirection~(_,_))
+  : (!,_,minGain)
+    // : (_,_,minGain)
 with {
-  split = (_<:(_,_));
-  getDirection =
-    (
-      si.bus(LA+1)
-    , (_ <: si.bus(LA+1))
-    )
-    :
-    (
-      ro.interleave(LA+1,2)
-      : par(i, LA+1,(- / (1<<i)) )
-      : minOfN(LA+1)
-    );
-  getNewOutputs(index, direction, oldGain, oldIndex, oldDirection,lowestGain) =
-    (getNewIndex<: (newAttack:newRelease),_,(_>0)*direction)
+  getIndexAndDirection(prevIndex,prevDirection) =
+    index,direction
   with {
-    getNewIndex =
-      select2((index>oldIndex)// & (direction!=oldDirection)
-             ,oldIndex-1
-             ,index
-             );
-    newAttack =
-      // !:(button("reset")==0)*direction+oldGain;
-      indexToGainMulti*direction+oldGain;
-    indexToGainMulti(index) =
-      // (index/lookahead)*-1+1;
-      (index>0);
-    // 1;
-    newRelease(newAttack) =
-      // newAttack;
-      select2(oldGain<lowestGain
-             , newAttack:max(lowestGain)
-             , (lowestGain-oldGain)/rel+oldGain
-             );
-    rel = select2(checkbox("att = rel"),hslider("[2]release", lookahead/8, 1, lookahead, 1),attackConvexVal*.5);
-  };
-
-  // attack                  = hslider("[2]attack shape[tooltip: 0 gives a linear attack (slow), 1 a strongly exponential one (fast)]", 1 , 0, 1 , 0.001);
-  // attackShaper(x)= ma.tanh(x:pow(attack:attackScale)*(attack*5+.1))/ma.tanh(attack*5+.1);
-  // attackScale(x) = (x+1):pow(7); //from 0-1 to 1-128, just to make the knob fit the aural experience better
-  // (oldGain, index, direction );
+  index =
+    select2(
+      ((minGain:ba.sAndH(trig)-prevGain)/(lookahead(LA)))<0
+      // proposedDirection<0
+    , 0
+    , select2(trig
+             , ((prevIndex-1)
+                :max(0)
+               )
+             , lookahead(LA)));
+  direction =
+    select2(trig
+           ,  (minGain:ba.sAndH(trig)-prevGain) / ((prevIndex):max(1))
+           , (minGain-prevGain)/lookahead(LA)
+           )
+  ;
+  trig = (proposedDirection<=(prevGain-prevGain'));
+  proposedDirection = (dif/(lookahead(LA)));
+  dif = minGain-prevGain;
+};
 };
 
-getIndexAndDirection(0,LA) =
-  (
-    si.bus(LA)
-  , prep
-  ):
-  (ro.crossNM(LA+2,2)
-   :
-   (
-     si.bus(LA+3)
-   , (_ <: si.bus(LA+1))
-   )
-  )
-  :
-  (_,_),
-  (
-    ro.interleave(LA+1,2)
-    : par(i, LA+1, (1<<i),(- / (1<<i)) )
-  )
-  :
-  find_Nmin(LA+1)
-with {
-  prep(lowestGain,prevGain,prevIndex,prevDirection) =
-    (lowestGain,prevGain,prevIndex,select2(prevGain<lowestGain, prevDirection, ma.INFINITY));
-  // (lowestGain,prevGain,prevIndex,ma.INFINITY);
-};
 
-getIndexAndDirection(1,LA) =
-  (
-    si.bus(LA)
-  , prep
-  ):
-  (ro.crossNM(LA+2,2)
-   :
-   (
-     si.bus(LA+3)
-   , (_ <: si.bus(LA+1))
-   , paramArray(1.4,0,attackConvexBand ,0,LA+1)
-   )
-  )
-  :
-  (_,_),
-  (
-    ro.interleave(LA+1,3)
-    : par(i, LA+1, (1<<i),(((- / (1<<i)),_):*) )
-      // : par(i, LA+1, (1<<i),(((- / (1<<i)),_):dirMult) )
-  )
-  :
-  find_Nmin(LA+1)
-with {
-  prep(lowestGain,prevGain,prevIndex,prevDirection) =
-    // (lowestGain,prevGain,prevIndex,select2(prevGain<lowestGain, prevDirection, ma.INFINITY));
-    (lowestGain,prevGain,prevIndex,ma.INFINITY);
-  dirMult(dir,mult) = select2(mult==0
-                             , dir*mult
-                             , ma.INFINITY
-                             );
-};
+sequentialMinimumParOutDelayed(N) =
+  sequentialOperatorParOut(N,min)
+  : par(i, N+1, _@( 1<<N - 1<<i ));
 
-minOfGRmeter = min(1):max(-1):hbargraph("minGRmeter", -1, 1);
-
-SimpleLimiter =
-  (
-    ro.cross(2)
-    :( sequentialMinimum(LA), (_<:(_,_)))
-    : (
-      ((-:minGRmeter) / (1<<(LA-1)))<:(_,_)
-    ) ,(_:+)
-  )~_;
-
-opOfN(N,op) = seq(i, N-1, op,myBus(N-i-2));
-minOfN(N) = opOfN(N,min);
-maxOfN(N) = opOfN(N,max);
-
-// sequentialMinimum(N) = seq(i, N, minimum(i)) with {
-// minimum(i) = _<:min(_, _@(1<<i) );
-// };
-
-sequentialOperator(N,op) = seq(i, N, operator(i)) with {
-  operator(i) = _<:op(_, _@(1<<i) );
-};
-
-sequentialMinimum(N) = sequentialOperator(N,min);
+sequentialMinimumParOut(N) =
+  sequentialOperatorParOut(N,min);
 
 sequentialOperatorParOut(N,op) =
   // operator(2)
   seq(i, N, operator(i))
-  : par(i, N+1, _@( 1<<N - 1<<i ))
 with {
   operator(i) =
     myBus(i)
@@ -371,39 +160,6 @@ with {
     )
   ;
 };
-
-sequentialMinimumParOut(N) = sequentialOperatorParOut(N,min);
-
-sequentialLinOperatorParOut(N,op) =
-  // operator(2)
-  seq(i, N, operator(i))
-  : par(i, N+1, _@( N - i ))
-with {
-  operator(i) =
-    myBus(i)
-  ,
-    (_<:
-     _ , op(_,_' )
-    )
-  ;
-};
-
-sequentialLinMinimumParOut(N) = sequentialLinOperatorParOut(N,min);
-
-// LazyLeveler(N);
-
-LazyLeveler(N) = (fillTable(N):useTable(N))~feedback(N);
-
-fillTable(N) = par(i, N*2, _):> par(i, N, _);
-useTable(N) = par(i, N, _);
-feedback(N) = par(i, N, _);
-
-myBus(0) = 0:!;
-           myBus(i) = si.bus(i);
-
-
-
-selectFromN(N, sel) = par(i, N, _*(i==sel)):>_;
 
 paramArray(bottom,mid,band,top,LA) =
   par(i, LA, select2(band<=i+1,midToBottomVal(i),midToTopVal(i)))
@@ -415,13 +171,98 @@ with {
   midToTop(i) = (i+1-band)/((LA+1)-band);
 };
 
-top = hslider("[0]top", 0, 0, 1, 0.01);
-mid = hslider("[1]mid", 0, 0, 1, 0.01);
-band = hslider("[2]band", 9, 0, LA+1, 1);
-bottom =  hslider("[3]bottom", 1.4, 1, 20, 0.1);
 
 
-testSig = no.lfnoise0(lookahead *t * (no.lfnoise0(lookahead/2):max(0.1) )):pow(3)*(1-noiseLVL) +(no.lfnoise(rate):pow(3) *noiseLVL):min(0);//(no.noise:min(0)):ba.sAndH(t)
-                                                                                                                                    t= hslider("[7]time", 0.07, 0.01, 4, 0.01):pow(2);
-                                                                                                                                    noiseLVL = hslider("[8]noise level", 0, 0, 1, 0.01);
-                                                                                                                                    rate = hslider("[9]rate [scale:log]", 420, 10, 10000, 1);
+opOfN(N,op) = seq(i, N-1, op,myBus(N-i-2));
+minOfN(N) = opOfN(N,min);
+maxOfN(N) = opOfN(N,max);
+
+find_Nmin(N) = seq(i,N-2, (Ncomparator,si.bus(2*(N-i-2)))) : Ncomparator;
+Ncomparator(x,n,y,m) = select2((x<=y),y,x), select2((x<=y),m,n); // compare integer-labeled signals
+
+lookahead(LA) = (1<<LA)-1;
+
+myBus(0) =
+  0:!
+;
+myBus(i) = si.bus(i);
+
+attackArray(LA) =
+  paramArray(1.4,0,attack2band(LA+1) ,0,LA+1)
+  : (si.bus(LA),!)
+;
+
+attack = hslider("[1]attack", 1, 0, 1, 0.01);
+// attack2band(LA) = (attack*LA);
+attack2band(LA) = 2+(attack*(LA-2)):max(2);
+// attack2band(LA) = hslider("band", 0, 0, LA, 0.1);
+
+
+testSig(LA) =
+  // checkbox("tst")*-1;
+  // button:ba.impulsify*-1;
+  no.lfnoise0(lookahead(LA) *t * (no.lfnoise0(lookahead(LA)/2):max(0.1) )):pow(3)*(1-noiseLVL) +(no.lfnoise(rate):pow(3) *noiseLVL):min(0);
+t= hslider("[7]time", 2.18, 0.01, 4, 0.01):pow(2);
+noiseLVL = hslider("[8]noise level", 0, 0, 1, 0.01);
+rate = hslider("[9]rate [scale:log]", 420, 10, 10000, 1);
+
+
+slidingReduce(op,N,maxN,disabledVal,x) =
+  x:sequentialOperatorParOut(maxNrBits(maxN)-1,op)
+  : par(i,maxNrBits(maxN),_@sumOfPrevBlockSizes(N,maxN,i)
+                          : useVal(i,N,maxN,disabledVal)) : combine(op,maxNrBits(maxN))
+with {
+
+
+  // The sum of all the sizes of the previous blocks
+  sumOfPrevBlockSizes(N,maxN,0) = 0;
+  sumOfPrevBlockSizes(N,maxN,i) = (ba.subseq((allBlockSizes(N,maxN)),0,i):>_);
+  allBlockSizes(N,maxN) = par(i, maxNrBits(maxN), (pow2(i)) * isUsed(i,N,maxN));
+  maxNrBits(maxN) = int2nrOfBits(maxN);
+
+  // Apply <op> to <N> parallel input signals
+  combine(op,2) = op;
+  combine(op,N) = op(combine(op,N-1),_);
+
+  // Decide wether or not to use a certain value, based on N
+  // Basically only the second <select2> is needed,
+  // but this version also works for N == 0
+  // 'works' in this case means 'does the same as reduce'
+  useVal(i,N,maxN,disabledVal) =
+    _ <: select2(
+      (i==0) & (N==0),
+      select2(isUsed(i,N,maxN), disabledVal, _),
+      _
+    );
+
+  // useVal(i) =
+  //     select2(isUsed(i), disabledVal,_);
+  // isUsed(0) = 1;
+  isUsed(i,N,maxN) = ba.take(i+1, (int2bin(N+1,maxN*2+1)));
+  pow2(i) = 1<<i;
+  // same as:
+  // pow2(i) = int(pow(2,i));
+  // but in the block diagram, it will be displayed as a number, instead of a formula
+
+  // convert N into a list of ones and zeros
+  int2bin(N,maxN) = par(j, int2nrOfBits(maxN), int(floor((N)/(pow2(j))))%2);
+  // calculate how many ones and zeros are needed to represent maxN
+  int2nrOfBits(N) = int(floor(log(N)/log(2))+1):max(1);
+};
+
+slidingMin(n,maxn) = slidingReduce(min,n,maxn,ma.INFINITY);
+
+process =
+  // (int2bin(N,maxN) : par(j, int2nrOfBits(maxN), hbargraph("%j",0,1)))
+  // ,(par(i, int2nrOfBits(maxN) ,
+  // isUsed(i,N,maxN):hbargraph("use%i",0,1)
+  // ))
+
+  (testSig(2):
+   slidingReduce(min,N,maxN,ma.INFINITY)
+  )
+, testSig(2)
+with {
+  N=hslider("N", 0, 0, maxN, 1);
+  maxN = 8;
+};
