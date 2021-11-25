@@ -19,7 +19,7 @@ process =
                                 // :par(i, 5, _*.5)
 with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
-  LA = 7;
+  LA = 13;
 };
 
 //TODO: each stage caries it's GR and its properly delayed audio
@@ -27,7 +27,9 @@ with {
 LazyLeveler(LA,x,prevGain) =
   // linearAttack(LA,x,prevGain)
   convexAttack(LA,x)
-  // shapedAttack(LA,x,prevGain)
+  : shapedAttack(LA)~_
+                     // shapedAttack(LA,x,prevGain)
+                   , x@(3*lookahead(LA))
 ;
 
 
@@ -46,18 +48,18 @@ convexAttack(LA,x) =
         linAtt(i+1)~_:_ @(lookahead(LA)+1-(1<<(i+1)))
       )
      )
-  // :maxOfN(LA)
-  // : ba.selectn(LA,hslider("sel", 0, 0, LA, 1))
-  : selectn(LA,hslider("sel", 0, 0, LA-1, 1))
-, x@lookahead(LA)
+  :maxOfN(LA)
+   // : ba.selectn(LA,hslider("sel", 0, 0, LA, 1))
+   // : selectn(LA,hslider("sel", 0, 0, LA-1, 1))
+   // , x@(2*lookahead(LA))
 with {
   holdT = hslider("holdT", 0, 0, lookahead(LA), 1);
   attackConvexBand(LA) = (attack*LA);
   attackConvexVal(LA) = pow(2,(attackConvexBand(LA)-3));
   selectn(maxN,N) = par(i, maxN, _*(i==N)):>_;
   hold(LA,holdTime) =
-    _
-    // slidingMin(HT(LA),maxHold(LA))@(maxHold(LA)-HT(LA))
+    // _
+    slidingMin(HT(LA),maxHold(LA))@(maxHold(LA)-HT(LA))
   with {
     HT(LA) = holdTime:int:max(0):min(maxHold(LA));
   };
@@ -65,131 +67,132 @@ with {
 };
 
 
-  shapedAttack(LA,x,prevGain) =
-    (x:sequentialMinimumParOutDelayed(LA)
-       // :(par(i, LA, !),_)
-     : (!,si.bus(LA))
-     : par(i, LA, getDirection(i+1,prevGain))
-     : ( ro.interleave(2,LA) , attackArray(LA)
-       )
-     : (si.bus(LA),ro.crossnn(LA))
-     : (ro.interleave(LA,2),si.bus(LA))
-     : (par(i, LA, *), si.bus(LA))
-     : ro.interleave(LA,2)
-     : find_Nmin(LA)
-       // :> (_,_)
-       // : ro.interleave(2,LA)
-       // : par(i, 2, minOfN(LA))
-     : (getGain(LA,x,prevGain))
+shapedAttack(LA,prevGain,x) =
+  // shapedAttack(LA,x,prevGain) =
+  (x:sequentialMinimumParOutDelayed(LA)
+     // :(par(i, LA, !),_)
+   : (!,si.bus(LA))
+   : par(i, LA, getDirection(i+1,prevGain))
+   : ( ro.interleave(2,LA) , attackArray(LA)
+     )
+   : (si.bus(LA),ro.crossnn(LA))
+   : (ro.interleave(LA,2),si.bus(LA))
+   : (par(i, LA, *), si.bus(LA))
+   : ro.interleave(LA,2)
+   : find_Nmin(LA)
+     // :> (_,_)
+     // : ro.interleave(2,LA)
+     // : par(i, 2, minOfN(LA))
+   : (getGain(LA,x,prevGain))
+  )
+  // , (x@lookahead(LA))
+  with {
+  // getGain(LA,x,prevGain,index,direction,minGain)=
+  getGain(LA,x,prevGain,direction,minGain)=
+    direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
+  , minGain
+    // , (index/lookahead(LA))
+  ;
+};
+
+linAtt(LA,prevGain,x) = linearAttack(LA,x,prevGain):(_,!,!);
+
+linearAttack(0,x,prevGain) = x;
+linearAttack(LA,x,prevGain) =
+  (x:sequentialMinimumParOutDelayed(LA)
+   : (!,si.bus(LA))
+   : par(i, LA, getDirection(i+1,prevGain))
+   : find_Nmin(LA)
+   : (getGain(LA,x,prevGain))
+  )
+, (x@lookahead(LA))
+with {
+  // getGain(LA,x,prevGain,index,direction,minGain)=
+  getGain(LA,x,prevGain,direction,minGain)=
+    direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
+  , minGain
+    // , (index/lookahead(LA))
+  ;
+};
+
+
+
+getDirection(LA,prevGain,minGain) =
+  (getIndexAndDirection~(_,_))
+  : (!,_,minGain)
+    // : (_,_,minGain)
+with {
+  getIndexAndDirection(prevIndex,prevDirection) =
+    index,direction
+  with {
+  index =
+    select2(
+      ((minGain:ba.sAndH(trig)-prevGain))<0
+      // proposedDirection<0
+    , 0
+    , select2(trig
+             , ((prevIndex-1)
+                :max(0)
+               )
+             , lookahead(LA)));
+  direction =
+    select2(trig
+           ,  (minGain:ba.sAndH(trig)-prevGain) / ((prevIndex):max(1))
+           , (minGain-prevGain)/(lookahead(LA)+1)
+           )
+  ;
+  trig = (proposedDirection<=(prevGain-prevGain'));
+  proposedDirection = (dif/(lookahead(LA)+1));
+  dif = minGain-prevGain;
+};
+};
+
+
+sequentialMinimumParOutDelayed(N) =
+  sequentialOperatorParOut(N,min)
+  : par(i, N+1, _@( 1<<N - 1<<i ));
+
+sequentialMinimumParOut(N) =
+  sequentialOperatorParOut(N,min);
+
+sequentialOperatorParOut(N,op) =
+  // operator(2)
+  seq(i, N, operator(i))
+with {
+  operator(i) =
+    myBus(i)
+  ,
+    (_<:
+     _ , op(_,_@(1<<i) )
     )
-  , (x@lookahead(LA))
-  with {
-    // getGain(LA,x,prevGain,index,direction,minGain)=
-    getGain(LA,x,prevGain,direction,minGain)=
-      direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
-    , minGain
-      // , (index/lookahead(LA))
-    ;
-  };
+  ;
+};
 
-  linAtt(LA,prevGain,x) = linearAttack(LA,x,prevGain):(_,!,!);
+paramArray(bottom,mid,band,top,LA) =
+  par(i, LA, select2(band<=i+1,midToBottomVal(i),midToTopVal(i)))
+with {
+  midToBottomVal(i) = (midToBottom(i)*bottom) + (((midToBottom(i)*-1)+1)*mid);
+  midToBottom(i) = (band-(i+1))/(band-1);
 
-  linearAttack(0,x,prevGain) = x;
-  linearAttack(LA,x,prevGain) =
-    (x:sequentialMinimumParOutDelayed(LA)
-     : (!,si.bus(LA))
-     : par(i, LA, getDirection(i+1,prevGain))
-     : find_Nmin(LA)
-     : (getGain(LA,x,prevGain))
-    )
-  , (x@lookahead(LA))
-  with {
-    // getGain(LA,x,prevGain,index,direction,minGain)=
-    getGain(LA,x,prevGain,direction,minGain)=
-      direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
-    , minGain
-      // , (index/lookahead(LA))
-    ;
-  };
+  midToTopVal(i) = (midToTop(i)*top) + (((midToTop(i)*-1)+1)*mid);
+  midToTop(i) = (i+1-band)/((LA+1)-band);
+};
 
 
 
-  getDirection(LA,prevGain,minGain) =
-    (getIndexAndDirection~(_,_))
-    : (!,_,minGain)
-      // : (_,_,minGain)
-  with {
-    getIndexAndDirection(prevIndex,prevDirection) =
-      index,direction
-    with {
-    index =
-      select2(
-        ((minGain:ba.sAndH(trig)-prevGain))<0
-        // proposedDirection<0
-      , 0
-      , select2(trig
-               , ((prevIndex-1)
-                  :max(0)
-                 )
-               , lookahead(LA)));
-    direction =
-      select2(trig
-             ,  (minGain:ba.sAndH(trig)-prevGain) / ((prevIndex):max(1))
-             , (minGain-prevGain)/(lookahead(LA)+1)
-             )
-    ;
-    trig = (proposedDirection<=(prevGain-prevGain'));
-    proposedDirection = (dif/(lookahead(LA)+1));
-    dif = minGain-prevGain;
-  };
-  };
+opOfN(N,op) = seq(i, N-1, op,myBus(N-i-2));
+minOfN(N) = opOfN(N,min);
+maxOfN(N) = opOfN(N,max);
 
+find_Nmin(1) = _,_;
+find_Nmin(2) =  Ncomparator;
+find_Nmin(N) = seq(i,N-2, (Ncomparator,si.bus(2*(N-i-2)))) : Ncomparator;
+Ncomparator(x,n,y,m) = select2((x<=y),y,x), select2((x<=y),m,n); // compare integer-labeled signals
 
-  sequentialMinimumParOutDelayed(N) =
-    sequentialOperatorParOut(N,min)
-    : par(i, N+1, _@( 1<<N - 1<<i ));
+lookahead(LA) = (1<<LA)-1;
 
-  sequentialMinimumParOut(N) =
-    sequentialOperatorParOut(N,min);
-
-  sequentialOperatorParOut(N,op) =
-    // operator(2)
-    seq(i, N, operator(i))
-  with {
-    operator(i) =
-      myBus(i)
-    ,
-      (_<:
-       _ , op(_,_@(1<<i) )
-      )
-    ;
-  };
-
-  paramArray(bottom,mid,band,top,LA) =
-    par(i, LA, select2(band<=i+1,midToBottomVal(i),midToTopVal(i)))
-  with {
-    midToBottomVal(i) = (midToBottom(i)*bottom) + (((midToBottom(i)*-1)+1)*mid);
-    midToBottom(i) = (band-(i+1))/(band-1);
-
-    midToTopVal(i) = (midToTop(i)*top) + (((midToTop(i)*-1)+1)*mid);
-    midToTop(i) = (i+1-band)/((LA+1)-band);
-  };
-
-
-
-  opOfN(N,op) = seq(i, N-1, op,myBus(N-i-2));
-  minOfN(N) = opOfN(N,min);
-  maxOfN(N) = opOfN(N,max);
-
-  find_Nmin(1) = _,_;
-  find_Nmin(2) =  Ncomparator;
-  find_Nmin(N) = seq(i,N-2, (Ncomparator,si.bus(2*(N-i-2)))) : Ncomparator;
-  Ncomparator(x,n,y,m) = select2((x<=y),y,x), select2((x<=y),m,n); // compare integer-labeled signals
-
-  lookahead(LA) = (1<<LA)-1;
-
-  myBus(0) =
-    0:!
+myBus(0) =
+  0:!
   ;
   myBus(i) = si.bus(i);
 
