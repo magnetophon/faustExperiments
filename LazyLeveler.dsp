@@ -8,18 +8,24 @@ import("stdfaust.lib");
 process =
   // attackArray(LA)
   // : par(i, LA, hbargraph("lev%i",0,1.4))
-  LazyLeveler(LA,testSig(LA+5))~_
-                                // testSig(LA)<:(slidingMin(hslider("Looka", 0, 0, lookahead(LA), 1),lookahead(LA)))
-                                // testSig(LA)<:(slidingMin(4,4)
-                                // testSig(LA)<:(slidingMin(Lookah,lookahead(LA))
-                                // ,_
-                                // @Lookah
-                                // )
-                                // :par(i, 3, _@200000)
-                                // :par(i, 5, _*.5)
+
+  // LazyLeveler(LA,testSig(LA+5))~_
+  // blokjes
+  // sequentialBlockMinimumParOut(nrBlocks,lookahead(LA))
+  // slidingReduce(min,lookahead(LA),lookahead(LA),ma.INFINITY)
+  testSig(LA):
+  convexAttack(nrBlocks,LA,Lookah)
+
+  // ,_
+  // @Lookah
+  // )
+  // :par(i, 3, _@200000)
+  // :par(i, 5, _*.5)
 with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
   LA = 9;
+  nrBlocks = 4;
+  // blokjes(x,n) =   sequentialBlockOperatorParOut(n,min,ma.INFINITY,lookahead(LA),x);
 };
 
 //TODO: each stage caries it's GR and its properly delayed audio
@@ -28,7 +34,7 @@ LazyLeveler(LA,x,prevGain) =
   // linearAttack(LA-1,x,prevGain)
   x
   :
-  convexAttack(LA)
+  convexAttackOLD(LA)
   // x
   : shapedAttack(LA)~_
                    , x@(3*lookahead(LA)
@@ -36,8 +42,21 @@ LazyLeveler(LA,x,prevGain) =
                        )
 ;
 
+convexAttack(nrBlocks,LA,blockSize,x) =
 
-convexAttack(LA,x) =
+  sequentialBlockMinimumParOut(nrBlocks,lookahead(LA),x,blockSize)
+  : par(i, nrBlocks+1, _@(maxHold-(i*blockSize)))
+    // slidingMin(maxHold(LA),HT(LA),x)@(maxHold(LA)-HT(LA))
+with {
+  maxHold = nrBlocks*lookahead(LA);
+};
+
+bottom(LA) = hslider("bottom", 0, 0, lookahead(LA), 1);
+mid(LA) = hslider("mid", 0, 0, lookahead(LA), 1);
+band(LA) = hslider("band", 0, 0, lookahead(LA), 1);
+top(LA) = hslider("top", 0, 0, lookahead(LA), 1);
+
+convexAttackOLD(LA,x) =
   (
     paramArray(attackConvexVal(LA),0,attackConvexBand(LA),0,LA)
     // : par(i, LA, hbargraph("hold%i",0,maxHold(LA)))
@@ -60,9 +79,9 @@ with {
   attackConvexBand(LA) = (attack*LA);
   attackConvexVal(LA) = pow(2,(attackConvexBand(LA)-3));
   selectn(maxN,N) = par(i, maxN, _*(i==N)):>_;
-  hold(LA,holdTime) =
+  hold(LA,holdTime,x) =
     // _
-    slidingMin(HT(LA),maxHold(LA))@(maxHold(LA)-HT(LA))
+    slidingMin(maxHold(LA),HT(LA),x)@(maxHold(LA)-HT(LA))
   with {
     HT(LA) = holdTime:int:max(0):min(maxHold(LA));
   };
@@ -82,7 +101,7 @@ shapedAttack(LA,prevGain,x) =
     : minOfN(LA)
     : (getGain(LA,x,prevGain))
   )
-  with {
+with {
   getGain(LA,x,prevGain,direction)=
     select2(direction<0
            , x@lookahead(LA)
@@ -162,6 +181,24 @@ with {
   ,
     (_<:
      _ , op(_,_@(1<<i) )
+    )
+  ;
+};
+sequentialBlockMinimumParOut(N,maxBlock,x,blockSize) =
+  sequentialBlockOperatorParOut(N,min,ma.INFINITY,maxBlock,x,blockSize);
+// sequentialBlockOperatorParOut(N,min,blockSize);
+
+sequentialBlockOperatorParOut(N,op,disabledVal,maxBlock,x,blockSize) =
+  // operator(2)
+  x:seq(i, N, operator(i))
+with {
+  operator(i) =
+    myBus(i)
+  ,
+    (_<:
+     _ , op(
+       slidingReduce(op,blockSize,maxBlock,disabledVal)
+     )
     )
   ;
 };
