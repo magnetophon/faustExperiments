@@ -9,20 +9,20 @@ process =
   // attackArray(LA)
   // : par(i, LA, hbargraph("lev%i",0,1.4))
 
-  LazyLeveler(LA,testSig(LA+5))~_
+  // LazyLeveler(LA,testSig(LA+5))~_
 
-                                // blokjes
-                                // sequentialBlockMinimumParOut(nrBlocks,lookahead(LA))
-                                // slidingReduce(min,lookahead(LA),lookahead(LA),ma.INFINITY)
+  // blokjes
+  // sequentialBlockMinimumParOut(nrBlocks,lookahead(LA))
+  // slidingReduce(min,lookahead(LA),lookahead(LA),ma.INFINITY)
 
-                                // testSig(LA):
-                                // (convexAttack(nrBlocks,LA,Lookah))
+  testSig(LA):
+  (convexAttack(nrBlocks,LA,Lookah))
 
-                                // ,_
-                                // @Lookah
-                                // )
-                                // :par(i, 3, _@200000)
-                                // :par(i, 5, _*.5)
+  // ,_
+  // @Lookah
+  // )
+  // :par(i, 3, _@200000)
+  // :par(i, 5, _*.5)
 with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
   LA = 9;
@@ -48,23 +48,32 @@ convexAttack(nrBlocks,LA,blockSize,x) =
 
   sequentialBlockMinimumParOut(nrBlocks,lookahead(LA),x,blockSize)
   : delays
-
-
   : getGains
-
-    // slidingMin(maxHold(LA),HT(LA),x)@(maxHold(LA)-HT(LA))
 with {
   delays = par(i, nrBlocks+1, _@(maxHold-(i*blockSize)));
-  getGains = par(i, nrBlocks+1, DirStartTrigger~_);
+  getGains = par(i, nrBlocks+1, gainIndex(i)~(_,_):(_,!));
   maxHold = nrBlocks*lookahead(LA);
-  DirStartTrigger(prevGain,minGain) =
-    direction,
-    start,
-    trigger
+  gainIndex(prevGain,prevIndex,i,minGain) =
+    getGain(LA,x,prevGain,direction)
+  , index
   with {
-    direction = 1;
     start = 1;
-    trigger = (proposedDirection<=(prevGain-prevGain'));
+    getGain(LA,x,prevGain,direction) =
+      select2(direction<0
+             , x@lookahead(LA)
+             , (direction+ prevGain:min(0):min(x@lookahead(LA)))) ;
+    index =
+      select2(
+        ((minGain:ba.sAndH(trig)-prevGain))<0
+      , 0
+      , select2(trig
+               , ((prevIndex-1) :max(0))
+               , lookahead(LA)));
+    direction =
+      select2(trig
+             ,  (minGain:ba.sAndH(trig)-prevGain) / ((prevIndex):max(1))
+             , (minGain-prevGain)/(lookahead(LA)+1)) ;
+    trig = (proposedDirection<=(prevGain-prevGain'));
     proposedDirection = (dif/(lookahead(LA)+1));
     dif = minGain-prevGain;
   };
