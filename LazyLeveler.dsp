@@ -25,20 +25,23 @@ with {
 //TODO: each stage caries it's GR and its properly delayed audio
 
 LazyLeveler(LA,x,prevGain) =
-  linearAttack(LA,x,prevGain)
-  // convexAttack(LA,x)
+  // linearAttack(LA-1,x,prevGain)
+  x
+  :
+  convexAttack(LA)
   // x
-  // : shapedAttack(LA)~_
-  // shapedAttack(LA,x,prevGain)
-, x@(1*lookahead(LA))
+  : shapedAttack(LA)~_
+                   , x@(3*lookahead(LA)
+                        // +lookahead(LA-1)
+                       )
 ;
 
 
 convexAttack(LA,x) =
   (
     paramArray(attackConvexVal(LA),0,attackConvexBand(LA),0,LA)
-    : par(i, LA, hbargraph("hold%i",0,maxHold(LA)))
-      // par(i, LA, holdT:hbargraph("hold%i",0,maxHold(LA+1)))
+    // : par(i, LA, hbargraph("hold%i",0,maxHold(LA)))
+    // par(i, LA, holdT:hbargraph("hold%i",0,maxHold(LA+1)))
   , (x<:si.bus(LA))
   )
   :ro.interleave(LA,2)
@@ -46,13 +49,12 @@ convexAttack(LA,x) =
   par(i, LA,
       (
         hold(LA) :
-        linAtt(i+1)~_:_ @(lookahead(LA)+1-(1<<(i+1)))
+        linAtt(i+1)~_
+                    :
+                    _ @(lookahead(LA)+1-(1<<(i+1)))
       )
      )
   :maxOfN(LA)
-   // : ba.selectn(LA,hslider("sel", 0, 0, LA, 1))
-   // : selectn(LA,hslider("sel", 0, 0, LA-1, 1))
-   // , x@(2*lookahead(LA))
 with {
   holdT = hslider("holdT", 0, 0, lookahead(LA), 1);
   attackConvexBand(LA) = (attack*LA);
@@ -89,6 +91,7 @@ shapedAttack(LA,prevGain,x) =
   ;
 };
 
+linAtt(0,prevGain,x) = linearAttack(0,x,prevGain);
 linAtt(LA,prevGain,x) = linearAttack(LA,x,prevGain);
 
 linearAttack(0,x,prevGain) = x;
@@ -176,6 +179,7 @@ with {
 
 
 opOfN(N,op) = seq(i, N-1, op,myBus(N-i-2));
+minOfN(1) = _;
 minOfN(N) = opOfN(N,min);
 maxOfN(N) = opOfN(N,max);
 
@@ -188,74 +192,74 @@ lookahead(LA) = (1<<LA)-1;
 
 myBus(0) =
   0:!
+;
+myBus(i) = si.bus(i);
+
+attackArray(LA) =
+  paramArray(1.4,0,attack2band(LA+1) ,0,LA+1)
+  : (si.bus(LA),!)
+;
+
+attack = hslider("[1]attack", 1, 0, 1, 0.01);
+// attack2band(LA) = (attack*LA);
+attack2band(LA) = 2+(attack*(LA-2)):max(2);
+// attack2band(LA) = hslider("band", 0, 0, LA, 0.1);
+
+
+testSig(LA) =
+  // checkbox("tst")*-1;
+  // button:ba.impulsify*-1;
+  no.lfnoise0(lookahead(LA) *t * (no.lfnoise0(lookahead(LA)/2):max(0.1) )):pow(3)*(1-noiseLVL) +(no.lfnoise(rate):pow(3) *noiseLVL):min(0);
+t= hslider("[7]time", 2.18, 0.01, 4, 0.01):pow(2);
+noiseLVL = hslider("[8]noise level", 0, 0, 1, 0.01);
+rate = hslider("[9]rate [scale:log]", 420, 10, 10000, 1);
+
+
+slidingReduce(op,N,0,disabledVal) = _;
+slidingReduce(op,N,maxN,disabledVal) =
+  sequentialOperatorParOut(maxNrBits(maxN+1)-1,op)
+  :
+  par(i,maxNrBits(maxN+1)
+      , _@sumOfPrevBlockSizes(i)
+        : useVal(i)
+     ) : combine(maxNrBits(maxN+1))
+with {
+  // The sum of all the sizes of the previous blocks
+  sumOfPrevBlockSizes(0) = 0;
+  sumOfPrevBlockSizes(i) = (ba.subseq((allBlockSizes),0,i):>_);
+  allBlockSizes = par(i, maxNrBits(maxN), (pow2(i)) * isUsed(i));
+  maxNrBits(n) = int2nrOfBits(n);
+
+  // Apply <op> to <N> parallel input signals
+  combine(2) = op;
+  combine(N) = op(combine(N-1),_);
+
+  // Decide wether or not to use a certain value, based on N
+  // Basically only the second <select2> is needed,
+  // but this version also works for N == 0
+  // 'works' in this case means 'does the same as reduce'
+  useVal(i) =
+    // _ <: select2(
+    // (i==0) & (N==0),
+    select2(isUsed(i), disabledVal, _)
+    // , _
+    // )
   ;
-  myBus(i) = si.bus(i);
 
-  attackArray(LA) =
-    paramArray(1.4,0,attack2band(LA+1) ,0,LA+1)
-    : (si.bus(LA),!)
-  ;
+  // useVal(i) =
+  //     select2(isUsed(i), disabledVal,_);
+  // isUsed(0,N,maxN) = 1;
+  isUsed(i) = ba.take(i+1, (int2bin(N+1,maxN*2+1)));
+  pow2(i) = 1<<i;
+  // same as:
+  // pow2(i) = int(pow(2,i));
+  // but in the block diagram, it will be displayed as a number, instead of a formula
 
-  attack = hslider("[1]attack", 1, 0, 1, 0.01);
-  // attack2band(LA) = (attack*LA);
-  attack2band(LA) = 2+(attack*(LA-2)):max(2);
-  // attack2band(LA) = hslider("band", 0, 0, LA, 0.1);
+  // convert N into a list of ones and zeros
+  int2bin(N,maxN) = par(j, maxNrBits(maxN), int(floor((N)/(pow2(j))))%2);
+  // int2bin(N,maxN) = par(j, maxNrBits(maxN), int(floor((N)/(pow2(j))))%2);
+  // calculate how many ones and zeros are needed to represent maxN
+  int2nrOfBits(N) = int(floor(log(N)/log(2))+1);
+};
 
-
-  testSig(LA) =
-    // checkbox("tst")*-1;
-    // button:ba.impulsify*-1;
-    no.lfnoise0(lookahead(LA) *t * (no.lfnoise0(lookahead(LA)/2):max(0.1) )):pow(3)*(1-noiseLVL) +(no.lfnoise(rate):pow(3) *noiseLVL):min(0);
-  t= hslider("[7]time", 2.18, 0.01, 4, 0.01):pow(2);
-  noiseLVL = hslider("[8]noise level", 0, 0, 1, 0.01);
-  rate = hslider("[9]rate [scale:log]", 420, 10, 10000, 1);
-
-
-  slidingReduce(op,N,0,disabledVal) = _;
-  slidingReduce(op,N,maxN,disabledVal) =
-    sequentialOperatorParOut(maxNrBits(maxN+1)-1,op)
-    :
-    par(i,maxNrBits(maxN+1)
-        , _@sumOfPrevBlockSizes(i)
-          : useVal(i)
-       ) : combine(maxNrBits(maxN+1))
-  with {
-    // The sum of all the sizes of the previous blocks
-    sumOfPrevBlockSizes(0) = 0;
-    sumOfPrevBlockSizes(i) = (ba.subseq((allBlockSizes),0,i):>_);
-    allBlockSizes = par(i, maxNrBits(maxN), (pow2(i)) * isUsed(i));
-    maxNrBits(n) = int2nrOfBits(n);
-
-    // Apply <op> to <N> parallel input signals
-    combine(2) = op;
-    combine(N) = op(combine(N-1),_);
-
-    // Decide wether or not to use a certain value, based on N
-    // Basically only the second <select2> is needed,
-    // but this version also works for N == 0
-    // 'works' in this case means 'does the same as reduce'
-    useVal(i) =
-      // _ <: select2(
-      // (i==0) & (N==0),
-      select2(isUsed(i), disabledVal, _)
-      // , _
-      // )
-    ;
-
-    // useVal(i) =
-    //     select2(isUsed(i), disabledVal,_);
-    // isUsed(0,N,maxN) = 1;
-    isUsed(i) = ba.take(i+1, (int2bin(N+1,maxN*2+1)));
-    pow2(i) = 1<<i;
-    // same as:
-    // pow2(i) = int(pow(2,i));
-    // but in the block diagram, it will be displayed as a number, instead of a formula
-
-    // convert N into a list of ones and zeros
-    int2bin(N,maxN) = par(j, maxNrBits(maxN), int(floor((N)/(pow2(j))))%2);
-    // int2bin(N,maxN) = par(j, maxNrBits(maxN), int(floor((N)/(pow2(j))))%2);
-    // calculate how many ones and zeros are needed to represent maxN
-    int2nrOfBits(N) = int(floor(log(N)/log(2))+1);
-  };
-
-  slidingMin(n,maxn) = slidingReduce(min,n,maxn,ma.INFINITY);
+slidingMin(n,maxn) = slidingReduce(min,n,maxn,ma.INFINITY);
