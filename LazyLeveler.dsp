@@ -158,11 +158,11 @@ with {
 
 
 getDirection(LA,prevGain,minGain) =
-  (getIndexAndDirection~(_,_))
+  (getIndexAndDirection~(_,!))
   : (!,_)
     // : (_,_,minGain)
 with {
-  getIndexAndDirection(prevIndex,prevDirection) =
+  getIndexAndDirection(prevIndex) =
     index,direction
   with {
   index =
