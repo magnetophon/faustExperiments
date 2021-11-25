@@ -19,7 +19,7 @@ process =
                                 // :par(i, 5, _*.5)
 with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
-  LA = 3;
+  LA = 4;
 };
 
 //TODO: each stage caries it's GR and its properly delayed audio
@@ -122,7 +122,7 @@ with {
   with {
   index =
     select2(
-      ((minGain:ba.sAndH(trig)-prevGain)/(lookahead(LA)))<0
+      ((minGain:ba.sAndH(trig)-prevGain))<0
       // proposedDirection<0
     , 0
     , select2(trig
@@ -133,11 +133,11 @@ with {
   direction =
     select2(trig
            ,  (minGain:ba.sAndH(trig)-prevGain) / ((prevIndex):max(1))
-           , (minGain-prevGain)/lookahead(LA)
+           , (minGain-prevGain)/(lookahead(LA)+1)
            )
   ;
   trig = (proposedDirection<=(prevGain-prevGain'));
-  proposedDirection = (dif/(lookahead(LA)));
+  proposedDirection = (dif/(lookahead(LA)+1));
   dif = minGain-prevGain;
 };
 };
