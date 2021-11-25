@@ -25,12 +25,12 @@ with {
 //TODO: each stage caries it's GR and its properly delayed audio
 
 LazyLeveler(LA,x,prevGain) =
-  // linearAttack(LA,x,prevGain)
-  convexAttack(LA,x)
+  linearAttack(LA,x,prevGain)
+  // convexAttack(LA,x)
   // x
-  : shapedAttack(LA)~_
-                     // shapedAttack(LA,x,prevGain)
-                   , x@(3*lookahead(LA))
+  // : shapedAttack(LA)~_
+  // shapedAttack(LA,x,prevGain)
+, x@(1*lookahead(LA))
 ;
 
 
@@ -69,28 +69,19 @@ with {
 
 
 shapedAttack(LA,prevGain,x) =
-  // shapedAttack(LA,x,prevGain) =
   (x:sequentialMinimumParOutDelayed(LA)
-     // :(par(i, LA, !),_)
    : (!,si.bus(LA))
    : par(i, LA, getDirection(i+1,prevGain))
-   : ( ro.interleave(2,LA) , attackArray(LA)
-     )
-   : (si.bus(LA),ro.crossnn(LA))
-   : (ro.interleave(LA,2),si.bus(LA))
-   : (par(i, LA, *), si.bus(LA))
-   : ro.interleave(LA,2)
-   : find_Nmin(LA)
-     // :> (_,_)
-     // : ro.interleave(2,LA)
-     // : par(i, 2, minOfN(LA))
-   : (getGain(LA,x,prevGain))
+  , attackArray(LA)
+    : (ro.interleave(LA,2)
+      )
+    : (par(i, LA, *)
+      )
+    : minOfN(LA)
+    : (getGain(LA,x,prevGain))
   )
-  // , (x@lookahead(LA))
   with {
-  // getGain(LA,x,prevGain,index,direction,minGain)=
-  getGain(LA,x,prevGain,direction,minGain)=
-    // direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
+  getGain(LA,x,prevGain,direction)=
     select2(direction<0
            , x@lookahead(LA)
            , (direction+ prevGain:min(0):min(x@lookahead(LA)))
@@ -105,16 +96,21 @@ linearAttack(LA,x,prevGain) =
   (x:sequentialMinimumParOutDelayed(LA)
    : (!,si.bus(LA))
    : par(i, LA, getDirection(i+1,prevGain))
-   : find_Nmin(LA)
+     // : find_Nmin(LA)
+   : minOfN(LA)
    : (getGain(LA,x,prevGain))
   )
   // , (x@lookahead(LA))
 with {
   // getGain(LA,x,prevGain,index,direction,minGain)=
-  getGain(LA,x,prevGain,direction,minGain)=
-    direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
-                                                    // , minGain
-                                                    // , (index/lookahead(LA))
+  // getGain(LA,x,prevGain,direction,minGain)=
+  // direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
+  // ;
+  getGain(LA,x,prevGain,direction)=
+    select2(direction<0
+           , x@lookahead(LA)
+           , (direction+ prevGain:min(0):min(x@lookahead(LA)))
+           )
   ;
 };
 
@@ -122,7 +118,7 @@ with {
 
 getDirection(LA,prevGain,minGain) =
   (getIndexAndDirection~(_,_))
-  : (!,_,minGain)
+  : (!,_)
     // : (_,_,minGain)
 with {
   getIndexAndDirection(prevIndex,prevDirection) =
@@ -134,16 +130,12 @@ with {
       // proposedDirection<0
     , 0
     , select2(trig
-             , ((prevIndex-1)
-                :max(0)
-               )
+             , ((prevIndex-1) :max(0))
              , lookahead(LA)));
   direction =
     select2(trig
            ,  (minGain:ba.sAndH(trig)-prevGain) / ((prevIndex):max(1))
-           , (minGain-prevGain)/(lookahead(LA)+1)
-           )
-  ;
+           , (minGain-prevGain)/(lookahead(LA)+1)) ;
   trig = (proposedDirection<=(prevGain-prevGain'));
   proposedDirection = (dif/(lookahead(LA)+1));
   dif = minGain-prevGain;
