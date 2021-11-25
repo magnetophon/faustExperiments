@@ -19,7 +19,7 @@ process =
                                 // :par(i, 5, _*.5)
 with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
-  LA = 13;
+  LA = 9;
 };
 
 //TODO: each stage caries it's GR and its properly delayed audio
@@ -27,6 +27,7 @@ with {
 LazyLeveler(LA,x,prevGain) =
   // linearAttack(LA,x,prevGain)
   convexAttack(LA,x)
+  // x
   : shapedAttack(LA)~_
                      // shapedAttack(LA,x,prevGain)
                    , x@(3*lookahead(LA))
@@ -89,13 +90,15 @@ shapedAttack(LA,prevGain,x) =
   with {
   // getGain(LA,x,prevGain,index,direction,minGain)=
   getGain(LA,x,prevGain,direction,minGain)=
-    direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
-  , minGain
-    // , (index/lookahead(LA))
+    // direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
+    select2(direction<0
+           , x@lookahead(LA)
+           , (direction+ prevGain:min(0):min(x@lookahead(LA)))
+           )
   ;
 };
 
-linAtt(LA,prevGain,x) = linearAttack(LA,x,prevGain):(_,!,!);
+linAtt(LA,prevGain,x) = linearAttack(LA,x,prevGain);
 
 linearAttack(0,x,prevGain) = x;
 linearAttack(LA,x,prevGain) =
@@ -105,13 +108,13 @@ linearAttack(LA,x,prevGain) =
    : find_Nmin(LA)
    : (getGain(LA,x,prevGain))
   )
-, (x@lookahead(LA))
+  // , (x@lookahead(LA))
 with {
   // getGain(LA,x,prevGain,index,direction,minGain)=
   getGain(LA,x,prevGain,direction,minGain)=
     direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
-  , minGain
-    // , (index/lookahead(LA))
+                                                    // , minGain
+                                                    // , (index/lookahead(LA))
   ;
 };
 
