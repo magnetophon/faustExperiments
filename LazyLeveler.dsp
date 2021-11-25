@@ -9,18 +9,20 @@ process =
   // attackArray(LA)
   // : par(i, LA, hbargraph("lev%i",0,1.4))
 
-  // LazyLeveler(LA,testSig(LA+5))~_
-  // blokjes
-  // sequentialBlockMinimumParOut(nrBlocks,lookahead(LA))
-  // slidingReduce(min,lookahead(LA),lookahead(LA),ma.INFINITY)
-  testSig(LA):
-  convexAttack(nrBlocks,LA,Lookah)
+  LazyLeveler(LA,testSig(LA+5))~_
 
-  // ,_
-  // @Lookah
-  // )
-  // :par(i, 3, _@200000)
-  // :par(i, 5, _*.5)
+                                // blokjes
+                                // sequentialBlockMinimumParOut(nrBlocks,lookahead(LA))
+                                // slidingReduce(min,lookahead(LA),lookahead(LA),ma.INFINITY)
+
+                                // testSig(LA):
+                                // (convexAttack(nrBlocks,LA,Lookah))
+
+                                // ,_
+                                // @Lookah
+                                // )
+                                // :par(i, 3, _@200000)
+                                // :par(i, 5, _*.5)
 with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
   LA = 9;
@@ -45,10 +47,27 @@ LazyLeveler(LA,x,prevGain) =
 convexAttack(nrBlocks,LA,blockSize,x) =
 
   sequentialBlockMinimumParOut(nrBlocks,lookahead(LA),x,blockSize)
-  : par(i, nrBlocks+1, _@(maxHold-(i*blockSize)))
+  : delays
+
+
+  : getGains
+
     // slidingMin(maxHold(LA),HT(LA),x)@(maxHold(LA)-HT(LA))
 with {
+  delays = par(i, nrBlocks+1, _@(maxHold-(i*blockSize)));
+  getGains = par(i, nrBlocks+1, DirStartTrigger~_);
   maxHold = nrBlocks*lookahead(LA);
+  DirStartTrigger(prevGain,minGain) =
+    direction,
+    start,
+    trigger
+  with {
+    direction = 1;
+    start = 1;
+    trigger = (proposedDirection<=(prevGain-prevGain'));
+    proposedDirection = (dif/(lookahead(LA)+1));
+    dif = minGain-prevGain;
+  };
 };
 
 bottom(LA) = hslider("bottom", 0, 0, lookahead(LA), 1);
@@ -81,7 +100,7 @@ with {
   selectn(maxN,N) = par(i, maxN, _*(i==N)):>_;
   hold(LA,holdTime,x) =
     // _
-    slidingMin(maxHold(LA),HT(LA),x)@(maxHold(LA)-HT(LA))
+    slidingMin(HT(LA),maxHold(LA),x)@(maxHold(LA)-HT(LA))
   with {
     HT(LA) = holdTime:int:max(0):min(maxHold(LA));
   };
