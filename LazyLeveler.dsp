@@ -53,15 +53,17 @@ with {
   delays = par(i, nrBlocks+1, _@(maxHold-(i*blockSize)));
   getGains = par(i, nrBlocks+1, gainIndex(i)~(_,_):(_,!));
   maxHold = nrBlocks*lookahead(LA);
-  gainIndex(prevGain,prevIndex,i,minGain) =
+  gainIndex(i,prevGain,prevIndex,minGain) =
     getGain(LA,x,prevGain,direction)
   , index
   with {
     start = 1;
     getGain(LA,x,prevGain,direction) =
       select2(direction<0
-             , x@lookahead(LA)
-             , (direction+ prevGain:min(0):min(x@lookahead(LA)))) ;
+             , minGain
+             , (direction+ prevGain
+                // :min(0):min(x@lookahead(LA))
+               )) ;
     index =
       select2(
         ((minGain:ba.sAndH(trig)-prevGain))<0
