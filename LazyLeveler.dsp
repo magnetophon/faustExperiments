@@ -84,13 +84,13 @@ with {
     direction =
       select2(trig
              ,  (minGain:ba.sAndH(trig)-prevGain) / ((prevIndex):max(1))
-             , (minGain-prevGain)/blockI)
+             , (minGain-prevGain)/(blockI+1))
       // * dirMult*pow(2,nrBlocks)
     ;
     trig = (proposedDirection<=(prevGain-prevGain'));
-    proposedDirection = dif/blockI;
+    proposedDirection = dif/(blockI+1);
     dif = minGain-prevGain;
-    blockI = ((i+1)*blockSize)+1;
+    blockI = ((i+1)*blockSize);
   };
 };
 
