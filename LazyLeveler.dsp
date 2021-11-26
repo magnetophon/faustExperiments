@@ -25,8 +25,8 @@ process =
   // :par(i, 5, _*.5)
 with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
-  LA = 9;
-  nrBlocks = 4;
+  LA = 4;
+  nrBlocks = 3;
   // blokjes(x,n) =   sequentialBlockOperatorParOut(n,min,ma.INFINITY,lookahead(LA),x);
 };
 
@@ -45,23 +45,33 @@ LazyLeveler(LA,x,prevGain) =
 ;
 
 convexAttack(nrBlocks,LA,blockSize,x) =
+  x@maxHold
+, (sequentialBlockMinimumParOut(nrBlocks,lookahead(LA),x,blockSize)
+   : (!,si.bus(nrBlocks))
+     // : delays
+   : getGains)
 
-  sequentialBlockMinimumParOut(nrBlocks,lookahead(LA),x,blockSize)
-  : delays
-  : getGains
 with {
-  delays = par(i, nrBlocks+1, _@(maxHold-(i*blockSize)));
-  getGains = par(i, nrBlocks+1, gainIndex(i)~(_,_):(_,!));
-  maxHold = nrBlocks*lookahead(LA);
+  delays = par(i, nrBlocks, _@(maxHold-(i*blockSize)));
+  // delays = par(i, nrBlocks+1, _@((nrBlocks-i)*blockSize));
+  getGains = par(i, nrBlocks, gainIndex(i)~(_,_):(_,!));
+  maxHold = (nrBlocks)*lookahead(LA);
   gainIndex(i,prevGain,prevIndex,minGain) =
+    // triggers :
     getGain(LA,x,prevGain,direction)
   , index
   with {
-    start = 1;
+    // 3=0
+    // 2=dif*1/2
+    // 1=dif*3/4
+    // 0=dif*7/8
+    start = 0;
+    //trig*startMult*dif;
+    startMult = 1-pow(2,(-nrBlocks+i));
     getGain(LA,x,prevGain,direction) =
       select2(direction<0
              , minGain
-             , (direction+ prevGain
+             , (direction+ prevGain + start
                 // :min(0):min(x@lookahead(LA))
                )) ;
     index =
@@ -70,14 +80,17 @@ with {
       , 0
       , select2(trig
                , ((prevIndex-1) :max(0))
-               , lookahead(LA)));
+               , blockI));
     direction =
       select2(trig
              ,  (minGain:ba.sAndH(trig)-prevGain) / ((prevIndex):max(1))
-             , (minGain-prevGain)/(lookahead(LA)+1)) ;
+             , (minGain-prevGain)/blockI)
+      // * dirMult*pow(2,nrBlocks)
+    ;
     trig = (proposedDirection<=(prevGain-prevGain'));
-    proposedDirection = (dif/(lookahead(LA)+1));
+    proposedDirection = dif/blockI;
     dif = minGain-prevGain;
+    blockI = ((i+1)*blockSize)+1;
   };
 };
 
