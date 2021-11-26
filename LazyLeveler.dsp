@@ -25,7 +25,7 @@ process =
   // :par(i, 5, _*.5)
 with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
-  LA = 4;
+  LA = 9;
   nrBlocks = 3;
   // blokjes(x,n) =   sequentialBlockOperatorParOut(n,min,ma.INFINITY,lookahead(LA),x);
 };
@@ -50,12 +50,27 @@ convexAttack(nrBlocks,LA,blockSize,x) =
    : (!,si.bus(nrBlocks))
    : delays
    : getGains
+   : holds
+     // : maxOfN(nrBlocks)
   )
 
 with {
-  delays = par(i, nrBlocks, _@(maxHold-((i+1)*blockSize)));
+  delays = par(i, nrBlocks, _@(maxHold-((nrBlocks)*blockSize)));
+  // delays = par(i, nrBlocks, _@(maxHold-((i+1)*blockSize)));
   // delays = par(i, nrBlocks+1, _@((nrBlocks-i)*blockSize));
   getGains = par(i, nrBlocks, gainIndex(i)~(_,_):(_,!));
+  // 0= nrBlocks-1
+  // 1=nrBlocks-2
+  // 3=nrBlocks-3
+  holds =
+    par(j, nrBlocks,
+        // _*maxcomp
+        slidingMin(compSize(j),maxcomp)
+       ) with {
+    maxcomp = (nrBlocks-1)*lookahead(LA);
+    compSize(j) = (nrBlocks-j-1)*blockSize;
+  };
+
   maxHold = (nrBlocks)*lookahead(LA);
   gainIndex(i,prevGain,prevIndex,minGain) =
     // triggers :
@@ -67,7 +82,9 @@ with {
     // 1=dif*3/4
     // 0=dif*7/8
     start =
-      trig*startMult*dif;
+      trig*startMult*dif
+      // *(prevIndex==0)
+    ;
     startMult = 1-pow(2,(-i));
     // startMult = 1-pow(2,(-nrBlocks+i));
     getGain(LA,x,prevGain,direction) =
