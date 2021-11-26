@@ -9,23 +9,23 @@ process =
   // attackArray(LA)
   // : par(i, LA, hbargraph("lev%i",0,1.4))
 
-  // LazyLeveler(LA,testSig(LA+5))~_
+  LazyLeveler(LA,testSig(LA+5))~_
 
-  // blokjes
-  // sequentialBlockMinimumParOut(nrBlocks,lookahead(LA))
-  // slidingReduce(min,lookahead(LA),lookahead(LA),ma.INFINITY)
+                                // blokjes
+                                // sequentialBlockMinimumParOut(nrBlocks,lookahead(LA))
+                                // slidingReduce(min,lookahead(LA),lookahead(LA),ma.INFINITY)
 
-  testSig(LA):
-  (convexAttack(nrBlocks,LA,Lookah))
+                                // testSig(LA):
+                                // (convexAttack(nrBlocks,LA,Lookah))
 
-  // ,_
-  // @Lookah
-  // )
-  // :par(i, 3, _@200000)
-  // :par(i, 5, _*.5)
+                                // ,_
+                                // @Lookah
+                                // )
+                                // :par(i, 3, _@200000)
+                                // :par(i, 5, _*.5)
 with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
-  LA = 9;
+  LA = 6;
   nrBlocks = 3;
   // blokjes(x,n) =   sequentialBlockOperatorParOut(n,min,ma.INFINITY,lookahead(LA),x);
 };
@@ -36,15 +36,69 @@ LazyLeveler(LA,x,prevGain) =
   // linearAttack(LA-1,x,prevGain)
   x
   :
-  convexAttackOLD(LA)
+  // convexAttackOLD(LA)
+  convexAttack(LA)
   // x
-  : shapedAttack(LA)~_
-                   , x@(3*lookahead(LA)
-                        // +lookahead(LA-1)
-                       )
+  // : shapedAttack(LA)~_
+, x@(1*lookahead(LA)
+     // +lookahead(LA-1)
+    )
 ;
 
-convexAttack(nrBlocks,LA,blockSize,x) =
+linAttack(LA,prevGain,x) =
+  (x:getDirection(LA,prevGain))
+  : (getGain(LA,x,prevGain))
+with {
+  // getGain(LA,x,prevGain,index,direction,minGain)=
+  // getGain(LA,x,prevGain,direction,minGain)=
+  // direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
+  // ;
+  getGain(LA,x,prevGain,direction)=
+    select2(direction<0
+           , x@lookahead(LA)
+           , (direction+ prevGain:min(0):min(x@lookahead(LA)))
+           )
+  ;
+};
+convexAttack(LA,x) =
+  (
+    paramArray(attackConvexVal(LA),0,attackConvexBand(LA),0,LA)
+    // : par(i, LA, hbargraph("hold%i",0,maxHold(LA)))
+    // par(i, LA, holdT:hbargraph("hold%i",0,maxHold(LA+1)))
+    // , (x<:si.bus(LA))
+   ,( x:sequentialMinimumParOutDelayed(LA)
+        // ,( x:sequentialMinimumParOut(LA-1)
+      : (!,si.bus(LA))
+    )
+  )
+  :ro.interleave(LA,2)
+  :
+  par(i, LA,
+      (
+        hold(LA)
+        :
+        linAttack(i+1)~_
+                       // :
+                       // _ @(lookahead(LA)+1-(1<<(i+1)))
+      )
+     )
+  :(par(i, 3, !),si.bus(3))
+   // :maxOfN(LA)
+with {
+  holdT = hslider("holdT", 0, 0, lookahead(LA), 1);
+  attackConvexBand(LA) = (attack*LA);
+  attackConvexVal(LA) = pow(2,(attackConvexBand(LA)-3));
+  selectn(maxN,N) = par(i, maxN, _*(i==N)):>_;
+  hold(LA,holdTime,x) =
+    x,(holdTime:!)
+      // slidingMin(HT(LA),maxHold(LA),x)@(maxHold(LA)-HT(LA))
+  with {
+    HT(LA) = holdTime:int:max(0):min(maxHold(LA));
+  };
+  maxHold(LA) = 1<<(LA)-1;
+};
+
+convexAttackNICETRY(nrBlocks,LA,blockSize,x) =
   x@maxHold
 , (sequentialBlockMinimumParOut(nrBlocks,lookahead(LA),x,blockSize)
    : (!,si.bus(nrBlocks))
