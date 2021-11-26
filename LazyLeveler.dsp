@@ -48,11 +48,12 @@ convexAttack(nrBlocks,LA,blockSize,x) =
   x@maxHold
 , (sequentialBlockMinimumParOut(nrBlocks,lookahead(LA),x,blockSize)
    : (!,si.bus(nrBlocks))
-     // : delays
-   : getGains)
+   : delays
+   : getGains
+  )
 
 with {
-  delays = par(i, nrBlocks, _@(maxHold-(i*blockSize)));
+  delays = par(i, nrBlocks, _@(maxHold-((i+1)*blockSize)));
   // delays = par(i, nrBlocks+1, _@((nrBlocks-i)*blockSize));
   getGains = par(i, nrBlocks, gainIndex(i)~(_,_):(_,!));
   maxHold = (nrBlocks)*lookahead(LA);
@@ -65,9 +66,10 @@ with {
     // 2=dif*1/2
     // 1=dif*3/4
     // 0=dif*7/8
-    start = 0;
-    //trig*startMult*dif;
-    startMult = 1-pow(2,(-nrBlocks+i));
+    start =
+      trig*startMult*dif;
+    startMult = 1-pow(2,(-i));
+    // startMult = 1-pow(2,(-nrBlocks+i));
     getGain(LA,x,prevGain,direction) =
       select2(direction<0
              , minGain
