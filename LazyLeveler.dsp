@@ -40,26 +40,11 @@ LazyLeveler(LA,x,prevGain) =
   convexAttack(LA)
   // x
   // : shapedAttack(LA)~_
-, x@(1*lookahead(LA)
+, x@(2*lookahead(LA)
      // +lookahead(LA-1)
     )
 ;
 
-linAttack(LA,prevGain,x) =
-  (x:getDirection(LA,prevGain))
-  : (getGain(LA,x,prevGain))
-with {
-  // getGain(LA,x,prevGain,index,direction,minGain)=
-  // getGain(LA,x,prevGain,direction,minGain)=
-  // direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
-  // ;
-  getGain(LA,x,prevGain,direction)=
-    select2(direction<0
-           , x@lookahead(LA)
-           , (direction+ prevGain:min(0):min(x@lookahead(LA)))
-           )
-  ;
-};
 convexAttack(LA,x) =
   (
     paramArray(attackConvexVal(LA),0,attackConvexBand(LA),0,LA)
@@ -67,7 +52,7 @@ convexAttack(LA,x) =
     // par(i, LA, holdT:hbargraph("hold%i",0,maxHold(LA+1)))
     // , (x<:si.bus(LA))
    ,( x:sequentialMinimumParOutDelayed(LA)
-        // ,( x:sequentialMinimumParOut(LA-1)
+        // ,( x:sequentialMinimumParOut(LA)
       : (!,si.bus(LA))
     )
   )
@@ -77,8 +62,8 @@ convexAttack(LA,x) =
       (
         hold(LA)
         :
-        linAttack(i+1)~_
-                       // :
+        linAttack(LA,i+1,x)~_
+                            // :
                        // _ @(lookahead(LA)+1-(1<<(i+1)))
       )
      )
@@ -90,12 +75,28 @@ with {
   attackConvexVal(LA) = pow(2,(attackConvexBand(LA)-3));
   selectn(maxN,N) = par(i, maxN, _*(i==N)):>_;
   hold(LA,holdTime,x) =
-    x,(holdTime:!)
-      // slidingMin(HT(LA),maxHold(LA),x)@(maxHold(LA)-HT(LA))
+    // x,(holdTime:!)
+    slidingMin(HT(LA),maxHold(LA),x)@(maxHold(LA)-HT(LA))
   with {
     HT(LA) = holdTime:int:max(0):min(maxHold(LA));
   };
   maxHold(LA) = 1<<(LA)-1;
+};
+
+linAttack(LA,N,x,prevGain,minGain) =
+  (minGain:getDirection(N,prevGain))
+  : (getGain(LA,x,prevGain))
+with {
+  // getGain(LA,x,prevGain,index,direction,minGain)=
+  // getGain(LA,x,prevGain,direction,minGain)=
+  // direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
+  // ;
+  getGain(N,x,prevGain,direction)=
+    select2(direction<0
+           , x@(2*lookahead(N))
+           , (direction+ prevGain:min(0):min(x@(2*lookahead(N))))
+           )
+  ;
 };
 
 convexAttackNICETRY(nrBlocks,LA,blockSize,x) =
