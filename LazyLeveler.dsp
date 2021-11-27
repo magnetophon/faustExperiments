@@ -21,11 +21,11 @@ process =
                                 // ,_
                                 // @Lookah
                                 // )
-                                // :par(i, 3, _@200000)
+                                // :par(i, 2, _@200000)
                                 // :par(i, 5, _*.5)
 with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
-  LA = 6;
+  LA = 9;
   nrBlocks = 3;
   // blokjes(x,n) =   sequentialBlockOperatorParOut(n,min,ma.INFINITY,lookahead(LA),x);
 };
@@ -35,17 +35,22 @@ with {
 LazyLeveler(LA,x,prevGain) =
   // linearAttack(LA-1,x,prevGain)
   x
+  : (hold(LA,holdTime(LA))~_)
   :
-  // convexAttackOLD(LA)
   convexAttack(LA)
-  // x
-  // : shapedAttack(LA)~_
-, x@(2*lookahead(LA)
-     // +lookahead(LA-1)
-    )
-;
+  : (shapedAttack(LA)~_)
+, x@(4*lookahead(LA));
 
-convexAttack(LA,x) =
+holdTime(LA) = hslider("holdTime", 0, 0, lookahead(LA), 1);
+
+hold(LA,holdTime,prevGain,x) =
+  slidingMin(holdTime,lookahead(LA),x)@(lookahead(LA)-holdTime)
+  : max(prevGain)
+  : min(x@lookahead(LA));
+
+
+
+convexAttackAlsoBroken(LA,x) =
   (
     paramArray(attackConvexVal(LA),0,attackConvexBand(LA),0,LA)
     // : par(i, LA, hbargraph("hold%i",0,maxHold(LA)))
@@ -64,10 +69,10 @@ convexAttack(LA,x) =
         :
         linAttack(LA,i+1,x)~_
                             // :
-                       // _ @(lookahead(LA)+1-(1<<(i+1)))
+                            // _ @(lookahead(LA)+1-(1<<(i+1)))
       )
      )
-  :(par(i, 3, !),si.bus(3))
+  :(par(i, LA-3, !),si.bus(3))
    // :maxOfN(LA)
 with {
   holdT = hslider("holdT", 0, 0, lookahead(LA), 1);
@@ -75,8 +80,8 @@ with {
   attackConvexVal(LA) = pow(2,(attackConvexBand(LA)-3));
   selectn(maxN,N) = par(i, maxN, _*(i==N)):>_;
   hold(LA,holdTime,x) =
-    // x,(holdTime:!)
-    slidingMin(HT(LA),maxHold(LA),x)@(maxHold(LA)-HT(LA))
+    x@maxHold(LA),(holdTime:!)
+                  // slidingMin(HT(LA),maxHold(LA),x)@(maxHold(LA)-HT(LA))
   with {
     HT(LA) = holdTime:int:max(0):min(maxHold(LA));
   };
@@ -91,10 +96,10 @@ with {
   // getGain(LA,x,prevGain,direction,minGain)=
   // direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
   // ;
-  getGain(N,x,prevGain,direction)=
+  getGain(LA,x,prevGain,direction)=
     select2(direction<0
-           , x@(2*lookahead(N))
-           , (direction+ prevGain:min(0):min(x@(2*lookahead(N))))
+           , x@(2*lookahead(LA))
+           , (direction+ prevGain:min(0):min(x@(2*lookahead(LA))))
            )
   ;
 };
@@ -173,7 +178,7 @@ mid(LA) = hslider("mid", 0, 0, lookahead(LA), 1);
 band(LA) = hslider("band", 0, 0, lookahead(LA), 1);
 top(LA) = hslider("top", 0, 0, lookahead(LA), 1);
 
-convexAttackOLD(LA,x) =
+convexAttack(LA,x) =
   (
     paramArray(attackConvexVal(LA),0,attackConvexBand(LA),0,LA)
     // : par(i, LA, hbargraph("hold%i",0,maxHold(LA)))
@@ -185,9 +190,8 @@ convexAttackOLD(LA,x) =
   par(i, LA,
       (
         hold(LA) :
-        linAtt(i+1)~_
-                    :
-                    _ @(lookahead(LA)+1-(1<<(i+1)))
+        (linAtt(i+1)~_)
+        @(lookahead(LA)+1-(1<<(i+1)))
       )
      )
   :maxOfN(LA)
