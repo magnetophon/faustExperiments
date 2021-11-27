@@ -1,11 +1,12 @@
 import("stdfaust.lib");
 declare author "Julius Smith";
+declare author "Bart Brouns";
 
 
 external = checkbox("[0]use external input");
 
 freq = hslider("[1]freq [unit:hz] [scale:log]
-	[tooltip: frequency of the test oscillator]", F0min, F0min, F0max, 0.001);
+	[tooltip: frequency of the test oscillator]", F0min, F0min, F0max, 0.1);
 lp_freq = hslider("[2]lp_freq [unit:hz] [scale:log]
 	[tooltip: frequency of the low pass filter on the test oscillator]", 20000, 20, 20000, 1);
 hp_freq = hslider("[3]hp_freq [unit:hz] [scale:log]
@@ -30,15 +31,23 @@ gate = ef.gate_gain_mono(thresh,att,hold,rel);
 
 // F0min = 80.0;  // lowest tracked pitch (Hz)
 // F0max = 500.0; // highest tracked pitch (Hz)
-F0min = 300.0;  // lowest tracked pitch (Hz)
-F0max = 2000.0; // highest tracked pitch (Hz)
-// F0min = 430.0;  // for block diagram
-// F0max = 450.0; // for block diagram
+// F0min = 300.0;  // lowest tracked pitch (Hz)
+// F0max = 2000.0; // highest tracked pitch (Hz)
+F0min = 445.0;  // for block diagram
+F0max = 450.0; // for block diagram
+// F0min = 1000.0;  // lowest tracked pitch (Hz)
+// F0max = 5000.0; // highest tracked pitch (Hz)
 
 // SRguess = 44100.0; // Can't seem to use SR in expression below:
 SRguess = 48000.0; // Can't seem to use SR in expression below:
-MINPER = int(SRguess/F0max);
-MAXPER = int(SRguess/F0min);
+// MINPER = int(SRguess/F0max);
+// MAXPER = int(SRguess/F0min);
+// NLAGS = MAXPER-MINPER+1;
+
+// MINPER = 12000;
+// MAXPER = 14000;
+MINPER = 001;
+MAXPER = 10;
 NLAGS = MAXPER-MINPER+1;
 
 lag2hz(lag) = float(ma.SR)/float(lag);
@@ -46,18 +55,22 @@ lag2hz(lag) = float(ma.SR)/float(lag);
 // FIXME: should use rect smoothing window, not exp
 // acor(L) = _ <: _,@(L) : * <: select3(hslider("exp,rectL,rectNLAGS", 0, 0, 2, 1), fi.pole(0.9999), ba.slidingSum(L*mult), ba.slidingSum(NLAGS*mult));
 // acor(L) = _ <: _,@(L) : * <: select2(checkbox("rect"), fi.pole(0.9999), ba.slidingSum(NLAGS*mult));
-JuliusAcor(L) = _ <: _,@(L) : * <: select2(checkbox("rect"), fi.pole(0.9999), _);
+// JuliusAcor(L) = _ <: _,@(L) : * <: select2(checkbox("rect"), fi.pole(0.9999), ba.slidingSum(NLAGS*mult));
+JuliusAcor(L) = _ <: _,@(L) : * : ba.slidingSum(NLAGS*mult);
 // Bitstream Autocorrelation
 // https://www.cycfi.com/2018/03/fast-and-efficient-pitch-detection-bitstream-autocorrelation/
-BitAcor(L) = int(zeroCross) <: _,@(L) : xnor <: select2(checkbox("rect"), fi.pole(0.9999), _);
-zeroCross(x) = ((x>=0) & (x'<0)) | ((x>0) & (x'<=0));
+// BitAcor(L) = int(zeroCross) <: _,@(L) : xnor <: select2(checkbox("rect"), fi.pole(0.9999), _);
+BitAcor(L) = int(zeroCross) <: _,@(L) : xor <: select2(checkbox("rect"), fi.pole(0.9999), ba.slidingSum(NLAGS*mult) );
+// zeroCross(x) = ((x>=0) & (x'<0)) | ((x>0) & (x'<=0));
+zeroCross(x) = x>0;
 xnor = 1-xor(_,_);
-acor(L) = BitAcor(L);
-// acor(L) = JuliusAcor(L);
+// acor(L) = BitAcor(L);
+acor(L) = JuliusAcor(L);
 mult = hslider("mult", 1, 1, 100, 0.1);
 
 macor(MINP,MAXP) = _ <: par(i,NLAGS,(MINP+i,acor(MINP+i)));
 
+// lcomparator(n,x,m,y) = select2((x>y),m,n), select2((x>y),y,x); // compare integer-labeled signals
 lcomparator(n,x,m,y) = select2((x>y),m,n), select2((x>y),y,x); // compare integer-labeled signals
 
 find_lmax(N) = seq(i,N-2, (lcomparator,si.bus(2*(N-i-2)))) : lcomparator;
@@ -73,6 +86,8 @@ median3(x) = median3p(x,x',x'');
 portamento = ba.bypass1(medianBP, median3) : si.smooth(ba.tau2pole(portamentoTime)); // pitch filtering
 // smooth(p) = (1-p)/(1-p/z)
 
+lagFinder = (macor(MINPER,MAXPER) : find_lmax(NLAGS) : _,!);
+
 pitchTracker = (macor(MINPER,MAXPER) : find_lmax(NLAGS) : lag2hz,!);
 
 
@@ -80,6 +95,7 @@ signal(x) = select2(external, oscillator,x );
 oscillator = (os.sawtooth(freq), no.noise):si.interpolate(noiseLevel): fi.lowpass(3,lp_freq): fi.highpass(3,hp_freq)*0.5;
 
 process(x) =
-  signal(x)
-, ((pitchTracker(signal(x)) : portamento : pitchMeter):os.sawtooth * level * gate(signal(x)): fi.lowpass(3,lp_freq): fi.highpass(3,hp_freq)*0.5)
+  lagFinder
+  // signal(x)
+  // , ((pitchTracker(signal(x)) : portamento : pitchMeter):os.sawtooth * level * gate(signal(x)): fi.lowpass(3,lp_freq): fi.highpass(3,hp_freq)*0.5)
 ;

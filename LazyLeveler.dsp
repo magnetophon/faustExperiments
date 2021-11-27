@@ -25,7 +25,7 @@ process =
   // :par(i, 5, _*.5)
 with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
-  LA = 9;
+  LA = 13;
   nrBlocks = 3;
   // blokjes(x,n) =   sequentialBlockOperatorParOut(n,min,ma.INFINITY,lookahead(LA),x);
 };
@@ -36,11 +36,11 @@ LazyLeveler(LA,x) =
   // (linearAttack(LA-1,x)~_)
   x
   : (hold(LA,holdTime(LA))~_)
-    // :
-    // convexAttack(LA)
-    // : (shapedAttack(LA)~_)
+  :
+  convexAttack(LA)
+  : (shapedAttack(LA)~_)
   : (release(LA,holdTime(LA))~_)
-, x@(1*lookahead(LA));
+, x@(4*lookahead(LA));
 
 holdTime(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), 1);
 
