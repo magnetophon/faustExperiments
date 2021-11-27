@@ -9,20 +9,20 @@ process =
   // attackArray(LA)
   // : par(i, LA, hbargraph("lev%i",0,1.4))
 
-  LazyLeveler(LA,testSig(LA+5))~_
+  LazyLeveler(LA,testSig(LA+5))
 
-                                // blokjes
-                                // sequentialBlockMinimumParOut(nrBlocks,lookahead(LA))
-                                // slidingReduce(min,lookahead(LA),lookahead(LA),ma.INFINITY)
+  // blokjes
+  // sequentialBlockMinimumParOut(nrBlocks,lookahead(LA))
+  // slidingReduce(min,lookahead(LA),lookahead(LA),ma.INFINITY)
 
-                                // testSig(LA):
-                                // (convexAttack(nrBlocks,LA,Lookah))
+  // testSig(LA):
+  // (convexAttack(nrBlocks,LA,Lookah))
 
-                                // ,_
-                                // @Lookah
-                                // )
-                                // :par(i, 2, _@200000)
-                                // :par(i, 5, _*.5)
+  // ,_
+  // @Lookah
+  // )
+  // :par(i, 2, _@200000)
+  // :par(i, 5, _*.5)
 with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
   LA = 9;
@@ -32,22 +32,37 @@ with {
 
 //TODO: each stage caries it's GR and its properly delayed audio
 
-LazyLeveler(LA,x,prevGain) =
-  // linearAttack(LA-1,x,prevGain)
+LazyLeveler(LA,x) =
+  // (linearAttack(LA-1,x)~_)
   x
   : (hold(LA,holdTime(LA))~_)
-  :
-  convexAttack(LA)
-  : (shapedAttack(LA)~_)
-, x@(4*lookahead(LA));
+    // :
+    // convexAttack(LA)
+    // : (shapedAttack(LA)~_)
+  : (release(LA,holdTime(LA))~_)
+, x@(1*lookahead(LA));
 
-holdTime(LA) = hslider("holdTime", 0, 0, lookahead(LA), 1);
+holdTime(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), 1);
 
 hold(LA,holdTime,prevGain,x) =
   slidingMin(holdTime,lookahead(LA),x)@(lookahead(LA)-holdTime)
   : max(prevGain)
   : min(x@lookahead(LA));
 
+release(LA,holdTime,prevGain,x) =
+  select2(
+    diff>0
+  , x
+  , (prevGain+direction)
+  )
+with {
+  diff=x-prevGain;
+  dir = prevGain-prevGain';
+  prevDir = dir';
+  direction = diff/relFactor:min(prevDir+prevDirFactor):max(0);
+  relFactor = holdTime*hslider("release", 0.21, 0, 1, 0.01);
+  prevDirFactor = hslider("prevDirfactor", 0.72, 0, 1, 0.01)*0.1/holdTime;
+};
 
 
 convexAttackAlsoBroken(LA,x) =
@@ -239,16 +254,10 @@ linearAttack(LA,x,prevGain) =
   (x:sequentialMinimumParOutDelayed(LA)
    : (!,si.bus(LA))
    : par(i, LA, getDirection(i+1,prevGain))
-     // : find_Nmin(LA)
    : minOfN(LA)
    : (getGain(LA,x,prevGain))
   )
-  // , (x@lookahead(LA))
 with {
-  // getGain(LA,x,prevGain,index,direction,minGain)=
-  // getGain(LA,x,prevGain,direction,minGain)=
-  // direction+ prevGain:min(0):min(x@lookahead(LA)):max(minGain)
-  // ;
   getGain(LA,x,prevGain,direction)=
     select2(direction<0
            , x@lookahead(LA)
@@ -256,7 +265,6 @@ with {
            )
   ;
 };
-
 
 
 getDirection(LA,prevGain,minGain) =
