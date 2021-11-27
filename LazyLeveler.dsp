@@ -9,7 +9,7 @@ process =
   // attackArray(LA)
   // : par(i, LA, hbargraph("lev%i",0,1.4))
 
-  LazyLeveler(LA,testSig(LA+5))
+  LazyLeveler(LA,testSig(LA))
 
   // blokjes
   // sequentialBlockMinimumParOut(nrBlocks,lookahead(LA))
@@ -55,13 +55,20 @@ release(LA,holdTime,prevGain,x) =
   , x
   , (prevGain+direction)
   )
+ ,meanDiff
+  // ,rmsDiff
 with {
   diff=x-prevGain;
   dir = prevGain-prevGain';
   prevDir = dir';
-  direction = diff/relFactor:min(prevDir+prevDirFactor):max(0);
-  relFactor = holdTime*hslider("release", 0.21, 0, 1, 0.01);
-  prevDirFactor = hslider("prevDirfactor", 0.72, 0, 1, 0.01)*0.1/holdTime;
+  direction = (diff/relFactor):min(meanDiff*prevDirFactor):max(0);
+  // direction = diff/relFactor:min(prevDir+prevDirFactor):max(0);
+  relFactor = holdTime*hslider("release", 0.14, 0, 1, 0.01);
+  // prevDirFactor = hslider("prevDirfactor", 0.72, 0, 1, 0.01)*1/holdTime;
+  // rmsDiff = diff:max(0):ba.slidingRMS(hslider("rele", 0.25, 0, 2, 0.01)*holdTime:max(1));
+  meanDiff = diff:max(0):ba.slidingMean(hslider("rele", 0.25, 0, 2, 0.01)*holdTime:max(1));
+  // relFactor = hslider("release", 0.21, 0, 1, 0.01);
+  prevDirFactor = hslider("prevDirfactor", 1, 0, 10, 0.1)*10/holdTime;
 };
 
 
