@@ -390,7 +390,7 @@ myBus(i) = si.bus(i);
 
 attackArray(LA) =
   paramArray(1.4,0,attack2band(LA+1) ,0,LA+1)
-  : (si.bus(LA),!)
+  : (par(i, LA, min(1)),!)
 ;
 
 // attack2band(LA) = (attack*LA);
