@@ -9,7 +9,7 @@ process =
   // attackArray(LA)
   // : par(i, LA, hbargraph("lev%i",0,1.4))
 
-  LazyLeveler(LA,testSig(LA))
+  LazyLeveler(LA,testSig(LA-5))
 
   // blokjes
   // sequentialBlockMinimumParOut(nrBlocks,lookahead(LA))
@@ -25,6 +25,7 @@ process =
   // :par(i, 5, _*.5)
 with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
+  holdTime= Lookah;
   LA = 13;
   nrBlocks = 3;
   // blokjes(x,n) =   sequentialBlockOperatorParOut(n,min,ma.INFINITY,lookahead(LA),x);
@@ -35,14 +36,21 @@ with {
 LazyLeveler(LA,x) =
   // (linearAttack(LA-1,x)~_)
   x
-  : (hold(LA,holdTime(LA))~_)
-  :
-  convexAttack(LA)
+  : (hold(LA,attackHold(LA))~_)
+  : convexAttack(LA)
   : (shapedAttack(LA)~_)
-  : (release(LA,holdTime(LA))~_)
+    // : (release(LA,holdTime(LA))~_)
 , x@(4*lookahead(LA));
 
-holdTime(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), 1);
+// holdTime(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), 1);
+// attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 1, 0.01):int+1:max(0):min(lookahead(LA));
+// attackHold(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), 1);
+// attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 1, 0.01):int:hbargraph("hold",0,lookahead(LA)):max(0):min(lookahead(LA));
+attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 2, 0.01):int:hbargraph("hold",0,lookahead(LA)):max(0):min(lookahead(LA));
+
+// attack = hslider("[1]attack", 1, 0, 1, 0.01);
+attack = hslider("[1]attack", 13, 0, 13, 0.1)/13;
+// attack = hslider("[1]attack", 6, 0, 6, 1)/6;
 
 hold(LA,holdTime,prevGain,x) =
   slidingMin(holdTime,lookahead(LA),x)@(lookahead(LA)-holdTime)
@@ -55,16 +63,16 @@ release(LA,holdTime,prevGain,x) =
   , x
   , (prevGain+direction)
   )
-  // ,meanDiff
 with {
   diff=x-prevGain;
   dir = prevGain-prevGain';
   prevDir = dir';
   dirRel= (diff/relFactor);
-  direction = xfade(dirToprevDir,dirRel,prevDir);
+  dirRelMin= (diff/relFactorMin);
+  direction = xfade(keepDir,dirRel,prevDir):min(dirRelMin);
   relFactor = holdTime*hslider("release", 0.14, 0, 1, 0.01);
-  meanDiff = diff:max(0):ba.slidingMean(hslider("rele", 0.25, 0, 2, 0.01)*holdTime:max(1));
-  dirToprevDir = hslider("keepDir", 0, 0, 1, 0.01):pow(0.01);
+  relFactorMin = holdTime*hslider("releaseMin", 0.14, 0, 1, 0.01);
+  keepDir = hslider("keepDir", 0, 0, 1, 0.01):pow(1/64);
   xfade(x,a,b) = (1-x)*a+x*b;
 };
 
@@ -214,6 +222,7 @@ convexAttack(LA,x) =
       )
      )
   :maxOfN(LA)
+  : select2(attack<(2/LA),_,x@(2*lookahead(LA)))
 with {
   holdT = hslider("holdT", 0, 0, lookahead(LA), 1);
   attackConvexBand(LA) = (attack*LA);
@@ -245,10 +254,24 @@ with {
   getGain(LA,x,prevGain,direction)=
     select2(direction<0
            , x@lookahead(LA)
-           , (direction+ prevGain:min(0):min(x@lookahead(LA)))
+             // , hold(LA,attackHold(LA),prevGain,x)
+           , (direction+ prevGain:min(0)
+              :min(x@lookahead(LA))
+               // : hold(LA,attackHold(LA),prevGain)
+             )
            )
+    // : hold(LA,attackHold(LA),prevGain)
   ;
+  // attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 1, 0.01):int:hbargraph("hold",0,lookahead(LA)):max(0):min(lookahead(LA));
+  // attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 1, 0.01):int+1:max(0):min(lookahead(LA));
+  // attackHold(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), 1);
+
 };
+
+// hold(LA,holdTime,prevGain,x) =
+// slidingMin(holdTime,lookahead(LA),x)@(lookahead(LA)-holdTime)
+// : max(prevGain)
+// : min(x@lookahead(LA));
 
 linAtt(0,prevGain,x) = linearAttack(0,x,prevGain);
 linAtt(LA,prevGain,x) = linearAttack(LA,x,prevGain);
@@ -370,9 +393,9 @@ attackArray(LA) =
   : (si.bus(LA),!)
 ;
 
-attack = hslider("[1]attack", 1, 0, 1, 0.01);
 // attack2band(LA) = (attack*LA);
-attack2band(LA) = 2+(attack*(LA-2)):max(2);
+// attack2band(LA) = 2+(attack*(LA-2)):max(2):hbargraph("band",0,LA);
+attack2band(LA) = 1+(attack*(LA-1)):max(1);
 // attack2band(LA) = hslider("band", 0, 0, LA, 0.1);
 
 
@@ -380,7 +403,7 @@ testSig(LA) =
   // checkbox("tst")*-1;
   // button:ba.impulsify*-1;
   no.lfnoise0(lookahead(LA) *t * (no.lfnoise0(lookahead(LA)/2):max(0.1) )):pow(3)*(1-noiseLVL) +(no.lfnoise(rate):pow(3) *noiseLVL):min(0);
-t= hslider("[7]time", 2.18, 0.01, 4, 0.01):pow(2);
+t= hslider("[7]time", 1, 0.01, 4, 0.01):pow(2);
 noiseLVL = hslider("[8]noise level", 0, 0, 1, 0.01);
 rate = hslider("[9]rate [scale:log]", 420, 10, 10000, 1);
 
