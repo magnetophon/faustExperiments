@@ -72,12 +72,12 @@ LArelease(LA,holdTimeX,prevGain,x) =
        (x:LAreleaseBlock(LA,holdTimeX/nrBlocks*(i+1)+off:ceil:int:min(lookahead(LA):max(0)))~_)
        // (x:LAreleaseBlock(LA,holdTimeX/nrBlocks*(i+1)+off:floor:int:min(lookahead(LA):max(1)),prevGain))
       )
-   // :minOfN(nrBlocks)
-   )
+   :minOfN(nrBlocks)
+  )
 ,
   (x:LAreleaseBlock(LA,holdTimeX)~_)
    ;
-   nrBlocks =4;
+   nrBlocks =32;
    off = 0;
    //hslider("off", 0, -8, 8, 1);
 
@@ -125,7 +125,7 @@ LArelease(LA,holdTimeX,prevGain,x) =
        @(lookahead(LA)-holdTime)
        // :max(testSig(LA-5)@(2*lookahead(LA)))
      ;
-     trig = prevGain>x@(1*lookahead(LA));
+     trig = prevGain>=x@(1*lookahead(LA));
      // diff = (minGain-prevGain);
      diff = (minGain:ba.sAndH(trig)-prevGain);
      // diff = (minGain-prevGain):ba.sAndH(trig);
