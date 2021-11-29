@@ -59,24 +59,46 @@ attack = hslider("[1]attack", 13, 0, 13, 0.1)/13;
 
 LArelease(LA,holdTime,prevGain,x) =
   minGain:getDir(LA,holdTime,prevGain,x)
+          // , countSteps@(lookahead(LA)-holdTime)
+, countSteps
+, counting
+  // , countSteps
+  // @(lookahead(LA)-holdTime)
+  // , (x>x')
+  // , prevGain>prevGain'
+  // , trig
 with {
+  // countSteps = (x@lookahead(LA))>minGain;
+  countSteps = (select2(counting
+                       , 0
+                       , (_+1))~_
+                                :_/holdTime)
+               // @(lookahead(LA)-holdTime)
+  ;
+  // counting = slidingMin(holdTime,lookahead(LA),x)>=slidingMin(holdTime,lookahead(LA),x)';
+  // counting = (x)>slidingMin(holdTime,lookahead(LA),x);
+  // counting = diff<diff';
+  counting = (direc-direc')<=ma.EPSILON;
+  // 0.0001 ;
+  //(ma.MIN*lookahead(LA)*128);
+  direc = prevGain-prevGain';
   minGain = slidingMin(holdTime,lookahead(LA),x)@(lookahead(LA)-holdTime);
+  trig = prevGain>x@lookahead(LA);
+  diff = (minGain-prevGain);
   getDir(LA,holdTime,prevGain,x,minGain) =
     // (newDir~_)
     select2(trig
            ,(newDir~_)+prevGain
            ,(x@lookahead(LA))
-    )
+           )
   with {
     newDir(prevDir) =
       select2(trig
              ,dir
               :max(prevDir)
              ,0-(ma.MAX));
-    diff = (minGain-prevGain);
     dir = diff/holdTime:max(0);
     // trig = diff<0;
-    trig = prevGain>x@lookahead(LA);
   };
 };
 
