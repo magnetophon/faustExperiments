@@ -34,15 +34,20 @@ with {
 //TODO: each stage caries it's GR and its properly delayed audio
 
 LazyLeveler(LA,x) =
-  // (linearAttack(LA-1,x)~_)
+  // (linearAttack(LA,x)~_)
   x
-  : (hold(LA,attackHold(LA))~_)
-  : convexAttack(LA)
-  : (shapedAttack(LA)~_)
-    // : (release(LA,holdTime(LA))~_)
-, x@(4*lookahead(LA));
+  // : (linAtt(LA-4)~_)
+  // : (hold(LA,attackHold(LA))~_)
+  // : convexAttack(LA)
+  // : (linAtt(LA-4)~_)
+  // : (shapedAttack(LA)~_)
+  // : (release(LA,holdTime(LA))~_)
+  : (LArelease(LA,holdTime(LA))~_)
+, x@(1*lookahead(LA)+(0*lookahead(LA-4)))
+  // , (x: (hold(LA,attackHold(LA))~_): convexAttack(LA): (shapedAttack(LA)~_)@(0*lookahead(LA-4)  ))
+;
 
-// holdTime(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), 1);
+holdTime(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), 1);
 // attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 1, 0.01):int+1:max(0):min(lookahead(LA));
 // attackHold(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), 1);
 // attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 1, 0.01):int:hbargraph("hold",0,lookahead(LA)):max(0):min(lookahead(LA));
@@ -51,6 +56,38 @@ attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 2, 0.01):int:hba
 // attack = hslider("[1]attack", 1, 0, 1, 0.01);
 attack = hslider("[1]attack", 13, 0, 13, 0.1)/13;
 // attack = hslider("[1]attack", 6, 0, 6, 1)/6;
+
+LArelease(LA,holdTime,prevGain,x) =
+  select2(diff<0
+         ,(newDir~_)+prevGain
+         ,(x@lookahead(LA))
+         )
+with {
+  newDir(prevDir) =
+    select2(diff<0
+           ,dir
+            :max(prevDir)
+             // :max(0)
+           ,0-(ma.MAX));
+  diff = (minGain-prevGain);
+  dir = diff/holdTime;
+  minGain = slidingMin(holdTime,lookahead(LA),x)@(lookahead(LA)-holdTime);
+};
+
+LAreleaseOLD(LA,holdTime,prevGain,x) =
+  (newDir~_)+prevGain:min(x@lookahead(LA))//:max(minGain)
+with {
+  newDir(prevDir) =
+    (prevGain-minGain)/holdTime
+    :min(select2((prevGain+prevDir)<=minGain
+                , prevDir
+                  // , 1
+                ,ma.MAX
+                )
+        );
+  minGain = slidingMin(holdTime,lookahead(LA),x)@(lookahead(LA)-holdTime);
+};
+
 
 hold(LA,holdTime,prevGain,x) =
   slidingMin(holdTime,lookahead(LA),x)@(lookahead(LA)-holdTime)
@@ -216,6 +253,8 @@ convexAttack(LA,x) =
   :
   par(i, LA,
       (
+        // (_,linAtt(i+1)~_)
+        // : hold(LA)
         hold(LA) :
         (linAtt(i+1)~_)
         @(lookahead(LA)+1-(1<<(i+1)))
@@ -254,10 +293,9 @@ with {
   getGain(LA,x,prevGain,direction)=
     select2(direction<0
            , x@lookahead(LA)
-             // , hold(LA,attackHold(LA),prevGain,x)
+             // , hold(LA,attackHold(LA)+holdTime(LA):min(lookahead(LA)),prevGain,x)
            , (direction+ prevGain:min(0)
               :min(x@lookahead(LA))
-               // : hold(LA,attackHold(LA),prevGain)
              )
            )
     // : hold(LA,attackHold(LA),prevGain)
