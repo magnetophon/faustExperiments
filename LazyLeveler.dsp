@@ -58,20 +58,26 @@ attack = hslider("[1]attack", 13, 0, 13, 0.1)/13;
 // attack = hslider("[1]attack", 6, 0, 6, 1)/6;
 
 LArelease(LA,holdTime,prevGain,x) =
-  select2(diff<0
-         ,(newDir~_)+prevGain
-         ,(x@lookahead(LA))
-         )
+  minGain:getDir(LA,holdTime,prevGain,x)
 with {
-  newDir(prevDir) =
-    select2(diff<0
-           ,dir
-            :max(prevDir)
-             // :max(0)
-           ,0-(ma.MAX));
-  diff = (minGain-prevGain);
-  dir = diff/holdTime;
   minGain = slidingMin(holdTime,lookahead(LA),x)@(lookahead(LA)-holdTime);
+  getDir(LA,holdTime,prevGain,x,minGain) =
+    // (newDir~_)
+    select2(trig
+           ,(newDir~_)+prevGain
+           ,(x@lookahead(LA))
+    )
+  with {
+    newDir(prevDir) =
+      select2(trig
+             ,dir
+              :max(prevDir)
+             ,0-(ma.MAX));
+    diff = (minGain-prevGain);
+    dir = diff/holdTime:max(0);
+    // trig = diff<0;
+    trig = prevGain>x@lookahead(LA);
+  };
 };
 
 LAreleaseOLD(LA,holdTime,prevGain,x) =
