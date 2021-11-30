@@ -57,7 +57,8 @@ LazyLeveler(LA,x) =
   // , (x: (hold(LA,attackHold(LA))~_): convexAttack(LA): (shapedAttack(LA)~_)@(0*lookahead(LA-4)  ))
 ;
 
-holdTime(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), nrBlocks);
+// holdTime(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), nrBlocks);
+holdTime(LA) = hslider("holdTime", lookahead(LA)/nrBlocks, 0, lookahead(LA), nrBlocks);
 // attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 1, 0.01):int+1:max(0):min(lookahead(LA));
 // attackHold(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), 1);
 // attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 1, 0.01):int:hbargraph("hold",0,lookahead(LA)):max(0):min(lookahead(LA));
@@ -67,44 +68,44 @@ attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 2, 0.01):int:hba
 attack = hslider("[1]attack", 13, 0, 13, 0.1)/13;
 // attack = hslider("[1]attack", 6, 0, 6, 1)/6;
 
-LArelease(LA,holdTimeX,prevGain,x) =
+LArelease(LA,holdTime,prevGain,x) =
   (par(i, nrBlocks,
-       // (x:LAreleaseBlock(LA,holdTimeX/nrBlocks*(i+1):ceil+off:int:min(lookahead(LA):max(1)),prevGain))
-       // (x:LAreleaseBlock(LA,holdTimeX/nrBlocks*(i+1)
-       (x:LAreleaseBlock(LA,holdTimeX/nrBlocks*(i+1)
-                            // : ceil
-                            // :int+off
-                            :min(lookahead(LA))
-                             // :max(1)
+       (x:LAreleaseBlock(LA,holdTime,holdTime/nrBlocks*(i+1)
+                                     // : ceil
+                                     // :int+off
+                                     :min(lookahead(LA))
+                                      // :max(1)
                          ,prevGain))
       )
    :minOfN(nrBlocks)
+    // (x:LAreleaseBlock(LA,holdTimeX/nrBlocks*(i+1):ceil+off:int:min(lookahead(LA):max(1)),prevGain))
+    // (x:LAreleaseBlock(LA,holdTimeX/nrBlocks*(i+1)
+
   )
 ,
-  (x:LAreleaseBlock(LA,holdTimeX)~_)
+  (x:LAreleaseBlock(LA,holdTime,holdTime)~_)
+, (x-prevGain)'@lookahead(LA)
 ;
 nrBlocks =32;
 off =
   0;
 // hslider("off", 0, -1, 8, 1);
 
-LAreleaseBlock(LA,holdTime,prevGain,x) =
+LAreleaseBlock(LA,globalHoldTime,holdTime,prevGain,x) =
   minGain
   :getDir(LA,holdTime,prevGain,x)
    // , minGain
    // , x@lookahead(LA)
    // ,trig
+   // :max(
+   // ((x-x')'/globalHoldTime)
+   // +prevGain
+   // )
 with {
   minGain =
-    // slidingMin(holdTime,lookahead(LA),x)@(lookahead(LA)-holdTime)
     x
-    // :(hold(LA,holdTime)~_)
-    // :(hold(LA,holdTime,prevGain))
-    :
-    slidingMax(holdTime,lookahead(LA),_)
-    @(lookahead(LA)-holdTime)
-    // :max(testSig(LA-5)@(2*lookahead(LA)))
-  ;
+    : slidingMax(holdTime,lookahead(LA),_)
+      @(lookahead(LA)-holdTime);
   trig = prevGain>=x@(1*lookahead(LA));
   // diff = (minGain-prevGain);
   diff = (minGain:ba.sAndH(trig)-prevGain);
@@ -112,17 +113,38 @@ with {
   getDir(LA,holdTime,prevGain,x,minGain) =
     // (newDir~_)
     select2(trig
-           ,(newDir~_)+prevGain
+           ,((newDir
+             )
+             ~_)
+            +prevGain
            ,(x@(1*lookahead(LA)))
            )
   with {
     newDir(prevDir) =
       select2(trig
              ,dir
+              :max(
+                (
+                  globalMinGain-prevGain
+                  // x-
+                  // prevGain
+                  // (x:(hold(LA,globalHoldTime~_)))
+                )
+                /globalHoldTime
+                :max(0)
+              )
               :max(prevDir)
              ,0-(ma.MAX));
-    dir = diff/holdTime:max(0);
+    dir =
+      diff/holdTime
+      // :max(
+      // (x-x')'//globalHoldTime
+      // )
+      :max(0)
+    ;
     // trig = diff<0;
+    globalMinGain = slidingMin(globalHoldTime,lookahead(LA),x)@(lookahead(LA)-globalHoldTime);
+
   };
 };
 
@@ -494,7 +516,7 @@ testSig(LA) =
   // button:ba.impulsify*-1;
   no.lfnoise0(lookahead(LA) *t * (no.lfnoise0(lookahead(LA)/2):max(0.1) )):pow(3)*(1-noiseLVL) +(no.lfnoise(rate):pow(3) *noiseLVL):min(0);
 t= hslider("[7]time", 1, 0.01, 4, 0.01):pow(2);
-noiseLVL = hslider("[8]noise level", 0, 0, 1, 0.01);
+noiseLVL = hslider("[8]noise level", 0.02, 0, 1, 0.01);
 rate = hslider("[9]rate [scale:log]", 420, 10, 10000, 1);
 
 
