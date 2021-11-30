@@ -69,78 +69,98 @@ attack = hslider("[1]attack", 13, 0, 13, 0.1)/13;
 // attack = hslider("[1]attack", 6, 0, 6, 1)/6;
 
 LArelease(LA,holdTime,prevGain,x) =
-  (par(i, nrBlocks,
-       (x:LAreleaseBlock(LA,holdTime,holdTime/nrBlocks*(i+1)
-                                     // : ceil
-                                     // :int+off
-                                     :min(lookahead(LA))
-                                      // :max(1)
-                         ,prevGain))
-      )
-   :minOfN(nrBlocks)
-    // (x:LAreleaseBlock(LA,holdTimeX/nrBlocks*(i+1):ceil+off:int:min(lookahead(LA):max(1)),prevGain))
-    // (x:LAreleaseBlock(LA,holdTimeX/nrBlocks*(i+1)
+  select2(trig
+         ,     (par(i, nrBlocks,
+                    (x:LAreleaseBlock(LA,i,holdTime
+                                      ,holdTime/nrBlocks*(i+1) :min(lookahead(LA))
+                                      ,prevGain))
+                   )
+                :minOfN(nrBlocks)
+                 +prevGain
 
-  )
-,
-  (x:LAreleaseBlock(LA,holdTime,holdTime)~_)
+               )
+
+         ,(x@(1*lookahead(LA)))
+         )
+  // 16 16
+  // 12 16
+  // 8 12
+  // 4 8
+  //
+  // 4 4
+  // 3 4
+  // 2 3
+  // 1 212
+
+
+, (x:LAreleaseBlock(LA,LA-1,holdTime,holdTime)~_)+prevGain
 , (x-prevGain)'@lookahead(LA)
-;
-nrBlocks =32;
-off =
-  0;
-// hslider("off", 0, -1, 8, 1);
+with {
 
-LAreleaseBlock(LA,globalHoldTime,holdTime,prevGain,x) =
+  trig = prevGain>=x@(1*lookahead(LA));
+
+  selectNeigbourOfMin =
+    ( si.bus(nrBlocks)<:(si.bus(nrBlocks*3))
+      : (((minOfN(nrBlocks)<:si.bus(nrBlocks))
+         ,si.bus(nrBlocks))
+         : ro.interleave(nrBlocks,2)
+         : par(i, nrBlocks
+                  ,==*i
+              ):>_
+        ),si.bus(nrBlocks)
+    )
+    :
+    sel
+  with {
+  sel(s) = ba.selectn(nrBlocks,s+selOff:max(0):min(nrBlocks-1));
+  selOff = hslider("selOff", 0, -nrBlocks, nrBlocks, 1);
+};
+
+
+};
+
+nrBlocks = 32;
+
+LAreleaseBlock(LA,i,globalHoldTime,holdTime,prevGain,x) =
   minGain
   :getDir(LA,holdTime,prevGain,x)
-   // , minGain
-   // , x@lookahead(LA)
-   // ,trig
-   // :max(
-   // ((x-x')'/globalHoldTime)
-   // +prevGain
-   // )
 with {
+  trig = prevGain>=x@(1*lookahead(LA));
+
   minGain =
     x
     : slidingMax(holdTime,lookahead(LA),_)
       @(lookahead(LA)-holdTime);
-  trig = prevGain>=x@(1*lookahead(LA));
+  off = hslider("off", 1, 0.01, 2, 0.01);
   // diff = (minGain-prevGain);
   diff = (minGain:ba.sAndH(trig)-prevGain);
   // diff = (minGain-prevGain):ba.sAndH(trig);
   getDir(LA,holdTime,prevGain,x,minGain) =
-    // (newDir~_)
-    select2(trig
-           ,((newDir
-             )
-             ~_)
-            +prevGain
-           ,(x@(1*lookahead(LA)))
-           )
+    (newDir~_)
+    // select2(trig
+    // ,((newDir) ~_)
+    // +prevGain
+    // ,0-(ma.MAX)
+    // )
   with {
     newDir(prevDir) =
       select2(trig
              ,dir
-              :max(
-                (
-                  globalMinGain-prevGain
-                  // x-
-                  // prevGain
-                  // (x:(hold(LA,globalHoldTime~_)))
-                )
-                /globalHoldTime
-                :max(0)
-              )
+              *
+              select2(i==(nrBlocks-1)
+                     , ((i+1)/(i+2))
+                     , 1)
+              :max((globalMinGain-prevGain)
+                   /globalHoldTime
+                  )
               :max(prevDir)
+              :max(0)
              ,0-(ma.MAX));
     dir =
       diff/holdTime
       // :max(
       // (x-x')'//globalHoldTime
       // )
-      :max(0)
     ;
     // trig = diff<0;
     globalMinGain = slidingMin(globalHoldTime,lookahead(LA),x)@(lookahead(LA)-globalHoldTime);
