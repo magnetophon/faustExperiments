@@ -27,7 +27,6 @@ with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
   holdTime= Lookah;
   LA = 13;
-  // nrBlocks = 3;
   // blokjes(x,n) =   sequentialBlockOperatorParOut(n,min,ma.INFINITY,lookahead(LA),x);
 };
 
@@ -77,26 +76,38 @@ LArelease(LA,holdTime,prevGain,x) =
                    )
                 :minOfN(nrBlocks)
                  +prevGain
-
+                :min(x@(1*lookahead(LA)))
                )
 
          ,(x@(1*lookahead(LA)))
          )
-  // 16 16
-  // 12 16
-  // 8 12
-  // 4 8
-  //
-  // 4 4
-  // 3 4
-  // 2 3
-  // 1 212
+  : (changeRateLimit~_)
 
-
-, (x:LAreleaseBlock(LA,LA-1,holdTime,holdTime)~_)+prevGain
-, (x-prevGain)'@lookahead(LA)
+, prevDir*holdTime
+, changeRate*holdTime
+  // , normalisedChangeRate
+  // , (x:LAreleaseBlock(LA,LA-1,holdTime,holdTime)~_)+prevGain
+  // , (x-prevGain)'@lookahead(LA)
 with {
+  changeRateLimit(prev,x) =
+    prevDir+limitedChangeRate:max(0)+prev:min(x)
+  with {
+  dir = x-prev;
+  prevDir = prev-prev';
+  changeRate = dir-prevDir:max(0);
+  limitedChangeRate =
+    select2(changeRate>0
+           , changeRate
+             // , changeRate*lookahead(LA)/holdTime*(hslider("posRate", 1, 0, 1, 0.01):pow(2))
+           , changeRate:min(hslider("posRate", 0.94, 0, 1, 0.01):pow(8)/pow(holdTime,2))
+           );
+};
 
+  prevDir = prevGain-prevGain';
+  changeRate = prevDir-prevDir';
+  normalisedChangeRate =
+    // prevDir/changeRate*(changeRate!=0);
+    (changeRate-changeRate')*holdTime;
   trig = prevGain>=x@(1*lookahead(LA));
 
   selectNeigbourOfMin =
@@ -112,14 +123,14 @@ with {
     :
     sel
   with {
-  sel(s) = ba.selectn(nrBlocks,s+selOff:max(0):min(nrBlocks-1));
-  selOff = hslider("selOff", 0, -nrBlocks, nrBlocks, 1);
-};
+    sel(s) = ba.selectn(nrBlocks,s+selOff:max(0):min(nrBlocks-1));
+    selOff = hslider("selOff", 0, -nrBlocks, nrBlocks, 1);
+  };
 
 
 };
 
-nrBlocks = 32;
+nrBlocks = 8;
 
 LAreleaseBlock(LA,i,globalHoldTime,holdTime,prevGain,x) =
   minGain
@@ -131,7 +142,9 @@ with {
     x
     : slidingMax(holdTime,lookahead(LA),_)
       @(lookahead(LA)-holdTime);
-  off = hslider("off", 1, 0.01, 2, 0.01);
+  off =
+    0;
+  // hslider("off", 1, 0.01, 2, 0.01);
   // diff = (minGain-prevGain);
   diff = (minGain:ba.sAndH(trig)-prevGain);
   // diff = (minGain-prevGain):ba.sAndH(trig);
@@ -146,10 +159,6 @@ with {
     newDir(prevDir) =
       select2(trig
              ,dir
-              *
-              select2(i==(nrBlocks-1)
-                     , ((i+1)/(i+2))
-                     , 1)
               :max((globalMinGain-prevGain)
                    /globalHoldTime
                   )
@@ -157,7 +166,14 @@ with {
               :max(0)
              ,0-(ma.MAX));
     dir =
-      diff/holdTime
+      diff/(holdTime
+            /
+            (
+              select2(i==(nrBlocks-1)
+                     , ((i+1)/(i+2))
+                     , 1)
+            )//+hslider("off", 0, -1, 1, 1)
+           )
       // :max(
       // (x-x')'//globalHoldTime
       // )
@@ -534,10 +550,13 @@ attack2band(LA) = 1+(attack*(LA-1)):max(1);
 testSig(LA) =
   // checkbox("tst")*-1;
   // button:ba.impulsify*-1;
-  no.lfnoise0(lookahead(LA) *t * (no.lfnoise0(lookahead(LA)/2):max(0.1) )):pow(3)*(1-noiseLVL) +(no.lfnoise(rate):pow(3) *noiseLVL):min(0);
+  no.lfnoise0(lookahead(LA) *t * (no.lfnoise0(lookahead(LA)/2):max(0.1) )):pow(3)
+  : fi.lowpass(4,LPfreq)
+    *(1-noiseLVL) +(no.lfnoise(rate):pow(3) *noiseLVL):min(0);
 t= hslider("[7]time", 1, 0.01, 4, 0.01):pow(2);
 noiseLVL = hslider("[8]noise level", 0.02, 0, 1, 0.01);
 rate = hslider("[9]rate [scale:log]", 420, 10, 10000, 1);
+LPfreq = hslider("[10]LPfreq [scale:log]", 420, 10, 10000, 1);
 
 
 slidingReduce(op,N,0,disabledVal) = _;
