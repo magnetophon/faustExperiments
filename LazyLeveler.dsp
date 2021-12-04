@@ -26,7 +26,7 @@ process =
 with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
   holdTime= Lookah;
-  LA = 13;
+  LA = 10;
   // blokjes(x,n) =   sequentialBlockOperatorParOut(n,min,ma.INFINITY,lookahead(LA),x);
 };
 
@@ -46,18 +46,110 @@ LazyLeveler(LA,x) =
   // :slidingMax(holdTime(LA),lookahead(LA))@(lookahead(LA)-holdTime(LA))
   // )
   // , (x:hold(LA,holdTime(LA))~_)@(lookahead(LA))
-  x@(2*lookahead(LA)+(0*lookahead(LA-4)))
+  x@(3*lookahead(LA)+(0*lookahead(LA-4)))
 , (
   x
   :(hold(LA,holdTime(LA))~_)
    // :slidingMax(holdTime(LA),lookahead(LA))@(lookahead(LA)-holdTime(LA))
-  :(LArelease(LA,holdTime(LA))~_)
+  :(LArelease(LA,holdTime(LA)*htFactor)~_)
+   // : si.lag_ud(hslider("release exp", 0, 0, 1, 0.01),0)
+   // : (hold(LA,expHoldTime(LA))~_)
+   // : (hold(LA,holdTime(LA))~_)
+   <:
+  (
+    (expRelease1(LA,expHoldTime(LA))~_)
+   ,(expRelease(LA,expHoldTime(LA))~_)
+   ,_@lookahead(LA)
+  )
 )
   // , (x: (hold(LA,attackHold(LA))~_): convexAttack(LA): (shapedAttack(LA)~_)@(0*lookahead(LA-4)  ))
 ;
 
+div(LA) = hslider("div", 1, 1, lookahead(LA), 1);
+
+
+expRelease1(LA,holdTime,prevGain,x) =
+  (diff
+   /div(LA)
+   :max(0)
+    +prevGain
+   :min(x
+        @((1*lookahead(LA))  )//-holdTime)
+       )
+  )
+with {
+  // diff = prevGain-prevGain';
+  diff = x@(lookahead(LA))-prevGain;
+  minDiff = minGain-prevGain;
+  // minDiff = prevGain-prevGain';
+  minGain =
+    x
+    // : slidingMin(holdTime,lookahead(LA))
+    : slidingMax(holdTime,lookahead(LA))
+      // @(1*(lookahead(LA)-holdTime))
+      @((1*lookahead(LA))-holdTime)
+  ;
+
+};
+expRelease(LA,holdTime,prevGain,x) =
+  (minDiff
+   /div(LA)
+   :max(0)
+    +prevGain
+   :min(x
+        @((1*lookahead(LA))  )//-holdTime)
+       ))
+with {
+  // diff = prevGain-prevGain';
+  diff = x@(lookahead(LA))-prevGain;
+  minDiff = minGain-prevGain;
+  // minDiff = prevGain-prevGain';
+  minGain =
+    x
+    // : slidingMin(holdTime,lookahead(LA))
+    : slidingMax(holdTime,lookahead(LA))
+      // @(1*(lookahead(LA)-holdTime))
+      @((1*lookahead(LA))-holdTime)
+  ;
+
+};
+
+
+expReleaseOLD(LA,holdTime,prevGain,x) =
+  x@(0*lookahead(LA))
+,
+  (
+    // min(diff@lookahead(LA),
+    (minDiff/div(LA))
+    // )
+    :max(0)
+     +prevGain
+    :min(x@(1*lookahead(LA)))
+  )
+,minDiff
+ // ,minGain
+ // ,minDiff
+ // ,diff
+with {
+  // diff = prevGain-prevGain';
+  diff = x-prevGain;
+  minDiff = minGain-prevGain;
+  // minDiff = prevGain-prevGain';
+  minGain =
+    x
+    // : slidingMin(holdTime,lookahead(LA))
+    : slidingMax(holdTime,lookahead(LA))
+      // @(1*(lookahead(LA)-holdTime))
+      @((1*lookahead(LA))-holdTime)
+  ;
+
+};
+
+
 // holdTime(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), nrBlocks);
 holdTime(LA) = hslider("holdTime", lookahead(LA)/nrBlocks, 0, lookahead(LA), nrBlocks);
+expHoldTime(LA) = hslider("expHoldTime", lookahead(LA)/nrBlocks, 0, lookahead(LA), nrBlocks);
+htFactor = hslider("htFactor", 1, 0, 1, 0.01);
 // attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 1, 0.01):int+1:max(0):min(lookahead(LA));
 // attackHold(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), 1);
 // attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 1, 0.01):int:hbargraph("hold",0,lookahead(LA)):max(0):min(lookahead(LA));
@@ -81,16 +173,21 @@ LArelease(LA,holdTime,prevGain,x) =
 
          ,(x@(1*lookahead(LA)))
          )
-  : (changeRateLimit~_)
+  // : (changeRateLimit(prevGain))
 
-, prevDir*holdTime
-, changeRate*holdTime
+  // : si.lag_ud(hslider("release exp", 0, 0, 1, 0.01),0)
+
+  // , prevDir*holdTime
+  // , changeRate*holdTime
   // , normalisedChangeRate
   // , (x:LAreleaseBlock(LA,LA-1,holdTime,holdTime)~_)+prevGain
   // , (x-prevGain)'@lookahead(LA)
 with {
   changeRateLimit(prev,x) =
-    prevDir+limitedChangeRate:max(0)+prev:min(x)
+    prevDir
+    // :min(dirRelMin)
+    +limitedChangeRate
+    :max(0)+prev:min(x)
   with {
   dir = x-prev;
   prevDir = prev-prev';
@@ -99,8 +196,11 @@ with {
     select2(changeRate>0
            , changeRate
              // , changeRate*lookahead(LA)/holdTime*(hslider("posRate", 1, 0, 1, 0.01):pow(2))
+             // , changeRate:min(hslider("posRate", 0.94, 0, 1, 0.01):pow(8)/pow(holdTime,hslider("pow", 2, 1, 4, .01)))
            , changeRate:min(hslider("posRate", 0.94, 0, 1, 0.01):pow(8)/pow(holdTime,2))
            );
+  dirRelMin= (dir/relFactorMin);
+  relFactorMin = holdTime*hslider("releaseMin", 0.14, 0, 1, 0.01);
 };
 
   prevDir = prevGain-prevGain';
@@ -119,15 +219,11 @@ with {
                   ,==*i
               ):>_
         ),si.bus(nrBlocks)
-    )
-    :
-    sel
+    ) : sel
   with {
     sel(s) = ba.selectn(nrBlocks,s+selOff:max(0):min(nrBlocks-1));
     selOff = hslider("selOff", 0, -nrBlocks, nrBlocks, 1);
   };
-
-
 };
 
 nrBlocks = 8;
@@ -167,12 +263,12 @@ with {
              ,0-(ma.MAX));
     dir =
       diff/(holdTime
-            /
-            (
-              select2(i==(nrBlocks-1)
-                     , ((i+1)/(i+2))
-                     , 1)
-            )//+hslider("off", 0, -1, 1, 1)
+            // /
+            // (
+            // select2(i==(nrBlocks-1)
+            // , ((i+1)/(i+2))
+            // , 1)
+            // )//+hslider("off", 0, -1, 1, 1)
            )
       // :max(
       // (x-x')'//globalHoldTime
@@ -551,10 +647,10 @@ testSig(LA) =
   // checkbox("tst")*-1;
   // button:ba.impulsify*-1;
   no.lfnoise0(lookahead(LA) *t * (no.lfnoise0(lookahead(LA)/2):max(0.1) )):pow(3)
-  : fi.lowpass(4,LPfreq)
-    *(1-noiseLVL) +(no.lfnoise(rate):pow(3) *noiseLVL):min(0);
+                                                                           // : fi.lowpass(4,LPfreq)
+                                                                           *(1-noiseLVL) +(no.lfnoise(rate):pow(3) *noiseLVL):min(0);
 t= hslider("[7]time", 1, 0.01, 4, 0.01):pow(2);
-noiseLVL = hslider("[8]noise level", 0.02, 0, 1, 0.01);
+noiseLVL = hslider("[8]noise level", 0.0, 0, 1, 0.01);
 rate = hslider("[9]rate [scale:log]", 420, 10, 10000, 1);
 LPfreq = hslider("[10]LPfreq [scale:log]", 420, 10, 10000, 1);
 
