@@ -69,29 +69,42 @@ LazyLeveler(LA,x) =
 ;
 
 convexRelease(LA,prev,x) =
-  (prev +
-   // max(prevDir,dir)
-   // prevDir
-   newDir
-   // dir
-   :min(x))
-, (inputDir>inputDir')
-  // , (prevDir>prevDir')
-with {
-  newDir =
-    select2(
-      inputDir>inputDir'
-      // prevDir>prevDir'
+  (
+    (prev +
+     // max(prevDir,dir)
+     // prevDir
 
-      // , min(inputDir,dir)/hslider("convexDiv", 1, 1, 100, 0.1)
-      // ,inputDir/hslider("convexDiv", 1, 1, 100, 0.1)
-     ,prevDir/(1+pow(hslider("convexDiv", 0.25, 0, 1, 0.01),4))
-     , inputDir
-       // , dir
-    );
-  inputDir = x-x';
-  dir = x-prev;
-  prevDir = prev-prev';
+     // newDir
+     select2(
+        prev<=prev'
+      , newDir
+      , ma.MAX
+      )
+
+     // dir
+    )
+    :min(x))
+  , speedup
+    // , prev<=prev'
+    // , (prevDir>prevDir')
+    with {
+    newDir =
+      select2(
+        speedup
+        // prevDir>prevDir'
+
+        // , min(inputDir,dir)/hslider("convexDiv", 1, 1, 100, 0.1)
+        // ,inputDir/hslider("convexDiv", 1, 1, 100, 0.1)
+       ,prevDir/(1+pow(hslider("convexDiv", 0.25, 0, 1, 0.01),4))
+       , inputDir
+         // , dir
+      );
+    inputDir = x-x';
+    dir = x-prev;
+    prevDir =
+      prev-prev';
+    speedup = (inputDir>inputDir')*(inputDir>inputDir')';
+    // speedup = (inputDir>inputDir');
 };
 
 
