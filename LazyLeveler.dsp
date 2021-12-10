@@ -26,7 +26,7 @@ process =
 with {
   Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
   holdTime= Lookah;
-  LA = 10;
+  LA = 13;
   // blokjes(x,n) =   sequentialBlockOperatorParOut(n,min,ma.INFINITY,lookahead(LA),x);
 };
 
@@ -50,22 +50,25 @@ LazyLeveler(LA,x) =
 , (
   x
   :(hold(LA,holdTime(LA))~_)
+   <:
    // :slidingMax(holdTime(LA),lookahead(LA))@(lookahead(LA)-holdTime(LA))
-  :(LArelease(LA,holdTime(LA)*htFactor)~_)
+
    // : si.lag_ud(hslider("release exp", 0, 0, 1, 0.01),0)
    // : (hold(LA,expHoldTime(LA))~_)
    // : (hold(LA,holdTime(LA))~_)
-   <:
   (
-    (expRelease1(LA,expHoldTime(LA))~_)
-   ,(expRelease(LA,expHoldTime(LA))~_)
-   ,_@lookahead(LA)
+    ((LArelease1(LA,holdTime(LA)*htFactor)~_):(expRelease1(LA,expHoldTime(LA))~_))
+   ,((LArelease(LA,holdTime(LA)*htFactor)~_):(expRelease(LA,expHoldTime(LA))~_))
+    // ,_@lookahead(LA)
+   , ((LArelease1(LA,holdTime(LA)*htFactor)~_):si.lag_ud(lagUp(LA),0)@(1*lookahead(LA)))
   )
 )
   // , (x: (hold(LA,attackHold(LA))~_): convexAttack(LA): (shapedAttack(LA)~_)@(0*lookahead(LA-4)  ))
 ;
 
-div(LA) = hslider("div", 1, 1, lookahead(LA), 1);
+lagUp(LA) = hslider("release exp", 0, 0, 1, 0.01)*holdTime(LA)/44100;
+
+div(LA) = hslider("div", 0.25, 0, 1, 0.01)*holdTime(LA):max(1);
 
 
 expRelease1(LA,holdTime,prevGain,x) =
@@ -146,10 +149,10 @@ with {
 };
 
 
-// holdTime(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), nrBlocks);
-holdTime(LA) = hslider("holdTime", lookahead(LA)/nrBlocks, 0, lookahead(LA), nrBlocks);
+// holdTime(LA) = hslider("holdTime", lookahead(LA)/nrBlocks, 0, lookahead(LA), nrBlocks);
+holdTime(LA) = hslider("holdTime", lookahead(LA)/nrBlocks, 0, lookahead(LA), 1);
 expHoldTime(LA) = hslider("expHoldTime", lookahead(LA)/nrBlocks, 0, lookahead(LA), nrBlocks);
-htFactor = hslider("htFactor", 1, 0, 1, 0.01);
+htFactor = hslider("htFactor", 0.2, 0, 1, 0.01);
 // attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 1, 0.01):int+1:max(0):min(lookahead(LA));
 // attackHold(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), 1);
 // attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 1, 0.01):int:hbargraph("hold",0,lookahead(LA)):max(0):min(lookahead(LA));
@@ -159,7 +162,7 @@ attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 2, 0.01):int:hba
 attack = hslider("[1]attack", 13, 0, 13, 0.1)/13;
 // attack = hslider("[1]attack", 6, 0, 6, 1)/6;
 
-LArelease(LA,holdTime,prevGain,x) =
+LArelease1(LA,holdTime,prevGain,x) =
   select2(trig
          ,     (par(i, nrBlocks,
                     (x:LAreleaseBlock(LA,i,holdTime
@@ -182,6 +185,73 @@ LArelease(LA,holdTime,prevGain,x) =
   // , normalisedChangeRate
   // , (x:LAreleaseBlock(LA,LA-1,holdTime,holdTime)~_)+prevGain
   // , (x-prevGain)'@lookahead(LA)
+with {
+  changeRateLimit(prev,x) =
+    prevDir
+    // :min(dirRelMin)
+    +limitedChangeRate
+    :max(0)+prev:min(x)
+  with {
+  dir = x-prev;
+  prevDir = prev-prev';
+  changeRate = dir-prevDir:max(0);
+  limitedChangeRate =
+    select2(changeRate>0
+           , changeRate
+             // , changeRate*lookahead(LA)/holdTime*(hslider("posRate", 1, 0, 1, 0.01):pow(2))
+             // , changeRate:min(hslider("posRate", 0.94, 0, 1, 0.01):pow(8)/pow(holdTime,hslider("pow", 2, 1, 4, .01)))
+           , changeRate:min(hslider("posRate", 0.94, 0, 1, 0.01):pow(8)/pow(holdTime,2))
+           );
+  dirRelMin= (dir/relFactorMin);
+  relFactorMin = holdTime*hslider("releaseMin", 0.14, 0, 1, 0.01);
+};
+
+  prevDir = prevGain-prevGain';
+  changeRate = prevDir-prevDir';
+  normalisedChangeRate =
+    // prevDir/changeRate*(changeRate!=0);
+    (changeRate-changeRate')*holdTime;
+  trig = prevGain>=x@(1*lookahead(LA));
+
+  selectNeigbourOfMin =
+    ( si.bus(nrBlocks)<:(si.bus(nrBlocks*3))
+      : (((minOfN(nrBlocks)<:si.bus(nrBlocks))
+         ,si.bus(nrBlocks))
+         : ro.interleave(nrBlocks,2)
+         : par(i, nrBlocks
+                  ,==*i
+              ):>_
+        ),si.bus(nrBlocks)
+    ) : sel
+  with {
+    sel(s) = ba.selectn(nrBlocks,s+selOff:max(0):min(nrBlocks-1));
+    selOff = hslider("selOff", 0, -nrBlocks, nrBlocks, 1);
+  };
+};
+
+LArelease(LA,holdTime,prevGain,x) =
+  select2(trig
+         ,     (par(i, nrBlocks,
+                    (x:LAreleaseBlock(LA,i,holdTime
+                                      ,holdTime/nrBlocks*(i+1) :min(lookahead(LA))
+                                      ,prevGain))
+                   )
+                :minOfN(nrBlocks)
+                 +prevGain
+                :min(x@(1*lookahead(LA)))
+               )
+
+         ,(x@(1*lookahead(LA)))
+         )
+  : (changeRateLimit(prevGain))
+
+    // : si.lag_ud(hslider("release exp", 0, 0, 1, 0.01),0)
+
+    // , prevDir*holdTime
+    // , changeRate*holdTime
+    // , normalisedChangeRate
+    // , (x:LAreleaseBlock(LA,LA-1,holdTime,holdTime)~_)+prevGain
+    // , (x-prevGain)'@lookahead(LA)
 with {
   changeRateLimit(prev,x) =
     prevDir
@@ -263,12 +333,12 @@ with {
              ,0-(ma.MAX));
     dir =
       diff/(holdTime
-            // /
-            // (
-            // select2(i==(nrBlocks-1)
-            // , ((i+1)/(i+2))
-            // , 1)
-            // )//+hslider("off", 0, -1, 1, 1)
+            /
+            (
+              select2(i==(nrBlocks-1)
+                     , ((i+1)/(i+2))
+                     , 1)
+            )//+hslider("off", 0, -1, 1, 1)
            )
       // :max(
       // (x-x')'//globalHoldTime
