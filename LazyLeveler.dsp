@@ -243,7 +243,7 @@ LArelease(LA,holdTime,prevGain,x) =
 
          ,(x@(1*lookahead(LA)))
          )
-  : (changeRateLimit(prevGain))
+  : (changeRateLimit(holdTime,prevGain))
 
     // : si.lag_ud(hslider("release exp", 0, 0, 1, 0.01),0)
 
@@ -253,12 +253,21 @@ LArelease(LA,holdTime,prevGain,x) =
     // , (x:LAreleaseBlock(LA,LA-1,holdTime,holdTime)~_)+prevGain
     // , (x-prevGain)'@lookahead(LA)
 with {
-  changeRateLimit(prev,x) =
-    prevDir
-    // :min(dirRelMin)
-    +limitedChangeRate
-    :max(0)+prev:min(x)
-  with {
+
+  prevDir = prevGain-prevGain';
+  changeRate = prevDir-prevDir';
+  normalisedChangeRate =
+    // prevDir/changeRate*(changeRate!=0);
+    (changeRate-changeRate')*holdTime;
+  trig = prevGain>=x@(1*lookahead(LA));
+};
+
+changeRateLimit(holdTime,prev,x) =
+  prevDir
+  // :min(dirRelMin)
+  +limitedChangeRate
+  :max(0)+prev:min(x)
+with {
   dir = x-prev;
   prevDir = prev-prev';
   changeRate = dir-prevDir:max(0);
@@ -271,29 +280,6 @@ with {
            );
   dirRelMin= (dir/relFactorMin);
   relFactorMin = holdTime*hslider("releaseMin", 0.14, 0, 1, 0.01);
-};
-
-  prevDir = prevGain-prevGain';
-  changeRate = prevDir-prevDir';
-  normalisedChangeRate =
-    // prevDir/changeRate*(changeRate!=0);
-    (changeRate-changeRate')*holdTime;
-  trig = prevGain>=x@(1*lookahead(LA));
-
-  selectNeigbourOfMin =
-    ( si.bus(nrBlocks)<:(si.bus(nrBlocks*3))
-      : (((minOfN(nrBlocks)<:si.bus(nrBlocks))
-         ,si.bus(nrBlocks))
-         : ro.interleave(nrBlocks,2)
-         : par(i, nrBlocks
-                  ,==*i
-              ):>_
-        ),si.bus(nrBlocks)
-    ) : sel
-  with {
-    sel(s) = ba.selectn(nrBlocks,s+selOff:max(0):min(nrBlocks-1));
-    selOff = hslider("selOff", 0, -nrBlocks, nrBlocks, 1);
-  };
 };
 
 nrBlocks = 8;
