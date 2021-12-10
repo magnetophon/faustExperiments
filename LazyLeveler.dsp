@@ -58,14 +58,55 @@ LazyLeveler(LA,x) =
    // : (hold(LA,holdTime(LA))~_)
   (
     // ,((LArelease(LA,holdTime(LA)*htFactor)~_):(expRelease(LA,expHoldTime(LA))~_))
-    (((changeRateLimitPre(holdTime(LA)*htFactor)~_):LArelease(LA,holdTime(LA)*htFactor)~_):si.lag_ud(lagUp(LA),0))
-   ,((LArelease(LA,holdTime(LA)*htFactor)~_):(changeRateLimit(holdTime(LA)*htFactor)~_):si.lag_ud(lagUp(LA),0))
+    (((changeRateLimitPre(holdTime(LA)*htFactor)~_):LArelease(LA,holdTime(LA)*htFactor)~_):(convexRelease(LA))~_)
+  , (((changeRateLimitPre(holdTime(LA)*htFactor)~_):LArelease(LA,holdTime(LA)*htFactor)~_):si.lag_ud(lagUp(LA),0))
+    // ,((LArelease(LA,holdTime(LA)*htFactor)~_):(changeRateLimit(holdTime(LA)*htFactor)~_):si.lag_ud(lagUp(LA),0))
     // ,_@lookahead(LA)
    , ((LArelease(LA,holdTime(LA)*htFactor)~_):si.lag_ud(lagUp(LA),0))
   )
 )
   // , (x: (hold(LA,attackHold(LA))~_): convexAttack(LA): (shapedAttack(LA)~_)@(0*lookahead(LA-4)  ))
 ;
+
+convexRelease(LA,prev,x) =
+  (prev +
+   // max(prevDir,dir)
+   // prevDir
+   newDir
+   // dir
+   :min(x))
+, (inputDir>inputDir')
+  // , (prevDir>prevDir')
+with {
+  newDir =
+    select2(
+      inputDir>inputDir'
+      // prevDir>prevDir'
+
+      // , min(inputDir,dir)/hslider("convexDiv", 1, 1, 100, 0.1)
+      // ,inputDir/hslider("convexDiv", 1, 1, 100, 0.1)
+     ,prevDir/(1+pow(hslider("convexDiv", 0.25, 0, 1, 0.01),4))
+     , inputDir
+       // , dir
+    );
+  inputDir = x-x';
+  dir = x-prev;
+  prevDir = prev-prev';
+};
+
+
+convexReleaseOLD(LA,prevGain,x) =
+  // speed>speed'
+  // , speed==speed'
+  // ,
+  select2(speed==speed'
+         , prevGain
+         , prevGain:si.lag_ud(lagUp(LA),0)
+         ):min(x)
+with {
+  speed = x-prevGain;
+};
+
 
 lagUp(LA) = div(LA)/44100;
 
@@ -205,13 +246,13 @@ changeRateLimitPre(holdTime,prev,x) =
 with {
   dir = x-prev;
   prevDir = prev-prev';
-  changeRate = dir-prevDir;
-  //:max(0);
+  changeRate = dir-prevDir
+               :max(0);
   limitedChangeRate =
     changeRate:min(maxRate) ;
   dirRelMin= (dir/relFactorMin);
   relFactorMin = holdTime*hslider("releaseMin", 0.14, 0, 1, 0.01);
-  maxRate = hslider("posRate Pre", 0.5, 0, 11, 0.01):hbargraph("maxRate Pre", 0, 11)/pow(holdTime,2);
+  maxRate = hslider("posRate Pre", 1, 0, 11, 0.01):hbargraph("maxRate Pre", 0, 11)/pow(holdTime,2);
 };
 
 changeRateLimit(holdTime,prev,x) =
