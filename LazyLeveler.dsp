@@ -46,7 +46,7 @@ LazyLeveler(LA,x) =
   // :slidingMax(holdTime(LA),lookahead(LA))@(lookahead(LA)-holdTime(LA))
   // )
   // , (x:hold(LA,holdTime(LA))~_)@(lookahead(LA))
-  x@(3*lookahead(LA)+(0*lookahead(LA-4)))
+  x@(2*lookahead(LA)+(0*lookahead(LA-4)))
 , (
   x
   :(hold(LA,holdTime(LA))~_)
@@ -57,18 +57,19 @@ LazyLeveler(LA,x) =
    // : (hold(LA,expHoldTime(LA))~_)
    // : (hold(LA,holdTime(LA))~_)
   (
-    ((LArelease1(LA,holdTime(LA)*htFactor)~_):(expRelease1(LA,expHoldTime(LA))~_))
-   ,((LArelease(LA,holdTime(LA)*htFactor)~_):(expRelease(LA,expHoldTime(LA))~_))
+    // ,((LArelease(LA,holdTime(LA)*htFactor)~_):(expRelease(LA,expHoldTime(LA))~_))
+    (((changeRateLimitPre(holdTime(LA)*htFactor)~_):LArelease(LA,holdTime(LA)*htFactor)~_):si.lag_ud(lagUp(LA),0))
+   ,((LArelease(LA,holdTime(LA)*htFactor)~_):(changeRateLimit(holdTime(LA)*htFactor)~_):si.lag_ud(lagUp(LA),0))
     // ,_@lookahead(LA)
-   , ((LArelease1(LA,holdTime(LA)*htFactor)~_):si.lag_ud(lagUp(LA),0)@(1*lookahead(LA)))
+   , ((LArelease(LA,holdTime(LA)*htFactor)~_):si.lag_ud(lagUp(LA),0))
   )
 )
   // , (x: (hold(LA,attackHold(LA))~_): convexAttack(LA): (shapedAttack(LA)~_)@(0*lookahead(LA-4)  ))
 ;
 
-lagUp(LA) = hslider("release exp", 0, 0, 1, 0.01)*holdTime(LA)/44100;
+lagUp(LA) = div(LA)/44100;
 
-div(LA) = hslider("div", 0.25, 0, 1, 0.01)*holdTime(LA):max(1);
+div(LA) = hslider("div", 0, 0, 1, 0.01)*holdTime(LA);
 
 
 expRelease1(LA,holdTime,prevGain,x) =
@@ -162,72 +163,6 @@ attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 2, 0.01):int:hba
 attack = hslider("[1]attack", 13, 0, 13, 0.1)/13;
 // attack = hslider("[1]attack", 6, 0, 6, 1)/6;
 
-LArelease1(LA,holdTime,prevGain,x) =
-  select2(trig
-         ,     (par(i, nrBlocks,
-                    (x:LAreleaseBlock(LA,i,holdTime
-                                      ,holdTime/nrBlocks*(i+1) :min(lookahead(LA))
-                                      ,prevGain))
-                   )
-                :minOfN(nrBlocks)
-                 +prevGain
-                :min(x@(1*lookahead(LA)))
-               )
-
-         ,(x@(1*lookahead(LA)))
-         )
-  // : (changeRateLimit(prevGain))
-
-  // : si.lag_ud(hslider("release exp", 0, 0, 1, 0.01),0)
-
-  // , prevDir*holdTime
-  // , changeRate*holdTime
-  // , normalisedChangeRate
-  // , (x:LAreleaseBlock(LA,LA-1,holdTime,holdTime)~_)+prevGain
-  // , (x-prevGain)'@lookahead(LA)
-with {
-  changeRateLimit(prev,x) =
-    prevDir
-    // :min(dirRelMin)
-    +limitedChangeRate
-    :max(0)+prev:min(x)
-  with {
-  dir = x-prev;
-  prevDir = prev-prev';
-  changeRate = dir-prevDir:max(0);
-  limitedChangeRate =
-    select2(changeRate>0
-           , changeRate
-             // , changeRate*lookahead(LA)/holdTime*(hslider("posRate", 1, 0, 1, 0.01):pow(2))
-             // , changeRate:min(hslider("posRate", 0.94, 0, 1, 0.01):pow(8)/pow(holdTime,hslider("pow", 2, 1, 4, .01)))
-           , changeRate:min(hslider("posRate", 0.94, 0, 1, 0.01):pow(8)/pow(holdTime,2))
-           );
-  dirRelMin= (dir/relFactorMin);
-  relFactorMin = holdTime*hslider("releaseMin", 0.14, 0, 1, 0.01);
-};
-
-  prevDir = prevGain-prevGain';
-  changeRate = prevDir-prevDir';
-  normalisedChangeRate =
-    // prevDir/changeRate*(changeRate!=0);
-    (changeRate-changeRate')*holdTime;
-  trig = prevGain>=x@(1*lookahead(LA));
-
-  selectNeigbourOfMin =
-    ( si.bus(nrBlocks)<:(si.bus(nrBlocks*3))
-      : (((minOfN(nrBlocks)<:si.bus(nrBlocks))
-         ,si.bus(nrBlocks))
-         : ro.interleave(nrBlocks,2)
-         : par(i, nrBlocks
-                  ,==*i
-              ):>_
-        ),si.bus(nrBlocks)
-    ) : sel
-  with {
-    sel(s) = ba.selectn(nrBlocks,s+selOff:max(0):min(nrBlocks-1));
-    selOff = hslider("selOff", 0, -nrBlocks, nrBlocks, 1);
-  };
-};
 
 LArelease(LA,holdTime,prevGain,x) =
   select2(trig
@@ -243,15 +178,15 @@ LArelease(LA,holdTime,prevGain,x) =
 
          ,(x@(1*lookahead(LA)))
          )
-  : (changeRateLimit(holdTime,prevGain))
+  // : (changeRateLimit(holdTime,prevGain))
 
-    // : si.lag_ud(hslider("release exp", 0, 0, 1, 0.01),0)
+  // : si.lag_ud(hslider("release exp", 0, 0, 1, 0.01),0)
 
-    // , prevDir*holdTime
-    // , changeRate*holdTime
-    // , normalisedChangeRate
-    // , (x:LAreleaseBlock(LA,LA-1,holdTime,holdTime)~_)+prevGain
-    // , (x-prevGain)'@lookahead(LA)
+  // , prevDir*holdTime
+  // , changeRate*holdTime
+  // , normalisedChangeRate
+  // , (x:LAreleaseBlock(LA,LA-1,holdTime,holdTime)~_)+prevGain
+  // , (x-prevGain)'@lookahead(LA)
 with {
 
   prevDir = prevGain-prevGain';
@@ -262,7 +197,41 @@ with {
   trig = prevGain>=x@(1*lookahead(LA));
 };
 
+changeRateLimitPre(holdTime,prev,x) =
+  prevDir
+  // :min(dirRelMin)
+  +limitedChangeRate
+  :max(0)+prev:min(x)
+with {
+  dir = x-prev;
+  prevDir = prev-prev';
+  changeRate = dir-prevDir;
+  //:max(0);
+  limitedChangeRate =
+    changeRate:min(maxRate) ;
+  dirRelMin= (dir/relFactorMin);
+  relFactorMin = holdTime*hslider("releaseMin", 0.14, 0, 1, 0.01);
+  maxRate = hslider("posRate Pre", 0.5, 0, 11, 0.01):hbargraph("maxRate Pre", 0, 11)/pow(holdTime,2);
+};
+
 changeRateLimit(holdTime,prev,x) =
+  prevDir
+  // :min(dirRelMin)
+  +limitedChangeRate
+  :max(0)+prev:min(x)
+with {
+  dir = x-prev;
+  prevDir = prev-prev';
+  changeRate = dir-prevDir;
+  //:max(0);
+  limitedChangeRate =
+    changeRate:min(maxRate) ;
+  dirRelMin= (dir/relFactorMin);
+  relFactorMin = holdTime*hslider("releaseMin", 0.14, 0, 1, 0.01);
+  maxRate = hslider("posRate", 0.5, 0, 11, 0.01):hbargraph("maxRate", 0, 11)/pow(holdTime,2);
+};
+
+changeRateLimitOLD(holdTime,prev,x) =
   prevDir
   // :min(dirRelMin)
   +limitedChangeRate
@@ -276,10 +245,12 @@ with {
            , changeRate
              // , changeRate*lookahead(LA)/holdTime*(hslider("posRate", 1, 0, 1, 0.01):pow(2))
              // , changeRate:min(hslider("posRate", 0.94, 0, 1, 0.01):pow(8)/pow(holdTime,hslider("pow", 2, 1, 4, .01)))
-           , changeRate:min(hslider("posRate", 0.94, 0, 1, 0.01):pow(8)/pow(holdTime,2))
+           , changeRate:min(maxRate)
            );
   dirRelMin= (dir/relFactorMin);
   relFactorMin = holdTime*hslider("releaseMin", 0.14, 0, 1, 0.01);
+  // maxRate = hslider("posRate", 0.94, 0, 1, 0.01):pow(8):hbargraph("maxRate", 0, 1)/pow(holdTime,2);
+  maxRate = hslider("posRate", 0.5, 0, 11, 0.01):hbargraph("maxRate", 0, 11)/pow(holdTime,2);
 };
 
 nrBlocks = 8;
