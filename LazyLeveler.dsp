@@ -46,7 +46,7 @@ LazyLeveler(LA,x) =
   // :slidingMax(holdTime(LA),lookahead(LA))@(lookahead(LA)-holdTime(LA))
   // )
   // , (x:hold(LA,holdTime(LA))~_)@(lookahead(LA))
-  x@(2*lookahead(LA)+(0*lookahead(LA-4)))
+  x@(5*lookahead(LA)+(0*lookahead(LA-4)))
 , (
   x
   :(hold(LA,holdTime(LA))~_)
@@ -56,17 +56,46 @@ LazyLeveler(LA,x) =
    // : si.lag_ud(hslider("release exp", 0, 0, 1, 0.01),0)
    // : (hold(LA,expHoldTime(LA))~_)
    // : (hold(LA,holdTime(LA))~_)
-  (
-    // ,((LArelease(LA,holdTime(LA)*htFactor)~_):(expRelease(LA,expHoldTime(LA))~_))
-    (((changeRateLimitPre(holdTime(LA)*htFactor)~_):LArelease(LA,holdTime(LA)*htFactor)~_):(convexRelease(LA))~_)
-  , (((changeRateLimitPre(holdTime(LA)*htFactor)~_):LArelease(LA,holdTime(LA)*htFactor)~_):si.lag_ud(lagUp(LA),0))
-    // ,((LArelease(LA,holdTime(LA)*htFactor)~_):(changeRateLimit(holdTime(LA)*htFactor)~_):si.lag_ud(lagUp(LA),0))
-    // ,_@lookahead(LA)
-   , ((LArelease(LA,holdTime(LA)*htFactor)~_):si.lag_ud(lagUp(LA),0))
-  )
+   (
+     // ,((LArelease(LA,holdTime(LA)*htFactor)~_):(expRelease(LA,expHoldTime(LA))~_))
+     // (((changeRateLimitPre(holdTime(LA)*htFactor)~_):LArelease(LA,holdTime(LA)*htFactor)~_):(convexRelease(LA))~_)
+
+
+     (((changeRateLimitPre(holdTime(LA)*htFactor)~_):LArelease(LA,holdTime(LA)*htFactor)~_))
+
+     // , (((changeRateLimitPre(holdTime(LA)*htFactor)~_):LArelease(LA,holdTime(LA)*htFactor)~_):lag_dud(lagDup(LA),lagDdown(LA)))
+     // ,((LArelease(LA,holdTime(LA)*htFactor)~_):(changeRateLimit(holdTime(LA)*htFactor)~_):si.lag_ud(lagUp(LA),0))
+     // ,_@lookahead(LA)
+     // , ((LArelease(LA,holdTime(LA)*htFactor)~_):si.lag_ud(lagDup(LA),0))
+     // , ((LArelease(LA,holdTime(LA)*htFactor)~_):si.lag_ud(lagUp(LA),0):(changeRateLimitPre(holdTime(LA)*htFactor)~_))
+     // , (si.lag_ud(lagUp(LA),0):(LArelease(LA,holdTime(LA)*htFactor)~_))
+   )
+
+  : convexAttack(LA)
+    // : (linAtt(LA-4)~_)
+  : (shapedAttack(LA)~_)
+  :si.lag_ud(lagUp(LA),0)
 )
   // , (x: (hold(LA,attackHold(LA))~_): convexAttack(LA): (shapedAttack(LA)~_)@(0*lookahead(LA-4)  ))
 ;
+
+
+lag_dud(up,dn) = FB(up,dn)~_
+with {
+  FB(up,dn,prev,x) =x <: ((isConvex,ba.tau2pole(up),ba.tau2pole(dn):select2),_:si.smooth):min(x)
+  with {
+  // isConvex = dir>dir';
+  // isConvex = dir>Pdir;
+  isConvex = changeRate>=changeRate';
+  changeRate = dir-Pdir;
+  // dir = prev-prev';
+  // Pdir = dir';
+  dir = x-prev;
+  Pdir = prev-prev';
+};
+};
+
+
 
 convexRelease(LA,prev,x) =
   (
@@ -76,35 +105,36 @@ convexRelease(LA,prev,x) =
 
      // newDir
      select2(
-        prev<=prev'
+        // prev<=prev'
+        x<=prev
       , newDir
       , ma.MAX
       )
-
-     // dir
+     // :max(0)
     )
     :min(x))
-  , speedup
-    // , prev<=prev'
-    // , (prevDir>prevDir')
-    with {
-    newDir =
-      select2(
-        speedup
-        // prevDir>prevDir'
+  // , speedup
+  // , x<=prev
+  // , prev<=prev'
+  // , (prevDir>prevDir')
+with {
+  newDir =
+    select2(
+      speedup
+      // prevDir>prevDir'
 
-        // , min(inputDir,dir)/hslider("convexDiv", 1, 1, 100, 0.1)
-        // ,inputDir/hslider("convexDiv", 1, 1, 100, 0.1)
-       ,prevDir/(1+pow(hslider("convexDiv", 0.25, 0, 1, 0.01),4))
-       , inputDir
-         // , dir
-      );
-    inputDir = x-x';
-    dir = x-prev;
-    prevDir =
-      prev-prev';
-    speedup = (inputDir>inputDir')*(inputDir>inputDir')';
-    // speedup = (inputDir>inputDir');
+      // , min(inputDir,dir)/hslider("convexDiv", 1, 1, 100, 0.1)
+      // ,inputDir/hslider("convexDiv", 1, 1, 100, 0.1)
+     ,prevDir/(1+pow(hslider("convexDiv", 0.25, 0, 1, 0.01),8)):min(prevDir)
+     , inputDir
+       // , dir
+    );
+  inputDir = x-x';
+  dir = x-prev;
+  prevDir =
+    prev-prev';
+  speedup = (inputDir>inputDir')*(inputDir>inputDir')';
+  // speedup = (inputDir>inputDir');
 };
 
 
@@ -122,8 +152,12 @@ with {
 
 
 lagUp(LA) = div(LA)/44100;
+lagDup(LA) = divDup(LA)/44100;
+lagDdown(LA) = divDdown(LA)/44100;
 
-div(LA) = hslider("div", 0, 0, 1, 0.01)*holdTime(LA);
+div(LA) = hslider("div", 0.22, 0, 1, 0.01)*holdTime(LA);
+divDup(LA) = hslider("divDup", 0, 0, 8, 0.01)*holdTime(LA);
+divDdown(LA) = hslider("divDdown", 0, 0, 1, 0.01)*holdTime(LA);
 
 
 expRelease1(LA,holdTime,prevGain,x) =
@@ -214,7 +248,7 @@ htFactor = hslider("htFactor", 0.2, 0, 1, 0.01);
 attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 2, 0.01):int:hbargraph("hold",0,lookahead(LA)):max(0):min(lookahead(LA));
 
 // attack = hslider("[1]attack", 1, 0, 1, 0.01);
-attack = hslider("[1]attack", 13, 0, 13, 0.1)/13;
+attack = hslider("[1]attack", 10, 0, 13, 0.1)/13;
 // attack = hslider("[1]attack", 6, 0, 6, 1)/6;
 
 
@@ -265,7 +299,7 @@ with {
     changeRate:min(maxRate) ;
   dirRelMin= (dir/relFactorMin);
   relFactorMin = holdTime*hslider("releaseMin", 0.14, 0, 1, 0.01);
-  maxRate = hslider("posRate Pre", 1, 0, 11, 0.01):hbargraph("maxRate Pre", 0, 11)/pow(holdTime,2);
+  maxRate = hslider("posRate Pre", 2, 0, 11, 0.01):hbargraph("maxRate Pre", 0, 11)/pow(holdTime,2);
 };
 
 changeRateLimit(holdTime,prev,x) =
@@ -598,7 +632,7 @@ with {
 // : max(prevGain)
 // : min(x@lookahead(LA));
 
-linAtt(0,prevGain,x) = linearAttack(0,x,prevGain);
+// linAtt(0,prevGain,x) = linearAttack(0,x,prevGain);
 linAtt(LA,prevGain,x) = linearAttack(LA,x,prevGain);
 
 linearAttack(0,x,prevGain) = x;
