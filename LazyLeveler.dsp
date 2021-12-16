@@ -5,35 +5,50 @@ declare license "GPLv3";
 
 import("stdfaust.lib");
 
-process =
+process(x,y) =
   // attackArray(LA)
   // : par(i, LA, hbargraph("lev%i",0,1.4))
 
-  LazyLeveler(LA,testSig(LA-5))
-  // LazyLeveler(LA,GR(x,y))
-  // <:
-  // (
-  // (_*x@(5*lookahead(LA)))
-  // , (_*y@(5*lookahead(LA)))
-  // )
+  // LazyLeveler(LA,testSig(LA-5))
+  LazyLeveler(LA,GR(x,y))
+  +outGain
+  :ba.db2linear
+   <:
+   (
+     (_*x@(5*lookahead(LA)))
+   , (_*y@(5*lookahead(LA)))
+   , (((_:ba.linear2db-outGain)):ba.db2linear)
+   , (((_:ba.linear2db-outGain))/thresh)
+   )
 
-  // blokjes
-  // sequentialBlockMinimumParOut(nrBlocks,lookahead(LA))
-  // slidingReduce(min,lookahead(LA),lookahead(LA),ma.INFINITY)
+   // blokjes
+   // sequentialBlockMinimumParOut(nrBlocks,lookahead(LA))
+   // slidingReduce(min,lookahead(LA),lookahead(LA),ma.INFINITY)
 
-  // testSig(LA):
-  // (convexAttack(nrBlocks,LA,Lookah))
+   // testSig(LA):
+   // (convexAttack(nrBlocks,LA,Lookah))
 
-  // ,_
-  // @Lookah
-  // )
-  // :par(i, 2, _@200000)
-  // :par(i, 5, _*.5)
+   // ,_
+   // @Lookah
+   // )
+   // :par(i, 2, _@200000)
+   // :par(i, 5, _*.5)
 with {
-  Lookah = hslider("Lookah", 0, 0, lookahead(LA), 1);
+  GR(x,y) = gain_computer(strength,thresh,knee,level(x,y));
+  level(x,y)  = max(abs(x),abs(y)): ba.linear2db;
   holdTime= Lookah;
   LA = 13;
+  gain_computer(strength,thresh,knee,level) =
+    select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2))),
+            0,
+            ((level-thresh+(knee/2)):pow(2)/(2*knee)),
+            (level-thresh)) : max(0)*-strength;
+
   // blokjes(x,n) =   sequentialBlockOperatorParOut(n,min,ma.INFINITY,lookahead(LA),x);
+  strength = hslider("strength", 1, 0, 1, 0.01);
+  thresh = hslider("thresh", 0, -60, 0, 0.1);
+  knee = hslider("knee", 0, -60, 0, 0.1);
+  outGain = hslider("outputgain", 0, 0, 60, 0.1);
 };
 
 //TODO: each stage caries it's GR and its properly delayed audio
@@ -81,12 +96,12 @@ LazyLeveler(LA,x) =
      <:
      (
        ((shapedAttack(LA)~_):(convexAttack(LA):si.lag_ud(lagUp(LA),0)))
-     , ((shapedAttackOLD(LA)~_):(convexAttack(LA):si.lag_ud(lagUp(LA),0)))
-     , (convexAttack(LA):(shapedAttackOLD(LA)~_):si.lag_ud(lagUp(LA),0))
+       // , ((shapedAttackOLD(LA)~_):(convexAttack(LA):si.lag_ud(lagUp(LA),0)))
+       // , (convexAttack(LA):(shapedAttackOLD(LA)~_):si.lag_ud(lagUp(LA),0))
      )
   )
-,
-  x@(5*lookahead(LA)+(0*lookahead(LA-4)))
+  // ,
+  // x@(5*lookahead(LA)+(0*lookahead(LA-4)))
 
   // , (x: (hold(LA,attackHold(LA))~_): convexAttack(LA): (shapedAttack(LA)~_)@(0*lookahead(LA-4)  ))
 ;
