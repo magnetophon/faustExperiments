@@ -47,7 +47,7 @@ with {
   // blokjes(x,n) =   sequentialBlockOperatorParOut(n,min,ma.INFINITY,lookahead(LA),x);
   strength = hslider("strength", 1, 0, 1, 0.01);
   thresh = hslider("thresh", 0, -60, 0, 0.1);
-  knee = hslider("knee", 0, -60, 0, 0.1);
+  knee = hslider("knee", 0, 0, 60, 0.1);
   outGain = hslider("outputgain", 0, 0, 60, 0.1);
 };
 
