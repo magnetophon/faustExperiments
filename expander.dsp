@@ -10,7 +10,7 @@ maxRelTime = 1;
 
 process(x,y) =
   FFexpander_N_chan(strength,threshold,range,attack,hold,release,knee,prePost,link,meter,2,x,y)
-  // , (level(hold,x):peak_expansion_gain_mono(strength,threshold,range,attack,release,knee,prePost)/range*-1)
+  // , (level(hold,x):peak_expansion_gain_mono(strength,threshold,range,attack,release,knee,prePost)/range*-1)  // for looking at the GR on the scope
 ;
 //--------------------`(co.)peak_expansion_gain_N_chan`-------------------
 // N channel dynamic range expander gain computer.
