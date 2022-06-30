@@ -1,4 +1,4 @@
-declare name "LazyLeveler";
+declare name "Expander";
 declare version "0.1";
 declare author "Bart Brouns";
 declare license "GPLv3";
@@ -7,9 +7,8 @@ import("stdfaust.lib");
 
 process(x) =
   x
-, expander(ratio,threshold,range,x)
-, (expander_gain_computer(ratio,threshold,range,level(x)):si.lag_ud(release,attack)/range*-1)
-
+, expander(ratio,threshold,range, attack,hold,release,x)
+, (expander_gain_computer(ratio,threshold,range,level(x,hold)):si.lag_ud(attack,release)/range*-1)
 ;
 
 // x = os.lf_saw(1);
@@ -24,9 +23,9 @@ expander_gain_computer(ratio,thresh,range,level) =
                                 * (-1+(2*(ratio>0)))
 ;
 
-OKexpander_gain_computer(strength,thresh,range,level) =
+OKexpander_gain_computer(ratio,thresh,range,level) =
   (
-    // overThreshold * overThresholdGain
+    // overThreshold * overThresholdGain // always 0
     // ,
     inRange * inRangeGain
   , underRange * underRangeGain
@@ -43,17 +42,18 @@ with {
 
 
 maxRelTime = 1;
-expander(strength,thresh,range,x) =
-  (expander_gain_computer(strength,thresh,range,level(x))
-   :si.lag_ud(release,attack)
+expander(ratio,thresh,range, attack,hold,release,x) =
+  (expander_gain_computer(ratio,thresh,range,level(x,hold))
+   :si.lag_ud(attack,release)
    :ba.db2linear
   ) *x;
 
 SCexpander(strength,thresh,knee,att,rel,SC,x) = (expander_gain_computer(strength,thresh,knee,level(att,rel,SC)):ba.db2linear):meter*x;
 
-level(x) =
+level(x,hold) =
   // x;
-  x:abs:ba.linear2db;
+  x:abs:ba.linear2db:ba.slidingMax(hold*ma.SR,192000);
+// x:abs:ba.linear2db;
 comp_group(x) = vgroup("COMPRESSOR  [tooltip: Reference: http://en.wikipedia.org/wiki/Dynamic_range_compression]", x);
 
 meter_group(x)  = comp_group(vgroup("[0]", x));
@@ -73,7 +73,7 @@ strength = ctl_group(hslider("[0] Strength [style:knob]
 
 ratio = ctl_group(hslider("[0] Ratio [style:knob]
       [tooltip: A compression Strength of 0 means no gain reduction and 1 means full gain reduction]",
-                          1, -8, 8, 0.01));
+                          8, -100, 100, 0.1));
 duck_strength =
   ctl_group(hslider("[-1] Duck Strength [style:knob]
           [tooltip: A compression Strength of 0 means no gain reduction and 1 means full gain reduction]",
@@ -86,11 +86,11 @@ expand_strength =
 
 threshold = ctl_group(hslider("[1] Threshold [unit:dB] [style:knob]
       [tooltip: When the signal level exceeds the Threshold (in dB), its level is compressed according to the Strength]",
-                              0, maxGR, 10, 0.1));
+                              maxGR, maxGR, 10, 0.1));
 
 range = ctl_group(hslider("[1] Range [unit:dB] [style:knob]
       [tooltip: When the signal level exceeds the Threshold (in dB), its level is compressed according to the Strength]",
-                          0, maxGR, 0, 0.1));
+                          maxGR*0.3, maxGR, 0, 0.1));
 
 knee = ctl_group(hslider("[2] Knee [unit:dB] [style:knob]
       [tooltip: soft knee amount in dB]",
@@ -112,14 +112,17 @@ env_group(x)  = knob_group(hgroup("[4] Compression Response", x));
 
 attack = env_group(hslider("[1] Attack [unit:ms] [style:knob] [scale:log]
       [tooltip: Time constant in ms (1/e smoothing time) for the compression gain to approach (exponentially) a new lower target level (the compression `kicking in')]",
-                           0.1, 0.001, 1000, 0.01)-0.001) : *(0.001) :max(0) :hbargraph("attack", 0, 1);
+                           2, 0.001, 1000, 0.1)-0.001) : *(0.001) :max(0) :hbargraph("attack", 0, 1);
+hold = env_group(hslider("[1] Hold [unit:ms] [style:knob] [scale:log]
+      [tooltip: Time constant in ms (1/e smoothing time) for the compression gain to approach (exponentially) a new lower target level (the compression `kicking in')]",
+                         30, 0.001, 1000, 0.1)-0.001) : *(0.001) :max(0) :hbargraph("hold", 0, 1);
 // The actual attack value is 0.1 smaller than the one displayed.
 // This is done for hard limiting:
 // You need 0 attack for that, but a log scale starting at 0 is useless
 
 release = env_group(hslider("[2] Release [unit:ms] [style: knob] [scale:log]
       [tooltip: Time constant in ms (1/e smoothing time) for the compression gain to approach (exponentially) a new higher target level (the compression 'releasing')]",
-                            100, 0.001, maxRelTime*1000, 0.1)-0.001) : *(0.001) : max(0): hbargraph("release", 0, 1);
+                            42, 0.001, maxRelTime*1000, 0.1)-0.001) : *(0.001) : max(0): hbargraph("release", 0, 1);
 
 prePost = env_group(checkbox("[3] slow/fast  [tooltip: Unchecked: log  domain return-to-threshold detector
       Checked: linear return-to-fi.zero detector]")*-1)+1;
