@@ -5,19 +5,22 @@ declare license "GPLv3";
 
 import("stdfaust.lib");
 
-// process(x) =
-process =
+process(x) =
+  // process =
   x
-, expander(ratio,threshold,range, attack,hold,release,x)
+, expander(strength,threshold,range,attack,hold,release,x)
+  //
   // , (expander_gain_computer(ratio,threshold,range,level(x,hold)):si.lag_ud(attack,release)/range*-1)
-  // , (level(x,hold):peak_expansion_gain_mono(strength,threshold,attack,release,knee,prePost)/range*-1)
-, (x:peak_expansion_gain_mono(strength,threshold,attack,release,knee,prePost)/range*-1)
+
+, (level(x,hold):peak_expansion_gain_mono(strength,threshold,range,attack,release,knee,prePost)/range*-1)
+
+  // , (x:peak_expansion_gain_mono(strength,threshold,attack,release,knee,prePost)/range*-1)
   // , (((level(x,hold)>(threshold-(knee/2)))+(level(x,hold)>(threshold+(knee/2))))/2)
-, (((x>(threshold-(knee/2)))+(x>(threshold+(knee/2))))/2)
+  // , (((x>(threshold-(knee/2)))+(x>(threshold+(knee/2))))/2)
 ;
 
 // x = (os.lf_saw(100)-1)/2;
-x = os.lf_saw(100)*-1;
+// x = os.lf_saw(100)*-1;
 // x = os.lf_saw(1)*makeupgain;
 
 // expander(x,y) =
@@ -47,11 +50,13 @@ with {
 };
 
 
-maxRelTime = 1;
-expander(ratio,thresh,range, attack,hold,release,x) =
-  (expander_gain_computer(ratio,thresh,range,level(x,hold))
-   :si.lag_ud(attack,release)
-   :ba.db2linear
+maxRelTime = 0.1;
+expander(strength,thresh,range,attack,hold,release,x) =
+  (
+    // expander_gain_computer(ratio,thresh,range,level(x,hold))
+    // :si.lag_ud(attack,release)
+    peak_expansion_gain_mono(strength,thresh,range,attack,release,knee,prePost,level(x,hold))
+    :ba.db2linear
   ) *x;
 
 SCexpander(strength,thresh,knee,att,rel,SC,x) = (expander_gain_computer(strength,thresh,knee,level(att,rel,SC)):ba.db2linear):meter*x;
@@ -75,7 +80,7 @@ ctl_group(x)  = knob_group(hgroup("[3] Compression Control", x));
 
 strength = ctl_group(hslider("[0] Strength [style:knob]
       [tooltip: A compression Strength of 0 means no gain reduction and 1 means full gain reduction]",
-                             1, 0, 8, 0.01));
+                             8, -100, 100, 0.1));
 
 ratio = ctl_group(hslider("[0] Ratio [style:knob]
       [tooltip: A compression Strength of 0 means no gain reduction and 1 means full gain reduction]",
@@ -214,17 +219,20 @@ peak_expansion_gain_N_chan(strength,thresh,att,rel,knee,prePost,link,N) =
 
 // note: si.lag_ud has a bug where if you compile with standard precision,
 // down is 0 and prePost is 1, you go into infinite GR and stay there
-peak_expansion_gain_mono(strength,thresh,att,rel,knee,prePost) =
-  ba.bypass1(prePost,si.lag_ud(att,rel)) : gain_computer(strength,thresh,knee) : ba.bypass1((prePost !=1),si.lag_ud(att,rel))
+// peak_expansion_gain_mono(strength,thresh,range,att,rel,knee,prePost,level(x,hold))
+peak_expansion_gain_mono(strength,thresh,range,att,rel,knee,prePost,level) =
+  level:ba.bypass1(prePost,si.lag_ud(att,rel)) : gain_computer(strength,thresh,range,knee) : ba.bypass1((prePost !=1),si.lag_ud(att,rel))
 with {
-  gain_computer(strength,thresh,range,level) =
+  gain_computer(strength,thresh,range,knee,level) =
     // , (((level(x,hold)>(threshold-(knee/2)))+(level(x,hold)>(threshold+(knee/2))))/2)
-    select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2)))
-           , (level-thresh)
-             // , ((level-thresh+(knee/2)) : pow(2)/(2*max(ma.EPSILON,knee)))
-           , ((level-thresh-(knee/2)):pow(2) /(min(ma.EPSILON,knee*-2)))
-           , 0
-           )  *strength;
+    ( select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2)))
+             , (level-thresh)
+               // , ((level-thresh+(knee/2)) : pow(2)/(2*max(ma.EPSILON,knee)))
+             , ((level-thresh-(knee/2)):pow(2) /(min(ma.EPSILON,knee*-2)))
+             , 0
+             )  *abs(strength):max(range)
+                               * (-1+(2*(strength>0)))
+    ):max(range);
   // ) : max(0)*strength:min(range);
 
   // gain_computer(strength,thresh,knee,level) =
