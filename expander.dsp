@@ -8,7 +8,9 @@ import("stdfaust.lib");
 process(x) =
   x
 , expander(ratio,threshold,range, attack,hold,release,x)
-, (expander_gain_computer(ratio,threshold,range,level(x,hold)):si.lag_ud(attack,release)/range*-1)
+  // , (expander_gain_computer(ratio,threshold,range,level(x,hold)):si.lag_ud(attack,release)/range*-1)
+, (level(x,hold):peak_expansion_gain_mono(strength,threshold,attack,release,knee,prePost)/range*-1)
+, (((level(x,hold)>(threshold-(knee/2)))+(level(x,hold)>(threshold+(knee/2))))/2)
 ;
 
 // x = os.lf_saw(1);
@@ -209,17 +211,20 @@ peak_expansion_gain_N_chan(strength,thresh,att,rel,knee,prePost,link,N) =
 // note: si.lag_ud has a bug where if you compile with standard precision,
 // down is 0 and prePost is 1, you go into infinite GR and stay there
 peak_expansion_gain_mono(strength,thresh,att,rel,knee,prePost) =
-  abs : ba.bypass1(prePost,si.lag_ud(att,rel)) : ba.linear2db : gain_computer(strength,thresh,knee) : ba.bypass1((prePost !=1),si.lag_ud(rel,att)) : ba.db2linear
+  ba.bypass1(prePost,si.lag_ud(rel,att)) : gain_computer(strength,thresh,knee) : ba.bypass1((prePost !=1),si.lag_ud(rel,att))
 with {
   gain_computer(strength,thresh,range,level) =
-    select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2))),
-            0,
-            ((level-thresh+(knee/2)) : pow(2)/(2*max(ma.EPSILON,knee))),
-            (level-thresh))
-    : max(0)*-strength;
+    // , (((level(x,hold)>(threshold-(knee/2)))+(level(x,hold)>(threshold+(knee/2))))/2)
+    select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2)))
+           , (level-thresh)
+             // , ((level-thresh+(knee/2)) : pow(2)/(2*max(ma.EPSILON,knee)))
+           , ((level-thresh-(knee/2)):pow(2) /(min(ma.EPSILON,knee*-2)))
+           , 0
+           )  *strength;
+  // ) : max(0)*strength:min(range);
 
   // gain_computer(strength,thresh,knee,level) =
-  // select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2))),
+// select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2))),
   // 0,
   // ((level-thresh+(knee/2)) : pow(2)/(2*max(ma.EPSILON,knee))),
   // (level-thresh))
