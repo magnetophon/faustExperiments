@@ -8,10 +8,14 @@ import("stdfaust.lib");
 // maximum time in seconds for attack, hold and release
 maxRelTime = 1;
 
-process(x,y) =
-  FFexpander_N_chan(strength,threshold,range,attack,hold,release,knee,prePost,link,meter,2,x,y)
+process =
+  FFexpanderSS_N_chan(strength,threshold,range,attack,hold,release,knee,prePost,link,meter,sidechain(freq),2)
+  // FFexpander_N_chan(strength,threshold,range,attack,hold,release,knee,prePost,link,meter,2)
   // , (level(hold,x):peak_expansion_gain_mono(strength,threshold,range,attack,release,knee,prePost)/range*-1)  // for looking at the GR on the scope
 ;
+// example sidechain function
+sidechain(freq) = fi.highpass(1,freq);
+freq = hslider("SC HP freq", 240, 1, 20000, 1);
 //--------------------`(co.)peak_expansion_gain_N_chan`-------------------
 // N channel dynamic range expander gain computer.
 // `peak_expansion_gain_N_chan` is a standard Faust function.
@@ -75,6 +79,7 @@ with {
 
 level(hold,x) =
   x:abs:ba.slidingMax(hold*ma.SR,192000*maxRelTime);
+// x;
 
 //--------------------`(co.)FFexpander_N_chan`-------------------
 // feed forward N channel dynamic range expander.
@@ -112,7 +117,11 @@ declare FFexpander_N_chan license "GPLv3";
 
 // feed forward expander
 FFexpander_N_chan(strength,thresh,range,att,hold,rel,knee,prePost,link,meter,N) =
-  si.bus(N) <: (peak_expansion_gain_N_chan(strength,thresh,range,att,hold,rel,knee,prePost,link,N),si.bus(N)) : ro.interleave(N,2) : par(i,N,(meter:ba.db2linear)*_);
+  FFexpanderSS_N_chan(strength,thresh,range,att,hold,rel,knee,prePost,link,meter, _, N);
+// feed forward expander with sidechain
+FFexpanderSS_N_chan(strength,thresh,range,att,hold,rel,knee,prePost,link,meter, sidechain, N) =
+  si.bus(N) <: ((par(i, N, sidechain) : peak_expansion_gain_N_chan(strength,thresh,range,att,hold,rel,knee,prePost,link,N)),si.bus(N)) : ro.interleave(N,2) : par(i,N,(meter:ba.db2linear)*_);
+
 
 //---------------------------------- GUI --------------------------------------
 expander_group(x) = vgroup("Expander / Upward Compressor", x);
@@ -165,3 +174,7 @@ prePost = env_group(checkbox("[3] slow/fast  [tooltip: Unchecked: log  domain re
 link = env_group(hslider("[4] link [style:knob]
       [tooltip: 0 means all channels get individual gain reduction, 1 means they all get the same gain reduction]",
                          1, 0, 1, 0.01));
+
+// meter upward
+// SC function
+// lin / log
