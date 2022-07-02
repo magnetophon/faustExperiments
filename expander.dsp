@@ -9,13 +9,16 @@ import("stdfaust.lib");
 maxRelTime = 1;
 
 process =
-  FFexpanderSS_N_chan(strength,threshold,range,attack,hold,release,knee,prePost,link,meter,sidechain(freq),2)
+  FFexpanderSC_N_chan(strength,threshold,range,attack,hold,release,knee,prePost,link,meter,2,sidechain(freq),SCswitch)
   // FFexpander_N_chan(strength,threshold,range,attack,hold,release,knee,prePost,link,meter,2)
   // , (level(hold,x):peak_expansion_gain_mono(strength,threshold,range,attack,release,knee,prePost)/range*-1)  // for looking at the GR on the scope
 ;
 // example sidechain function
 sidechain(freq) = fi.highpass(1,freq);
 freq = hslider("SC HP freq", 240, 1, 20000, 1);
+
+
+
 //--------------------`(co.)peak_expansion_gain_N_chan`-------------------
 // N channel dynamic range expander gain computer.
 // `peak_expansion_gain_N_chan` is a standard Faust function.
@@ -79,7 +82,6 @@ with {
 
 level(hold,x) =
   x:abs:ba.slidingMax(hold*ma.SR,192000*maxRelTime);
-// x;
 
 //--------------------`(co.)FFexpander_N_chan`-------------------
 // feed forward N channel dynamic range expander.
@@ -117,10 +119,55 @@ declare FFexpander_N_chan license "GPLv3";
 
 // feed forward expander
 FFexpander_N_chan(strength,thresh,range,att,hold,rel,knee,prePost,link,meter,N) =
-  FFexpanderSS_N_chan(strength,thresh,range,att,hold,rel,knee,prePost,link,meter, _, N);
+  FFexpanderSC_N_chan(strength,thresh,range,att,hold,rel,knee,prePost,link,meter,N,_,0,0);
+
+//--------------------`(co.)FFexpanderSC_N_chan`-------------------
+// feed forward N channel dynamic range expander.
+// `FFexpanderSC_N_chan` is a standard Faust function.
+//
+// #### Usage
+//
+// ```
+// si.bus(N) : FFexpanderSC_N_chan(strength,thresh,range,att,hold,rel,knee,prePost,link,meter,N,SCfunction,SCswitch,SCsignal) : si.bus(N)
+// ```
+//
+// Where:
+//
+// * `strength`: strength of the expansion (0 = no expansion, 100 means gating, <1 means upward compression)
+// * `thresh`: dB level threshold below which expansion kicks in
+// * `range`: maximum amount of expansion in dB
+// * `att`: attack time = time constant (sec) coming out of expansion
+// * `hold` : hold time
+// * `rel`: release time = time constant (sec) going into expansion
+// * `knee`: a gradual increase in gain reduction around the threshold:
+// Above thresh+(knee/2) there is no gain reduction,
+// below thresh-(knee/2) there is the same gain reduction as without a knee,
+// and in between there is a gradual increase in gain reduction.
+// * `prePost`: places the level detector either at the input or after the gain computer;
+// this turns it from a linear return-to-zero detector into a log  domain return-to-range detector
+// * `link`: the amount of linkage between the channels. 0 = each channel is independent, 1 = all channels have the same amount of gain reduction
+// * `meter`: a gain reduction meter. It can be implemented like so:
+// meter = _<:(_, (ba.linear2db:max(maxGR):meter_group((hbargraph("[1][unit:dB][tooltip: gain reduction in dB]", maxGR, 0))))):attach;
+// * `N`: the number of channels of the expander
+// * `SCfunction` : a function that get's placed before the level-detector; needs to have a single input and output
+// * `SCswitch` : use either the regular audio inout or the SCsignal as the input for the level detector
+// * `SCsignal` : An audiosignal, to be used as the inout for the level detector when SCswitch is 1
+//
+//------------------------------------------------------------
+
+declare FFexpanderSC_N_chan author "Bart Brouns";
+declare FFexpanderSC_N_chan license "GPLv3";
+
 // feed forward expander with sidechain
-FFexpanderSS_N_chan(strength,thresh,range,att,hold,rel,knee,prePost,link,meter, sidechain, N) =
-  si.bus(N) <: ((par(i, N, sidechain) : peak_expansion_gain_N_chan(strength,thresh,range,att,hold,rel,knee,prePost,link,N)),si.bus(N)) : ro.interleave(N,2) : par(i,N,(meter:ba.db2linear)*_);
+FFexpanderSC_N_chan(strength,thresh,range,att,hold,rel,knee,prePost,link,meter,N,SCfunction,SCswitch,SCsignal) =
+  si.bus(N) <:
+  ((par(i, N, select2(SCswitch,_,SCsignal):SCfunction)
+    : peak_expansion_gain_N_chan(strength,thresh,range,att,hold,rel,knee,prePost,link,N))
+  ,si.bus(N))
+  : ro.interleave(N,2)
+  : par(i,N,(meter:ba.db2linear)*_);
+
+
 
 
 //---------------------------------- GUI --------------------------------------
@@ -168,8 +215,11 @@ release = env_group(hslider("[3] Release [unit:ms] [style: knob] [scale:log]
       [tooltip: Time constant in ms (1/e smoothing time) for the compression gain to approach (exponentially) a new higher target level (the compression 'releasing')]",
                             42, 0.001, maxRelTime*1000, 0.1)-0.001) : *(0.001) : max(0);
 
-prePost = env_group(checkbox("[3] slow/fast  [tooltip: Unchecked: log  domain return-to-threshold detector
+sw_group(x)  = env_group(vgroup("[3]", x));
+prePost = sw_group(checkbox("[1] slow/fast  [tooltip: Unchecked: log  domain return-to-threshold detector
       Checked: linear return-to-zero detector]")*-1)+1;
+SCswitch = sw_group(checkbox("[2] External SideChain  [tooltip: Unchecked: original signal
+      Checked: Use external Sidechain]")*-1)+1;
 
 link = env_group(hslider("[4] link [style:knob]
       [tooltip: 0 means all channels get individual gain reduction, 1 means they all get the same gain reduction]",
