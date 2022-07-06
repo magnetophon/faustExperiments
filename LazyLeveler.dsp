@@ -5,21 +5,23 @@ declare license "GPLv3";
 
 import("stdfaust.lib");
 
+DG(x) = tgroup("limiter", vgroup("[1]controlls", x));
+AG(x) = tgroup("limiter", vgroup("[2]tweaks", x));
+
 process(x,y) =
   // attackArray(LA)
   // : par(i, LA, hbargraph("lev%i",0,1.4))
 
   // LazyLeveler(LA,testSig(LA-5))
-  LazyLeveler(LA,GR(x,y))
-  +outGain
+  LazyLeveler(LA,GR(x*inGain,y*inGain))
+  // +outGain
   :ba.db2linear
    <:
    (
-     (_*x@(5*lookahead(LA)))
-   , (_*y@(5*lookahead(LA)))
-     // , (((_:ba.linear2db-outGain)):ba.db2linear)
-   , ((GR(x,y)/(thresh:min(0.0001))*-1)@(5*lookahead(LA)))
-   , (((_:ba.linear2db-outGain))/(thresh:min(0.0001))*-1)
+     (_*(x*inGain)@(5*lookahead(LA)))
+   , (_*(y*inGain)@(5*lookahead(LA)))
+   , (((_:ba.linear2db)):ba.db2linear)
+   , (((_:ba.linear2db))/(thresh:min(ma.EPSILON)))
    )
 
    // blokjes
@@ -37,7 +39,7 @@ process(x,y) =
 with {
   GR(x,y) = gain_computer(strength,thresh,knee,level(x,y));
   level(x,y)  = max(abs(x),abs(y)): ba.linear2db;
-  // holdTime= Lookah;
+  holdTime= Lookah;
   LA = 13;
   gain_computer(strength,thresh,knee,level) =
     select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2))),
@@ -46,17 +48,13 @@ with {
             (level-thresh)) : max(0)*-strength;
 
   // blokjes(x,n) =   sequentialBlockOperatorParOut(n,min,ma.INFINITY,lookahead(LA),x);
-  strength = hslider("strength", 1, 0, 1, 0.01);
-  thresh = hslider("thresh", 0, -60, 0, 0.1);
-  knee = hslider("knee", 0, 0, 60, 0.1);
+  strength = AG(hslider("strength", 1, 0, 1, 0.01));
+  thresh = DG(hslider("[4]thresh", 0, -60, 0, 0.1));
+  knee = DG(hslider("[5]knee", 0, 0, 60, 0.1));
+  inGain = DG(hslider("[1]inputgain", 0, 0, 60, 0.1)): ba.db2linear;
   outGain = hslider("outputgain", 0, 0, 60, 0.1);
 };
 
-// attack = hslider("[1]attack", 1, 0, 1, 0.01);
-// attack(LA) = hslider("[1]attack", LA-2, 0, LA, 0.1)/LA;
-attack = hslider("[1]attack", 13-2, 0, 13, 0.1)/13;
-// attack = hslider("[1]attack", 6, 0, 6, 1)/6;
-//
 //TODO: each stage caries it's GR and its properly delayed audio
 
 LazyLeveler(LA,x) =
@@ -188,7 +186,7 @@ lagUp(LA) = div(LA)/44100;
 lagDup(LA) = divDup(LA)/44100;
 lagDdown(LA) = divDdown(LA)/44100;
 
-div(LA) = hslider("div", 0.22, 0, 1, 0.01)*holdTime(LA);
+div(LA) = AG(hslider("div", 0.22, 0, 1, 0.01))*holdTime(LA);
 divDup(LA) = hslider("divDup", 0, 0, 8, 0.01)*holdTime(LA);
 divDdown(LA) = hslider("divDdown", 0, 0, 1, 0.01)*holdTime(LA);
 
@@ -270,16 +268,15 @@ with {
 
 };
 
+// attack = hslider("[1]attack", 1, 0, 1, 0.01);
+// attack(LA) = hslider("[1]attack", LA-2, 0, LA, 0.1)/LA;
+attack = DG(hslider("[2]attack", 8.8, 0, 13, 0.1))/13;
+// attack = hslider("[1]attack", 6, 0, 6, 1)/6;
 
 // holdTime(LA) = hslider("holdTime", lookahead(LA)/nrBlocks, 0, lookahead(LA), 1);
-holdTime(LA) = pow(2,hslider("[2]release", LA-2, 0, LA, 0.1))-1:max(0);
+holdTime(LA) = pow(2,DG(hslider("[3]release", 11.2, 0, LA, 0.1)))-1:max(0);
 expHoldTime(LA) = hslider("expHoldTime", lookahead(LA)/nrBlocks, 0, lookahead(LA), nrBlocks);
-// htFactor = hslider("htFactor", 0.2, 0, 1, 0.01)/10000;
-// htFactor = pow(hslider("htFactor", 0.2, 0, 1, 0.01),2)/10000;
-// htFactor = (hslider("htFactor[scale:log]", 0.2, 0, 1, 0.01)<:(_,_):*)/10000;
-// htFactor = hslider("htFactor[scale:log]", 0.2, 0, 1, 0.01)/10000;
-htFactorPart = hslider("htFactor[scale:log]", 0.2, 0, 1, 0.01);
-htFactor = pow(htFactorPart,6):max(0):min(1)/1000;
+htFactor = AG(hslider("htFactor", 0.2, 0, 1, 0.01));
 // attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 1, 0.01):int+1:max(0):min(lookahead(LA));
 // attackHold(LA) = hslider("holdTime", lookahead(LA), 0, lookahead(LA), 1);
 // attackHold(LA) = pow(2,attack*LA-1)*hslider("attackHold", 1, 0, 1, 0.01):int:hbargraph("hold",0,lookahead(LA)):max(0):min(lookahead(LA));
@@ -334,10 +331,8 @@ with {
     changeRate:min(maxRate) ;
   dirRelMin= (dir/relFactorMin);
   relFactorMin = holdTime*hslider("releaseMin", 0.14, 0, 1, 0.01);
-  // maxRate = hslider("posRate Pre![scale:log]", 0.5, 0, 1, 0.01):hbargraph("maxRate Pre", 0, 1)/pow(holdTime,2)/(ma.SR*1000);
-  // maxRate = hslider("posRate Pre", 2, 0, 11, 0.01):hbargraph("maxRate Pre", 0, 11)/pow(holdTime,2);
-  maxRate = pow(hslider("posRate Pre!", 0.01, 0, 0.01, 0.001)*0.01,4):max(0):min(1):hbargraph("maxRate Pre", 0, 1)/pow(holdTime,3)/(ma.SR*10000);
-  // maxRate = (hslider("posRate Pre!", 0.5, 0, 1, 0.01):pow(2)):hbargraph("maxRate Pre", 0, 1)/pow(holdTime,2)/(ma.SR*1000);
+  maxRate = AG(hslider("posRate Pre", 2, 0, 11, 0.01))/pow(holdTime,2);
+  // maxRate = AG(hslider("posRate Pre", 2, 0, 11, 0.01)):hbargraph("maxRate Pre", 0, 11)/pow(holdTime,2);
 };
 
 changeRateLimit(holdTime,prev,x) =
