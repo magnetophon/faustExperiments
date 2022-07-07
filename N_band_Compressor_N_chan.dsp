@@ -6,17 +6,15 @@ declare license "AGPLv3";
 import("stdfaust.lib");
 
 process =
-  Eight_band_Compressor_N_chan(2)
-  // co.FFcompressor_N_chan(1,-30,0.001,0.042,1,1,1,_,2)
-;
+  Eight_band_Compressor_N_chan(2) ;
 
 Eight_band_Compressor_N_chan(N) =
-  crossover
-  // (par(i, N, (_/Nr_bands)<:si.bus(Nr_bands)):ro.interleave(Nr_bands,N))
-  :
-  compressors
+  inputGain
+  : crossover
+  : compressors
   :mixer
 with {
+  inputGain = par(i, N, _*inGain);
   crossover =
     (
       (crossoverFreqs<:par(i, Nr_crossoverFreqs, _<:si.bus(N)))
@@ -28,15 +26,16 @@ with {
   compressors =
     (strength_array , thresh_array , att_array , rel_array , knee_array , link_array, ro.interleave(N,Nr_bands))
     : ro.interleave(Nr_bands,6+N)
-    : par(i, Nr_bands, compressor(meter(i),N,prePost))
+    : par(i, Nr_bands, compressor(meter(i+1),N,prePost))
   ;
   compressor(meter,N,prePost,strength,thresh,att,rel,knee,link) =
     co.FFcompressor_N_chan(strength,thresh,att,rel,knee,prePost,link,meter,N);
   mixer = si.bus(N*Nr_bands):>si.bus(N);
-  meter(i) = _<:(_, (ba.linear2db:hbargraph("[%i][unit:dB]%i[tooltip: gain reduction in dB]", -40, 0))):attach;
+  meter(i) = _<:(_, (ba.linear2db:MG(vbargraph("[%i][unit:dB]%i[tooltip: gain reduction in dB]", -40, 0)))):attach;
   maxGR = -30;
+  inGain = CG(hslider("[1]inputGain", 0, -30, 30, 0.1)):ba.db2linear;
   crossoverFreqs = BT(hslider("[1]freq", 80, 20, 20000, 1)):LogArray(Nr_crossoverFreqs);
-  strength_array = BTli(hslider("[2]strength", 1, 0, 1, 0.1));
+  strength_array = BTli(hslider("[2]strength", 1, 0, 8, 0.1));
   thresh_array = BTli(hslider("[3]thresh", 0, -60, 0, 0.1));
   att_array = (BTlo(hslider("[4]att", 1, 0, 100, 0.1)*0.001));
   rel_array = BTlo(hslider("[5]rel", 42, 1, 1000, 1)*0.001);
@@ -50,8 +49,10 @@ with {
     b = bottom:max(ma.EPSILON);
   };
 
+  CG(x) = vgroup("[1]controlls", x);
+  MG(x) = hgroup("[2]gain reduction", x);
   // make a bottom and a top version of a parameter
-  BT(x) = hgroup("BT", vgroup("[1]bottom", x),vgroup("[2]top", x));
+  BT(x) = CG(hgroup("[2]", vgroup("[1]bottom", x),vgroup("[2]top", x)));
   BTlo(x) = BT(x):LogArray(Nr_bands);
   BTli(x) = BT(x):LinArray(Nr_bands);
   Nr_bands = 8;
