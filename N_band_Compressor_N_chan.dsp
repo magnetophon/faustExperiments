@@ -3,8 +3,8 @@ declare version "0.1";
 declare author "Bart Brouns";
 declare license "AGPLv3";
 
-// import("stdfaust.lib");
-import("/home/bart/source/faustlibraries/stdfaust.lib");
+import("stdfaust.lib");
+// import("/home/bart/source/faustlibraries/stdfaust.lib");
 
 process =
   Eight_band_Compressor_N_chan(2) ;
@@ -35,7 +35,8 @@ with {
   compressor(meter,N,prePost,strength,thresh,att,rel,knee,link) =
     co.FFcompressor_N_chan(strength,thresh,att,rel,knee,prePost,link,meter,N);
   meter(i) =
-    _<:(_, (max(-40):min(0):MG(vbargraph("[%i][unit:dB]%i[tooltip: gain reduction in dB]", -40, 0)))):attach;
+    // _<:(_, (max(-40):min(0):MG(vbargraph("[%i][unit:dB]%i[tooltip: gain reduction in dB]", -40, 0)))):attach;
+    _<:(_, (ba.linear2db:max(-40):min(0):MG(vbargraph("[%i][unit:dB]%i[tooltip: gain reduction in dB]", -40, 0)))):attach;
   inGain = CG(hslider("[1]input gain", 0, -30, 30, 0.1)):ba.db2linear;
   crossoverFreqs = BT(hslider("[1]freq", 60, 20, 20000, 1),hslider("[1]freq", 8000, 20, 20000, 1)):LogArray(Nr_crossoverFreqs);
   strength_array = BTli(hslider("[2]strength", 1, 0, 8, 0.1),hslider("[2]strength", 1, 0, 8, 0.1));
