@@ -7,7 +7,13 @@ import("stdfaust.lib");
 // import("/home/bart/source/faustlibraries/stdfaust.lib");
 
 process =
-  Eight_band_Compressor_N_chan(2) ;
+  MSencode(MSon):
+  Eight_band_Compressor_N_chan(2)
+  : MSdecode(MSon)
+;
+
+MSon = checkbox("MS on");
+
 
 Eight_band_Compressor_N_chan(N) =
   inputGain
@@ -54,7 +60,6 @@ with {
     b = bottom:max(ma.EPSILON);
     t = top:max(ma.EPSILON);
   };
-
   CG(x) = vgroup("[1]controlls", x);
   MG(x) = hgroup("[2]gain reduction", x);
   // make a bottom and a top version of a parameter
@@ -66,3 +71,18 @@ with {
   prePost = 1;
   maxGR = -30;
 };
+
+MSencode(on,l,r) =
+  select2(on
+         , l
+         , ((l+r)/sqrt(2)))
+, select2(on
+         , r
+         , ((l-r)/sqrt(2)));
+MSdecode(on,m,s) =
+  select2(on
+         , m
+         , ((m+s)/sqrt(2)))
+, select2(on
+         , s
+         , ((m-s)/sqrt(2)));
