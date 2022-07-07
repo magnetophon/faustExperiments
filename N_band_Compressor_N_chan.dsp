@@ -7,12 +7,16 @@ import("stdfaust.lib");
 // import("/home/bart/source/faustlibraries/stdfaust.lib");
 
 process =
-  MSencode(MSon):
-  Eight_band_Compressor_N_chan(2)
+  DCblock(2)
+  : MSencode(MSon)
+  : Eight_band_Compressor_N_chan(2)
   : MSdecode(MSon)
 ;
 
+DCblock(N) = par(i, N, fi.dcblockerat(fb));
+
 MSon = checkbox("MS on");
+fb = hslider("dc block", 20, 0, 50, 0.1);
 
 
 Eight_band_Compressor_N_chan(N) =
