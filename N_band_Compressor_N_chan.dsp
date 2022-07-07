@@ -3,7 +3,8 @@ declare version "0.1";
 declare author "Bart Brouns";
 declare license "AGPLv3";
 
-import("stdfaust.lib");
+// import("stdfaust.lib");
+import("/home/bart/source/faustlibraries/stdfaust.lib");
 
 process =
   Eight_band_Compressor_N_chan(2) ;
@@ -34,15 +35,15 @@ with {
   compressor(meter,N,prePost,strength,thresh,att,rel,knee,link) =
     co.FFcompressor_N_chan(strength,thresh,att,rel,knee,prePost,link,meter,N);
   meter(i) =
-    _<:(_, (ba.linear2db:MG(vbargraph("[%i][unit:dB]%i[tooltip: gain reduction in dB]", -40, 0)))):attach;
+    _<:(_, (max(-40):min(0):MG(vbargraph("[%i][unit:dB]%i[tooltip: gain reduction in dB]", -40, 0)))):attach;
   inGain = CG(hslider("[1]input gain", 0, -30, 30, 0.1)):ba.db2linear;
-  crossoverFreqs = BT(hslider("[1]freq", 80, 20, 20000, 1)):LogArray(Nr_crossoverFreqs);
-  strength_array = BTli(hslider("[2]strength", 1, 0, 8, 0.1));
-  thresh_array = BTli(hslider("[3]thresh", 0, -60, 0, 0.1));
-  att_array = (BTlo(hslider("[4]att", 1, 0, 100, 0.1)*0.001));
-  rel_array = BTlo(hslider("[5]rel", 42, 1, 1000, 1)*0.001);
-  knee_array = BTli(hslider("[6]knee", 3, 0, 30, 0.1));
-  link_array = BTli(hslider("[7]link", 1, 0, 1, 0.1));
+  crossoverFreqs = BT(hslider("[1]freq", 60, 20, 20000, 1),hslider("[1]freq", 8000, 20, 20000, 1)):LogArray(Nr_crossoverFreqs);
+  strength_array = BTli(hslider("[2]strength", 1, 0, 8, 0.1),hslider("[2]strength", 1, 0, 8, 0.1));
+  thresh_array = BTli(hslider("[3]thresh", -24, -60, 0, 0.1),hslider("[3]thresh", -24, -60, 0, 0.1));
+  att_array = BTlo(hslider("[4]att", 13, 0, 100, 0.1)*0.001,hslider("[4]att", 0.1, 0, 100, 0.1)*0.001);
+  rel_array = BTlo(hslider("[5]rel", 130, 1, 1000, 1)*0.001,hslider("[5]rel", 26, 1, 1000, 1)*0.001);
+  knee_array = BTli(hslider("[6]knee", 0, 0, 30, 0.1),hslider("[6]knee", 30, 0, 30, 0.1));
+  link_array = BTli(hslider("[7]link", 1, 0, 1, 0.1),hslider("[7]link", 0.2, 0, 1, 0.1));
   outGain = CG(hslider("[3]output gain", 0, -30, 30, 0.1)):ba.db2linear;
   // make a linear array of values, from bottom to top
   LinArray(N,bottom,top) = par(i,N,   ((top-bottom)*(i/(N-1)))+bottom);
@@ -56,9 +57,9 @@ with {
   CG(x) = vgroup("[1]controlls", x);
   MG(x) = hgroup("[2]gain reduction", x);
   // make a bottom and a top version of a parameter
-  BT(x) = CG(hgroup("[2]", vgroup("[1]bottom", x),vgroup("[2]top", x)));
-  BTlo(x) = BT(x):LogArray(Nr_bands);
-  BTli(x) = BT(x):LinArray(Nr_bands);
+  BT(b,t) = CG(hgroup("[2]", vgroup("[1]bottom", b),vgroup("[2]top", t)));
+  BTlo(b,t) = BT(b,t):LogArray(Nr_bands);
+  BTli(b,t) = BT(b,t):LinArray(Nr_bands);
   Nr_bands = 8;
   Nr_crossoverFreqs = Nr_bands-1;
   prePost = 1;
