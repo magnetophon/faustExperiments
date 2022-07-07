@@ -13,7 +13,7 @@ process =
   : MSdecode(MSon)
 ;
 
-DCblock(N) = par(i, N, fi.dcblockerat(fb));
+DCblock(N) = par(i, N, ba.bypass1(fb==0,fi.dcblockerat(fb)));
 
 MSon = checkbox("MS on");
 fb = hslider("dc block", 20, 0, 50, 0.1);
