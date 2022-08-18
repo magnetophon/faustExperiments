@@ -7,7 +7,13 @@ import("stdfaust.lib");
 // import("/home/bart/source/faustlibraries/stdfaust.lib");
 
 process =
-  N_band_Compressor_N_chan(2);
+  N_band_Compressor_N_chan(3,4);
+// EightBandMS_Comp;
+// gain(8);
+
+gain(N,strength,thresh,att,rel,knee,prePost,link) =
+  newco.peak_compression_gain_N_chan_db(strength,thresh,att,rel,knee,prePost,link,8);
+
 
 EightBandMS_Comp =
   DCblock(2)
@@ -22,15 +28,22 @@ MSon = checkbox("MS on");
 fb = hslider("dc block", 20, 0, 50, 0.1);
 
 
-N_band_Compressor_N_chan(N) =
-  // inputGain
-  // :
-  crossover_N_band(3,8)
-  // : compressors
+N_band_Compressor_N_chan(N,Nb) =
+  inputGain
+  :
+  crossover
+  :
+  compressors
   // : mixer
   // : outputGain
 with {
   inputGain = par(i, N, _*inGain);
+  crossover =
+    par(i, N,
+        (crossoverFreqs ,_)
+        : crossover_N_band(3,Nb)
+       )
+    :  ro.interleave(Nb,N);
   crossover_N_band(O,Nb) =
     bsplit(Nb)
     // _ <: bsplit(Nb)
@@ -38,8 +51,7 @@ with {
     lp = fi.lowpass(O);
     hp = fi.highpass(O);
     // i = 0;
-    bsplit(0) = 0:!;
-                bsplit(1) = _;
+    bsplit(1) = _;
     bsplit(2) =
       (s,s):ro.interleave(2,2):
       hp,lp ;
@@ -65,25 +77,20 @@ with {
     s = _<:(_,_);
   };
 
-  analyzer(O,lfreqs) = _ <: bsplit(nb)
-  with {
-    nb = ba.count(lfreqs);
-    fc(n) = ba.take(n, lfreqs);
-    lp(n) = fi.lowpass(O,fc(n));
-    hp(n) = fi.highpass(O,fc(n));
-    bsplit(0) = _;
-    bsplit(i) = hp(i), (lp(i) <: bsplit(i-1));
-  };
-
   compressors =
     (strength_array , thresh_array , att_array , rel_array , knee_array , link_array, ro.interleave(N,Nr_bands))
     : ro.interleave(Nr_bands,6+N)
     : par(i, Nr_bands, compressor(meter(i+1),N,prePost)) ;
+  // x =
+  // co.peak_compression_gain_N_chan_db(strength,thresh,att,rel,knee,prePost,link,N);
   mixer = si.bus(N*Nr_bands):>si.bus(N);
   outputGain = par(i, N, _*outGain);
 
   compressor(meter,N,prePost,strength,thresh,att,rel,knee,link) =
-    co.FFcompressor_N_chan(strength,thresh,att,rel,knee,prePost,link,meter,N);
+    newco.peak_compression_gain_N_chan_db(strength,thresh,att,rel,knee,prePost,link,N)
+    : par(i,N,meter)
+  ;
+
   meter(i) =
     // _<:(_, (max(-40):min(0):MG(vbargraph("[%i][unit:dB]%i[tooltip: gain reduction in dB]", -40, 0)))):attach;
     _<:(_, (ba.linear2db:max(-40):min(0):MG(vbargraph("[%i][unit:dB]%i[tooltip: gain reduction in dB]", -40, 0)))):attach;
@@ -110,7 +117,7 @@ with {
   BT(b,t) = CG(hgroup("[2]", vgroup("[1]bottom", b),vgroup("[2]top", t)));
   BTlo(b,t) = BT(b,t):LogArray(Nr_bands);
   BTli(b,t) = BT(b,t):LinArray(Nr_bands);
-  Nr_bands = 8;
+  Nr_bands = Nb;
   Nr_crossoverFreqs = Nr_bands-1;
   prePost = 1;
   maxGR = -30;
@@ -189,3 +196,27 @@ MSdecode(on,m,s) =
 , select2(on
          , s
          , ((m-s)/sqrt(2)));
+
+
+newco =
+  environment {
+    peak_compression_gain_N_chan_db(strength,thresh,att,rel,knee,prePost,link,1) =
+      peak_compression_gain_mono_db(strength,thresh,att,rel,knee,prePost);
+
+    peak_compression_gain_N_chan_db(strength,thresh,att,rel,knee,prePost,link,N) =
+      par(i, N, peak_compression_gain_mono_db(strength,thresh,att,rel,knee,prePost))
+      <: (si.bus(N),(ba.parallelMin(N) <: si.bus(N))) : ro.interleave(N,2) : par(i,N,(it.interpolate_linear(link)));
+
+    peak_compression_gain_mono_db(strength,thresh,att,rel,knee,prePost) =
+      abs : ba.bypass1(prePost,si.onePoleSwitching(att,rel)) : ba.linear2db : gain_computer(strength,thresh,knee) : ba.bypass1((prePost !=1),si.onePoleSwitching(rel,att))
+    with {
+      gain_computer(strength,thresh,knee,level) =
+        select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2))),
+                0,
+                ((level-thresh+(knee/2)) : pow(2)/(2*max(ma.EPSILON,knee))),
+                (level-thresh))
+        : max(0)*-strength;
+    };
+
+
+  };
