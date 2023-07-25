@@ -15,7 +15,7 @@ ex = library("expanders.lib");
 init_leveler_target = -18;
 init_leveler_maxboost = 40;
 init_leveler_maxcut = 40;
-init_leveler_gatethreshold = -45;
+init_leveler_gatethreshold = -24;
 init_leveler_speed = 25;
 
 process = leveler_sc(target)~(_,_);
@@ -38,36 +38,37 @@ with {
     : si.onePoleSwitching(release,attack)
     : leveler_meter_gain
   with {
-    long_lufs = short_lufs:si.onePoleSwitching(long_length*0.22,long_length)
-    ;
+    long_lufs = short_lufs:si.onePoleSwitching(long_length*0.22,long_length);
     long_diff = (target-long_lufs)
                 // : hbargraph("[2]long diff[unit:dB]", -30, 30)
     ;
     undead_att =
-      long_diff:min(0)/(0-(deadzone:max(ma.EPSILON))):min(1):pow(0.5) ;
+      long_diff:min(0)/(0-(long_length:max(ma.EPSILON))):min(1):pow(hslider("att pow", 2, 1, 10, 0.1))*hslider("att mul", 69, 1, 100, 0.1):autoSat:hbargraph("att speed", 0, 1) ;
     undead_rel =
-      long_diff:max(0)/(deadzone:max(ma.EPSILON)):min(1) ;
-    attack = att / (((speedfactor*(1-undead_att))+undead_att):max(ma.EPSILON));
-    release = rel * (leveler_expander*ma.MAX+1) / (((speedfactor*(1-undead_rel))+undead_rel):max(ma.EPSILON));
+      long_diff:max(0)/(long_length:max(ma.EPSILON)):min(1):pow(hslider("att pow", 2, 1, 10, 0.1))*hslider("att mul", 69, 1, 100, 0.1):autoSat:hbargraph("rel speed", 0, 1) ;
+    // attack = att / (((speedfactor*(1-undead_att))+undead_att):max(ma.EPSILON));
+    // release = rel * (leveler_expander*ma.MAX+1) / (((speedfactor*(1-undead_rel))+undead_rel):max(ma.EPSILON));
+    attack = att / (undead_att:max(ma.EPSILON));
+    release = rel * (leveler_expander*ma.MAX+1) / (undead_rel:max(ma.EPSILON));
     diff = abs(target - lufs);
     speedfactor = ( autoSat(
                       (diff/(deadzone*0.5)
                       ) -1
                     ) +1
-                  ) *0.5;
+                  ) *0.5 :pow(hslider("power", 1, 0.1, 10, 0.1));
   };
 
 
   limit(lo,hi) = min(hi) : max(lo);
 
-  speed_scale = 0.25+(1-leveler_speed);
+  speed_scale = (1.6-leveler_speed);
   att = speed_scale *
-        3;
+        6;
   // hslider("[98]att[unit:s]", 3, 0, 10, 0.1);
   rel = speed_scale *
-        12;
+        13;
   long_length =
-    (1-leveler_speed):pow(3)*24+6;
+    (1-leveler_speed):pow(3)*42+6;
   deadzone =
     long_length;
   // from: https://github.com/zamaudio/zam-plugins/blob/8cd23d781018e3ec84159958d3d2dc7038a82736/plugins/ZamAutoSat/ZamAutoSatPlugin.cpp#L71
