@@ -38,10 +38,11 @@ with {
     : si.onePoleSwitching(release,attack)
     : leveler_meter_gain
   with {
-    long_lufs = short_lufs:si.onePoleSwitching(long_length*0.22,long_length);
-    long_diff = (target-long_lufs)
-                // : hbargraph("[2]long diff[unit:dB]", -30, 30)
-    ;
+    // long_lufs = short_lufs:si.onePoleSwitching(long_length*0.22,long_length);
+    long_diff = (target-lufs)
+                :si.onePoleSwitching(long_length*0.11*(leveler_expander*ma.MAX+1),long_length*0.5*(leveler_expander*ma.MAX+1))
+                 // long_diff = (target-long_lufs)
+                : hbargraph("[2]long diff[unit:dB]", -20, 20) ;
     undead_att =
       long_diff:min(0)/(0-(long_length:max(ma.EPSILON))):min(1):pow(hslider("att pow", 2, 1, 10, 0.1))*hslider("att mul", 69, 1, 100, 0.1):autoSat:hbargraph("att speed", 0, 1) ;
     undead_rel =
@@ -63,7 +64,7 @@ with {
 
   speed_scale = (1.6-leveler_speed);
   att = speed_scale *
-        6;
+        3;
   // hslider("[98]att[unit:s]", 3, 0, 10, 0.1);
   rel = speed_scale *
         13;
