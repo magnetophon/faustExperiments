@@ -9,6 +9,7 @@ import("stdfaust.lib");
 
 ebu = library("lib/ebur128.dsp");
 ex = library("expanders.lib");
+sig = library("sigmoid.lib");
 
 
 
@@ -23,7 +24,8 @@ process = leveler_sc(target)~(_,_);
 target = hslider("target", -14, -23, -6, 1);
 
 
-
+// GT4 2014-2015 Modification of a sine wave using a 3 stage NTSF chain. Version 1. Dino Dini. 29/04/2015
+// https://www.desmos.com/calculator/nbzgwyd7fz
 
 leveler_sc(target,fl,fr,l,r) =
   (calc(lk2(fl,fr),lk2_short(fl,fr))*(1-bp)+bp)
@@ -34,23 +36,33 @@ with {
   FB(lufs,short_lufs,prev_gain) =
     (target - short_lufs)
     +(prev_gain )
-    :  limit(limit_neg,limit_pos)
+    : limit(limit_neg,limit_pos)
     : si.onePoleSwitching(release,attack)
     : leveler_meter_gain
   with {
     // long_lufs = short_lufs:si.onePoleSwitching(long_length*0.22,long_length);
-    long_diff = (target-lufs)
-                :si.onePoleSwitching(long_length*0.11*(leveler_expander*ma.MAX+1),long_length*0.5*(leveler_expander*ma.MAX+1))
+    long_diff = (target-lufs)*dead_range:max(0-dead_range):min(dead_range)
+                :si.onePoleSwitching(long_length*3*(leveler_expander*ma.MAX+1),long_length*0.4*(leveler_expander*ma.MAX+1))
                  // long_diff = (target-long_lufs)
                 : hbargraph("[2]long diff[unit:dB]", -20, 20) ;
+
+    dead_range = hslider("dead range", 6, 0.1, 24, 0.1);
+
+    dead_att =
+      long_diff:min(0)/(0-(long_length:max(ma.EPSILON))):min(1):sig.sigmoid(k1,k2,k3):hbargraph("att speed", 0, 1) ;
+    dead_rel =
+      long_diff:max(0)/(long_length:max(ma.EPSILON)):min(1):sig.sigmoid(k1,k2,k3):hbargraph("rel speed", 0, 1) ;
+
     undead_att =
-      long_diff:min(0)/(0-(long_length:max(ma.EPSILON))):min(1):pow(hslider("att pow", 2, 1, 10, 0.1))*hslider("att mul", 69, 1, 100, 0.1):autoSat:hbargraph("att speed", 0, 1) ;
+      long_diff:min(0)/(0-(long_length:max(ma.EPSILON))):min(1):pow(hslider("att pow", 1.5, 1, 10, 0.1))*hslider("att mul", 69, 1, 100, 0.1):autoSat:hbargraph("att speed", 0, 1) ;
     undead_rel =
-      long_diff:max(0)/(long_length:max(ma.EPSILON)):min(1):pow(hslider("att pow", 2, 1, 10, 0.1))*hslider("att mul", 69, 1, 100, 0.1):autoSat:hbargraph("rel speed", 0, 1) ;
+      long_diff:max(0)/(long_length:max(ma.EPSILON)):min(1):pow(hslider("att pow", 1.5, 1, 10, 0.1))*hslider("att mul", 69, 1, 100, 0.1):autoSat:hbargraph("rel speed", 0, 1) ;
     // attack = att / (((speedfactor*(1-undead_att))+undead_att):max(ma.EPSILON));
     // release = rel * (leveler_expander*ma.MAX+1) / (((speedfactor*(1-undead_rel))+undead_rel):max(ma.EPSILON));
-    attack = att / (undead_att:max(ma.EPSILON));
-    release = rel * (leveler_expander*ma.MAX+1) / (undead_rel:max(ma.EPSILON));
+    attack = att
+             / (dead_att:max(ma.EPSILON));
+    release = (rel * (leveler_expander*ma.MAX+1))
+              / (dead_rel:max(ma.EPSILON));
     diff = abs(target - lufs);
     speedfactor = ( autoSat(
                       (diff/(deadzone*0.5)
@@ -64,7 +76,7 @@ with {
 
   speed_scale = (1.6-leveler_speed);
   att = speed_scale *
-        3;
+        4;
   // hslider("[98]att[unit:s]", 3, 0, 10, 0.1);
   rel = speed_scale *
         13;
@@ -100,6 +112,11 @@ with {
   limit_neg = vslider("v:soundsgood/t:expert/h:[3]leveler/[8][symbol:leveler_max_minus][unit:db]leveler max -", init_leveler_maxcut, 0, 60, 1) : ma.neg;
   length = 0.4;
 };
+
+k1 = hslider("k1", -0.94, -1+ma.EPSILON, 1-ma.EPSILON, 0.01);
+k2 = hslider("k2", 0.5, -1+ma.EPSILON, 1-ma.EPSILON, 0.01);
+k3 = hslider("k3", 0.94, -1+ma.EPSILON, 1-ma.EPSILON, 0.01);
+// k3 = k1*-1;
 // +++++++++++++++++++++++++ LUFS METER +++++++++++++++++++++++++
 
 lk2_var(Tg)= par(i,2,kfilter : zi) :> 4.342944819 * log(max(1e-12)) : -(0.691) with {
