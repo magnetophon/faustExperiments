@@ -41,17 +41,20 @@ with {
     : leveler_meter_gain
   with {
     // long_lufs = short_lufs:si.onePoleSwitching(long_length*0.22,long_length);
-    long_diff = (target-lufs)*dead_range:max(0-dead_range):min(dead_range)
-                :si.onePoleSwitching(long_length*3*(leveler_expander*ma.MAX+1),long_length*0.4*(leveler_expander*ma.MAX+1))
-                 // long_diff = (target-long_lufs)
-                : hbargraph("[2]long diff[unit:dB]", -20, 20) ;
+    long_diff = (target-lufs)
+                :si.onePoleSwitching((leveler_expander*ma.MAX+1),(leveler_expander*ma.MAX+1))
+                : hbargraph("[2]long diff[unit:dB]", -24, 24)
+                :max(0-dead_range):min(dead_range)
+                :si.onePoleSwitching(long_length*1,long_length*0.2)
+                 / dead_range
+                : hbargraph("[3]norm long diff", -1, 1);
 
     dead_range = hslider("dead range", 6, 0.1, 24, 0.1);
 
     dead_att =
-      long_diff:min(0)/(0-(long_length:max(ma.EPSILON))):min(1):sig.sigmoid(k1,k2,k3):hbargraph("att speed", 0, 1) ;
+      long_diff:min(0)*-1:min(1):sig.sigmoid(k1,k2,k3):hbargraph("att speed", 0, 1) ;
     dead_rel =
-      long_diff:max(0)/(long_length:max(ma.EPSILON)):min(1):sig.sigmoid(k1,k2,k3):hbargraph("rel speed", 0, 1) ;
+      long_diff:max(0):min(1):sig.sigmoid(k1,k2,k3):hbargraph("rel speed", 0, 1) ;
 
     undead_att =
       long_diff:min(0)/(0-(long_length:max(ma.EPSILON))):min(1):pow(hslider("att pow", 1.5, 1, 10, 0.1))*hslider("att mul", 69, 1, 100, 0.1):autoSat:hbargraph("att speed", 0, 1) ;
@@ -63,7 +66,8 @@ with {
              / (dead_att:max(ma.EPSILON));
     release = (rel * (leveler_expander*ma.MAX+1))
               / (dead_rel:max(ma.EPSILON));
-    diff = abs(target - lufs);
+    diff = abs(target - lufs)
+           :si.onePoleSwitching((leveler_expander*ma.MAX+1),(leveler_expander*ma.MAX+1));
     speedfactor = ( autoSat(
                       (diff/(deadzone*0.5)
                       ) -1
@@ -81,7 +85,7 @@ with {
   rel = speed_scale *
         13;
   long_length =
-    (1-leveler_speed):pow(3)*42+6;
+    (1-leveler_speed):pow(3)*42+6:hbargraph("long length", 5, 50);
   deadzone =
     long_length;
   // from: https://github.com/zamaudio/zam-plugins/blob/8cd23d781018e3ec84159958d3d2dc7038a82736/plugins/ZamAutoSat/ZamAutoSatPlugin.cpp#L71
@@ -102,7 +106,7 @@ with {
   prePost = 1;
 
   bp = checkbox("v:soundsgood/t:expert/h:[3]leveler/[1]leveler bypass[symbol:leveler_bypass]") : si.smoo;
-  leveler_meter_gain = hbargraph("v:soundsgood/h:easy/[4][unit:dB][symbol:leveler_gain]leveler gain",-40,40);
+  leveler_meter_gain = hbargraph("v:soundsgood/h:easy/[4][unit:dB][symbol:leveler_gain]leveler gain",-24,24);
   meter_leveler_gate =  vbargraph("v:soundsgood/t:expert/h:[3]leveler/[6][unit:%]leveler gate[symbol:leveler_gate]",0,1);
 
   leveler_speed = vslider("v:soundsgood/t:expert/h:[3]leveler/[4][unit:%][symbol:leveler_speed]leveler speed", init_leveler_speed, 0, 100, 1) * 0.01;
