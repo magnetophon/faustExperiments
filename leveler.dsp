@@ -67,18 +67,20 @@ with {
 
   leveler_meter_gain = hbargraph("v:soundsgood/h:easy/[4][unit:dB][symbol:leveler_gain]leveler gain",-40,40);
 
-  gate = dif_short>-10:hbargraph("gate", 0, 1);
+  gate = dif_momentary<10:hbargraph("gate", 0, 1);
 
   attack =
     hslider("attack", 1, 0.1, 10, 1)
     / ( (mult(short_over,dead_range) * mult(long_over, long_dead_range))
         // : si.onePoleSwitching(long_attack,long_release)long_attack
+        *gate
         :hbargraph("att speed", 0, 1))
   ;
   release =
     hslider("release", 5, 0.1, 30, 1)
     / ( (mult(short_under,dead_range) * mult(long_under,long_dead_range))
         // : si.onePoleSwitching(long_release,long_attack)
+        *gate
         :hbargraph("rel speed", 0, 1));
 
   long_attack =
