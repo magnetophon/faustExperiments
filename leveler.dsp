@@ -21,7 +21,6 @@ Only the last stage
 
 process =
   leveler_sc(target) ~ (_,_);
-// lk2_var_gated(3,checkbox("gate"));
 
 
 target = hslider("target", init_leveler_target, -23, -6, 1);
@@ -39,8 +38,8 @@ limit_neg = vslider("v:soundsgood/t:expert/h:[3]leveler/[8][symbol:leveler_max_m
 leveler_sc(target,fl,fr,l,r) =
   (calc(
       lk2_momentary(fl,fr)
-     ,lk2_short(gate(lk2_momentary(fl,fr)),fl,fr)
-     , lk2_long(gate(lk2_momentary(fl,fr)),fl,fr))
+     ,lk2_short(gate(target-lk2_momentary(fl,fr)),fl,fr)
+     , lk2_long(gate(target-lk2_momentary(fl,fr)),fl,fr))
    *(1-bp)+bp)
   <: (_*l,_*r)
 with {
@@ -78,14 +77,14 @@ with {
       hslider("attack", 1, 0.1, 10, 1)
       / ( (mult(short_over,dead_range) * mult(long_over, long_dead_range))
           // : si.onePoleSwitching(long_attack,long_release)long_attack
-          *gate(dif_momentary)
+          *gate(target-lk2_momentary(fl,fr))
           :hbargraph("att speed", 0, 1))
     ;
     release =
       hslider("release", 5, 0.1, 30, 1)
       / ( (mult(short_under,dead_range) * mult(long_under,long_dead_range))
           // : si.onePoleSwitching(long_release,long_attack)
-          *gate(dif_momentary)
+          *gate(target-lk2_momentary(fl,fr))
           :hbargraph("rel speed", 0, 1));
 
     long_attack =
@@ -118,9 +117,8 @@ lk2_var_gated(Tg,gate)= par(i,2,kfilter : zi) :> 4.342944819 * log(max(1e-12)) :
   maxSR = 192000;
   sump(n) = ba.slidingSump(n, Tg*maxSR)/max(n,1);
   envelope(period,gate, x) =
-    x * x
-    :(select2(gate,_,_)
-      : sump(rint(period * ma.SR)))~_;
+    (select2(gate,_,x*x)
+     : sump(rint(period * ma.SR)))~_;
   //Tg = 3; // 3 second window for 'short-term' measurement
   zi = envelope(Tg,gate); // mean square: average power = energy/Tg = integral of squared signal / Tg
 
