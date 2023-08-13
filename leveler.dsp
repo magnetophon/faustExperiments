@@ -20,7 +20,8 @@ Only the last stage
 
 
 process =
-  leveler_sc(target)~(_,_);
+  leveler_sc(target) ~ (_,_);
+// lk2_var_gated(3,checkbox("gate"));
 
 
 target = hslider("target", init_leveler_target, -23, -6, 1);
@@ -36,63 +37,67 @@ limit_neg = vslider("v:soundsgood/t:expert/h:[3]leveler/[8][symbol:leveler_max_m
 // https://www.desmos.com/calculator/nbzgwyd7fz
 
 leveler_sc(target,fl,fr,l,r) =
-  (calc(lk2_momentary(fl,fr),lk2_short(fl,fr),lk2_long(fl,fr))*(1-bp)+bp)
+  (calc(
+      lk2_momentary(fl,fr)
+     ,lk2_short(gate(lk2_momentary(fl,fr)),fl,fr)
+     , lk2_long(gate(lk2_momentary(fl,fr)),fl,fr))
+   *(1-bp)+bp)
   <: (_*l,_*r)
 with {
 
+  gate(dif_momentary) = dif_momentary<10:hbargraph("gate", 0, 1);
   calc(momentary,short,long) = FB(momentary,short,long)~_: ba.db2linear
   with {
 
-  FB(momentary,short,long,prev_gain) =
-    dif_momentary
-    +(prev_gain )
-    : limit(limit_neg,limit_pos)
-    : si.onePoleSwitching(release,attack)
-    : leveler_meter_gain
-  ;
-  dif_momentary = target - momentary:hbargraph("dif momentary[unit:dB]", -24, 24);
-  dif_short = target - short:hbargraph("dif short[unit:dB]", -24, 24);
-  dif_long = target - long:hbargraph("dif long[unit:dB]", -24, 24);
+    FB(momentary,short,long,prev_gain) =
+      dif_momentary
+      +(prev_gain )
+      : limit(limit_neg,limit_pos)
+        <: si.onePoleSwitching(release,attack)
+      : leveler_meter_gain
+    ;
+    dif_momentary = target - momentary:hbargraph("dif momentary[unit:dB]", -24, 24);
+    dif_short = target - short:hbargraph("dif short[unit:dB]", -24, 24);
+    dif_long = target - long:hbargraph("dif long[unit:dB]", -24, 24);
 
-  short_over = dif_short*-1:max(ma.EPSILON);
-  short_under = dif_short:max(ma.EPSILON);
+    short_over = dif_short*-1:max(ma.EPSILON);
+    short_under = dif_short:max(ma.EPSILON);
 
-  long_over = dif_long*-1:max(ma.EPSILON);
-  long_under = dif_long:max(ma.EPSILON);
+    long_over = dif_long*-1:max(ma.EPSILON);
+    long_under = dif_long:max(ma.EPSILON);
 
-  mult(level,range) =  level / range:min(1);
+    mult(level,range) =  level / range:min(1);
 
-  dead_range = hslider("dead range", 6, 0.1, 24, 0.1);
-  long_dead_range = hslider("long_dead range", 3, 0.1, 24, 0.1);
+    dead_range = hslider("dead range", 6, 0.1, 24, 0.1);
+    long_dead_range = hslider("long_dead range", 3, 0.1, 24, 0.1);
 
-  leveler_meter_gain = hbargraph("v:soundsgood/h:easy/[4][unit:dB][symbol:leveler_gain]leveler gain",-40,40);
+    leveler_meter_gain = hbargraph("v:soundsgood/h:easy/[4][unit:dB][symbol:leveler_gain]leveler gain",-40,40);
 
-  gate = dif_momentary<10:hbargraph("gate", 0, 1);
 
-  attack =
-    hslider("attack", 1, 0.1, 10, 1)
-    / ( (mult(short_over,dead_range) * mult(long_over, long_dead_range))
-        // : si.onePoleSwitching(long_attack,long_release)long_attack
-        *gate
-        :hbargraph("att speed", 0, 1))
-  ;
-  release =
-    hslider("release", 5, 0.1, 30, 1)
-    / ( (mult(short_under,dead_range) * mult(long_under,long_dead_range))
-        // : si.onePoleSwitching(long_release,long_attack)
-        *gate
-        :hbargraph("rel speed", 0, 1));
+    attack =
+      hslider("attack", 1, 0.1, 10, 1)
+      / ( (mult(short_over,dead_range) * mult(long_over, long_dead_range))
+          // : si.onePoleSwitching(long_attack,long_release)long_attack
+          *gate(dif_momentary)
+          :hbargraph("att speed", 0, 1))
+    ;
+    release =
+      hslider("release", 5, 0.1, 30, 1)
+      / ( (mult(short_under,dead_range) * mult(long_under,long_dead_range))
+          // : si.onePoleSwitching(long_release,long_attack)
+          *gate(dif_momentary)
+          :hbargraph("rel speed", 0, 1));
 
-  long_attack =
-    hslider("long attack", 1, 0.1, 10, 1)
-    / (mult(long_over)
-       :hbargraph("long att speed", 0, 1))
-  ;
-  long_release =
-    hslider("long release", 5, 0.1, 30, 1)
-    / (mult(long_under)
-       :hbargraph("long rel speed", 0, 1));
-};
+    long_attack =
+      hslider("long attack", 1, 0.1, 10, 1)
+      / (mult(long_over)
+         :hbargraph("long att speed", 0, 1))
+    ;
+    long_release =
+      hslider("long release", 5, 0.1, 30, 1)
+      / (mult(long_under)
+         :hbargraph("long rel speed", 0, 1));
+  };
 };
 
 limit(minimum, maximum) = max(minimum):min(maximum);
@@ -108,9 +113,23 @@ lk2_var(Tg)= par(i,2,kfilter : zi) :> 4.342944819 * log(max(1e-12)) : -(0.691) w
   kfilter = ebu.prefilter;
 };
 
+lk2_var_gated(Tg,gate)= par(i,2,kfilter : zi) :> 4.342944819 * log(max(1e-12)) : -(0.691) with {
+  // maximum assumed sample rate is 192k
+  maxSR = 192000;
+  sump(n) = ba.slidingSump(n, Tg*maxSR)/max(n,1);
+  envelope(period,gate, x) =
+    x * x
+    :(select2(gate,_,_)
+      : sump(rint(period * ma.SR)))~_;
+  //Tg = 3; // 3 second window for 'short-term' measurement
+  zi = envelope(Tg,gate); // mean square: average power = energy/Tg = integral of squared signal / Tg
+
+  kfilter = ebu.prefilter;
+};
+
 lufs_meter_in(l,r) = l,r <: l, attach(r, (lk2_short : vbargraph("v:soundsgood/h:easy/[2][unit:dB][symbol:lufs_in]in lufs-s",-70,0))) : _,_;
 lufs_meter_out(l,r) = l,r <: l, attach(r, (lk2_short : vbargraph("v:soundsgood/h:easy/[7][unit:dB][symbol:lufs_out]out lufs-s",-70,0))) : _,_;
 
 lk2_momentary = lk2_var(0.4);
-lk2_short = lk2_var(3);
-lk2_long = lk2_var(22.5);
+lk2_short(gate) = lk2_var_gated(3,gate);
+lk2_long(gate) = lk2_var_gated(22.5,gate);
