@@ -44,7 +44,7 @@ leveler_sc(target,fl,fr,l,r) =
   <: (_*l,_*r)
 with {
 
-  gate(dif_momentary) = dif_momentary<10:hbargraph("gate", 0, 1);
+  gate(dif_momentary) = dif_momentary<10:hbargraph("[113]gate", 0, 1);
   calc(momentary,short,long) = FB(momentary,short,long)~_: ba.db2linear
   with {
 
@@ -55,9 +55,9 @@ with {
         <: si.onePoleSwitching(release,attack)
       : leveler_meter_gain
     ;
-    dif_momentary = target - momentary:hbargraph("dif momentary[unit:dB]", -24, 24);
-    dif_short = target - short:hbargraph("dif short[unit:dB]", -24, 24);
-    dif_long = target - long:hbargraph("dif long[unit:dB]", -24, 24);
+    dif_momentary = target - momentary:hbargraph("[110]dif momentary[unit:dB]", -24, 24);
+    dif_short = target - short:hbargraph("[111]dif short[unit:dB]", -24, 24);
+    dif_long = target - long:hbargraph("[112]dif long[unit:dB]", -24, 24);
 
     short_over = dif_short*-1:max(ma.EPSILON);
     short_under = dif_short:max(ma.EPSILON);
@@ -67,33 +67,35 @@ with {
 
     mult(level,range) =  level / range:min(1);
 
-    dead_range = hslider("dead range", 6, 0.1, 24, 0.1);
-    long_dead_range = hslider("long_dead range", 3, 0.1, 24, 0.1);
+    dead_range = hslider("[12]dead range[unit:dB]", 6, 0.1, 24, 0.1);
+    long_dead_range =
+      dead_range*0.5;
+    // hslider("long_dead range", 3, 0.1, 24, 0.1);
 
     leveler_meter_gain = hbargraph("v:soundsgood/h:easy/[4][unit:dB][symbol:leveler_gain]leveler gain",-40,40);
 
 
     attack =
-      hslider("attack", 1, 0.1, 10, 1)
+      hslider("[10]attack", 1, 0.1, 10, 0.1)
       / ( (mult(short_over,dead_range) * mult(long_over, long_dead_range))
           // : si.onePoleSwitching(long_attack,long_release)long_attack
           *gate(target-lk2_momentary(fl,fr))
-          :hbargraph("att speed", 0, 1))
+          :hbargraph("[13]att speed", 0, 1))
     ;
     release =
-      hslider("release", 5, 0.1, 30, 1)
+      hslider("[11]release", 5, 0.1, 30, 0.1)
       / ( (mult(short_under,dead_range) * mult(long_under,long_dead_range))
           // : si.onePoleSwitching(long_release,long_attack)
           *gate(target-lk2_momentary(fl,fr))
-          :hbargraph("rel speed", 0, 1));
+          :hbargraph("[14]rel speed", 0, 1));
 
     long_attack =
-      hslider("long attack", 1, 0.1, 10, 1)
+      hslider("long attack", 1, 0.1, 10, 0.1)
       / (mult(long_over)
          :hbargraph("long att speed", 0, 1))
     ;
     long_release =
-      hslider("long release", 5, 0.1, 30, 1)
+      hslider("long release", 5, 0.1, 30, 0.1)
       / (mult(long_under)
          :hbargraph("long rel speed", 0, 1));
   };
@@ -103,7 +105,8 @@ limit(minimum, maximum) = max(minimum):min(maximum);
 
 lk2_var(Tg)= par(i,2,kfilter : zi) :> 4.342944819 * log(max(1e-12)) : -(0.691) with {
   // maximum assumed sample rate is 192k
-  maxSR = 192000;
+  // maxSR = 192000;
+  maxSR = 96000;
   sump(n) = ba.slidingSump(n, Tg*maxSR)/max(n,1);
   envelope(period, x) = x * x :  sump(rint(period * ma.SR));
   //Tg = 3; // 3 second window for 'short-term' measurement
