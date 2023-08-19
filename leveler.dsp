@@ -34,6 +34,11 @@ limit_pos = vslider("v:soundsgood/t:expert/h:[3]leveler/[7][symbol:leveler_max_p
 limit_neg = vslider("v:soundsgood/t:expert/h:[3]leveler/[8][symbol:leveler_max_minus][unit:db]leveler max -", init_leveler_maxcut, 0, 60, 1) : ma.neg;
 // GT4 2014-2015 Modification of a sine wave using a 3 stage NTSF chain. Version 1. Dino Dini. 29/04/2015
 // https://www.desmos.com/calculator/nbzgwyd7fz
+//
+// TODO:
+// insert levelimiter
+// insert upwards slow leveler:
+//  - when the ungated_long_under is between -10 and gate_slider, slowly gain up
 
 leveler_sc(target,fl,fr,l,r) =
   (calc(
@@ -44,12 +49,14 @@ leveler_sc(target,fl,fr,l,r) =
   <: (_*l,_*r)
 with {
 
-  gate(dif_momentary) = dif_momentary<10:hbargraph("[113]gate", 0, 1);
+  gate(dif_momentary) = dif_momentary<10:hbargraph("[114]gate", 0, 1);
   calc(momentary,short,long) = FB(momentary,short,long)~_: ba.db2linear
   with {
 
     FB(momentary,short,long,prev_gain) =
-      dif_momentary
+      dif_double
+      // dif_momentary
+      // dif_short
       +(prev_gain )
       : limit(limit_neg,limit_pos)
         <: si.onePoleSwitching(release,attack)
@@ -58,6 +65,8 @@ with {
     dif_momentary = target - momentary:hbargraph("[110]dif momentary[unit:dB]", -24, 24);
     dif_short = target - short:hbargraph("[111]dif short[unit:dB]", -24, 24);
     dif_long = target - long:hbargraph("[112]dif long[unit:dB]", -24, 24);
+
+    dif_double = dif_momentary:max(long_over*-1):min(long_under):hbargraph("[113]dif double[unit:dB]", -24, 24);
 
     short_over = dif_short*-1:max(ma.EPSILON);
     short_under = dif_short:max(ma.EPSILON);
@@ -77,17 +86,24 @@ with {
 
     attack =
       hslider("[10]attack", 1, 0.1, 10, 0.1)
-      / ( (mult(short_over,dead_range) * mult(long_over, long_dead_range))
-          // : si.onePoleSwitching(long_attack,long_release)long_attack
-          *gate(target-lk2_momentary(fl,fr))
-          :hbargraph("[13]att speed", 0, 1))
+      // / ( (mult(short_over,dead_range) * mult(long_over, long_dead_range))
+      / ( mult(short_over,dead_range)
+          // : si.onePoleSwitching(long_attack,long_release)
+          * (dif_double<ma.EPSILON)
+          :hbargraph("[13]att speed", 0, 1)
+           *gate(target-lk2_momentary(fl,fr))
+        )
     ;
     release =
       hslider("[11]release", 5, 0.1, 30, 0.1)
-      / ( (mult(short_under,dead_range) * mult(long_under,long_dead_range))
+      // / ( (mult(short_under,dead_range) * mult(long_under,long_dead_range))
+      / ( mult(short_under,dead_range)
           // : si.onePoleSwitching(long_release,long_attack)
-          *gate(target-lk2_momentary(fl,fr))
-          :hbargraph("[14]rel speed", 0, 1));
+          * (dif_double>ma.EPSILON)
+          :hbargraph("[14]rel speed", 0, 1)
+           *gate(target-lk2_momentary(fl,fr))
+  )
+    ;
 
     long_attack =
       hslider("long attack", 1, 0.1, 10, 0.1)
@@ -119,6 +135,7 @@ lk2_var_gated(Tg,gate)= par(i,2,kfilter : zi) :> 4.342944819 * log(max(1e-12)) :
   // maximum assumed sample rate is 192k
   maxSR = 192000;
   sump(n) = ba.slidingSump(n, Tg*maxSR)/max(n,1);
+  // sump(n,x) = x/max(n,1):ba.slidingSump(n, Tg*maxSR);
   envelope(period,gate, x) =
     (select2(gate,_,x*x)
      : sump(rint(period * ma.SR)))~_;
