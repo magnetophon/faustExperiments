@@ -7,6 +7,8 @@ import("stdfaust.lib");
 
 ebu = library("lib/ebur128.dsp");
 ex = library("expanders.lib");
+sig = library("sigmoid.lib");
+
 ///////////////////////////////////////////////////////////////////////////////
 //                             working principle                             //
 ///////////////////////////////////////////////////////////////////////////////
@@ -66,7 +68,11 @@ with {
     dif_short = target - short:hbargraph("[111]dif short[unit:dB]", -24, 24);
     dif_long = target - long:hbargraph("[112]dif long[unit:dB]", -24, 24);
 
-    dif_double = dif_momentary:max(long_over*-1):min(long_under):hbargraph("[113]dif double[unit:dB]", -24, 24);
+    dif_double =
+      dif_momentary
+      :max(long_over*-1):min(long_under)
+      :max(dif_lim*-1):min(dif_lim)
+      :hbargraph("[113]dif double[unit:dB]", -24, 24);
 
     short_over = dif_short*-1:max(ma.EPSILON);
     short_under = dif_short:max(ma.EPSILON);
@@ -74,35 +80,53 @@ with {
     long_over = dif_long*-1:max(ma.EPSILON);
     long_under = dif_long:max(ma.EPSILON);
 
-    mult(level,range) =  level / range:min(1);
+    mult(level,range) =  level / range:min(1)
+                                       // :sig.sigmoid(k1,k2,k3)
+                                       <:select2(checkbox("sigmoid")
+                                                , _
+                                                , sig.sigmoid(k1,k2,k3)
+                                                )
+    ;
+
+    dif_lim = hslider("dif lim[unit:dB]", 2, 0, 24, 0.1);
+
+    k1 = hslider("k1", -0.5, -1+ma.EPSILON, 1-ma.EPSILON, 0.01);
+    k2 = hslider("k2", 0.69, -1+ma.EPSILON, 1-ma.EPSILON, 0.01);
+    k3 = hslider("k3", 0.69, -1+ma.EPSILON, 1-ma.EPSILON, 0.01);
 
     dead_range = hslider("[12]dead range[unit:dB]", 6, 0.1, 24, 0.1);
     long_dead_range =
       dead_range*0.5;
     // hslider("long_dead range", 3, 0.1, 24, 0.1);
 
-    leveler_meter_gain = hbargraph("v:soundsgood/h:easy/[4][unit:dB][symbol:leveler_gain]leveler gain",-40,40);
+    leveler_meter_gain = hbargraph("v:soundsgood/h:easy/[4][unit:dB][symbol:leveler_gain]leveler gain",-24,24);
+    // leveler_meter_gain = hbargraph("v:soundsgood/h:easy/[4][unit:dB][symbol:leveler_gain]leveler gain",-40,40);
 
+    FS = checkbox("full speed");
 
     attack =
-      hslider("[10]attack", 1, 0.1, 10, 0.1)
-      // / ( (mult(short_over,dead_range) * mult(long_over, long_dead_range))
-      / ( mult(short_over,dead_range)
-          // : si.onePoleSwitching(long_attack,long_release)
-          * (dif_double<ma.EPSILON)
-          :hbargraph("[13]att speed", 0, 1)
-           *gate(target-lk2_momentary(fl,fr))
-        )
+      select2(FS
+             ,hslider("[10]attack", 1, 0.1, 10, 0.1)
+              / ( (mult(short_over,dead_range) * mult(long_over, long_dead_range))
+                  // / ( mult(short_over,dead_range)
+                  // : si.onePoleSwitching(long_attack,long_release)
+                  * (dif_double<(0-ma.EPSILON))
+                  :hbargraph("[13]att speed", 0, 1)
+                   *gate(target-lk2_momentary(fl,fr))
+                )
+             ,1)
     ;
     release =
-      hslider("[11]release", 5, 0.1, 30, 0.1)
-      // / ( (mult(short_under,dead_range) * mult(long_under,long_dead_range))
-      / ( mult(short_under,dead_range)
-          // : si.onePoleSwitching(long_release,long_attack)
-          * (dif_double>ma.EPSILON)
-          :hbargraph("[14]rel speed", 0, 1)
-           *gate(target-lk2_momentary(fl,fr))
-  )
+      select2(FS
+             , hslider("[11]release", 5, 0.1, 30, 0.1)
+               / ( (mult(short_under,dead_range) * mult(long_under,long_dead_range))
+                   // / ( mult(short_under,dead_range)
+                   // : si.onePoleSwitching(long_release,long_attack)
+                   * (dif_double>ma.EPSILON)
+                   :hbargraph("[14]rel speed", 0, 1)
+                    *gate(target-lk2_momentary(fl,fr))
+                 )
+             ,1)
     ;
 
     long_attack =
