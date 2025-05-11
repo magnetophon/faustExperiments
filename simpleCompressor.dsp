@@ -5,11 +5,47 @@ declare license "AGPL-3.0-only";
 declare copyright "2025 - 2025, Bart Brouns";
 
 
+// TODO:
+// -add lookahead att in hold
+// - compensate DC
+
 
 import("stdfaust.lib");
 
 
-process = simpleCompressor;
+process =
+  DCcompensator
+  : simpleCompressor;
+
+DCcompensator(x) =
+  // x
+  // , positiveEnv(x)
+  // , negativeEnv(x)
+  // , offset(x)
+  select2(checkbox("DC compensate")
+         ,x
+         , x - offset(x)
+         )
+;
+positiveEnv(x) =
+  // smootherARorder(maxOrder, orderDCrel, orderDCatt, timeDCrel, timeDCatt, x*(x<0));
+  smootherARorder(maxOrder, orderDCrel, 1, timeDCrel, 0, x*(x<0))
+;
+// :smootherARorder(maxOrder, 1, orderDCatt, 0, timeDCatt) ;
+negativeEnv(x) =
+  // smootherARorder(maxOrder,  orderDCatt, orderDCrel, timeDCatt, timeDCrel, x*(x>0));
+  smootherARorder(maxOrder,  1, orderDCrel, 0, timeDCrel, x*(x>0))
+;
+// : smootherARorder(maxOrder,orderDCatt, 1, timeDCatt, 0);
+offset(x) =
+  ((positiveEnv(x)+negativeEnv(x))*.5)
+  // : smootherARorder(maxOrder,orderDCatt, orderDCatt, timeDCatt, timeDCatt)
+  // :absEnv
+;
+absEnv(x) =
+  // smootherARorder(maxOrder, 1, orderDCatt, 0, timeDCatt, abs(x))
+  smootherARorder(maxOrder,orderDCatt, 1, timeDCatt, 0, abs(x))
+  * select2(x>0,-1,1);
 
 simpleCompressor(x) =
   x
@@ -17,9 +53,9 @@ simpleCompressor(x) =
 , (inputSignal*(gain
                 // :(_,!)
                )
-   // :aa.softclipQuadratic2
-   // :fi.svf.bell(HSfreq,HSq,HSgain*checkbox("HS"))
-    // *0.5
+   :aa.softclipQuadratic2
+    // :fi.svf.bell(HSfreq,HSq,HSgain*checkbox("HS"))
+   // *0.5
   )
 , gain
   // , abs(inputSignal)
@@ -59,10 +95,16 @@ with {
       // , ((slow(x)-x)/max(x,ma.EPSILON))
 
       
+      // (
+      // ((slow(ba.db2linear(_))-ba.db2linear(_))/max(ba.db2linear(_),ma.EPSILON))
+      // :ba.linear2db
+      // )
+
       (
-        ((slow(ba.db2linear(_))-ba.db2linear(_))/max(ba.db2linear(_),ma.EPSILON))
+        ((slow(ba.db2linear(x))-ba.db2linear(x))/max(ba.db2linear(x),ma.EPSILON))
         :ba.linear2db
       )
+
       // ,
       // (
       // ((slow(ba.db2linear(x))-ba.db2linear(x))/max(ba.db2linear(x),ma.EPSILON))
@@ -92,7 +134,7 @@ orderAtt =
 // hslider("order att", 4, 1, maxOrder, 1);
 orderAttSlow =
   2;
-// hslider("order att slow", 4, 1, maxOrder, 1);
+
 orderAttHold = hslider("order att hold", 4, 1, maxOrder, 1);
 orderRel = 2;
 // hslider("order rel", 2, 1, maxOrder, 1);
@@ -102,9 +144,7 @@ timeHold =
 timeAtt = hslider("att time[scale:log]", 0.001, 0.001, 0.10, 0.001)-0.001;
 timeAttSlow = hslider("att time slow[scale:log]", 0.2, 0.001, 0.50, 0.001)-0.001;
 timeAttHold = hslider("att hold time[scale:log]", 0.001, 0.001, 0.1, 0.001)-0.001;
-timeRel = hslider("rel time[scale:log]", 0.101, 0.013, 0.5, 0.001);
-// att
-// rel
+timeRel = hslider("rel time[scale:log]", 0.15, 0.013, 0.5, 0.001);
 
 inputGain = hslider("[01]input gain[unit:dB]", 0, 0, 30, 0.1):ba.db2linear:si.smoo;
 hpFreq = hslider("high pass freq", 20, 2, 40, 1);
@@ -115,6 +155,19 @@ thresh = hslider("[14]threshold[unit:dB]",-6,-30,0,0.1);
 knee =
   hslider("[17]knee[unit:dB]",1,0,72,0.1);
 // it.remap(0.5, 1, 12, 0,oneKnob:max(0.5));
+
+orderDCatt =
+  // 1;
+  hslider("order att DC", 4, 1, maxOrder, 1);
+orderDCrel =
+  4;
+// hslider("order rel DC", 4, 1, maxOrder, 1);
+timeDCatt =
+  // 0;
+  hslider("att time DC[scale:log]", 0.001, 0.001, 0.10, 0.001)-0.001;
+timeDCrel =
+  0.3;
+// hslider("rel time DC[scale:log]", 0.3, 0.013, 0.5, 0.001);
 
 gain_computer(strength,thresh,knee,level) =
   select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2))),
