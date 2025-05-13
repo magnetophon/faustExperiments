@@ -31,19 +31,20 @@ process =
          : vgroup("limiter", limiter))~_
                                        :(!,_,_,_);
 
-limiter(x,compGain) =
+limiter(inputGain,compGain,offset,x) =
   max(maxAmount,rawGain*strength)
   : ba.db2linear
     // smoothedGain
-, (smoothedGain*x@lookaheadSamples)
+, (inputGain@lookaheadSamples*smoothedGain*(x@lookaheadSamples-smoothedOffset))
   // , (ba.linear2db(smoothedGain)+ ba.linear2db(compGain):ba.db2linear)
 , smoothedGain
-, ba.db2linear(compGain)
+, smoothedOffset
+  // , ba.db2linear(compGain)
 with {
   // TODO: make att time SR independant?
   lookaheadSamples = 64;
   rawGain =
-    smootherARorder(orderHold, orderHold, orderHold, 0, timeHold, abs(x*ba.db2linear(compGain)))
+    smootherARorder(orderHold, orderHold, orderHold, 0, timeHold, abs((x-offset)*inputGain*ba.db2linear(compGain)))
     :ba.linear2db
     : gain_computer(1,thresh,knee)
     : smootherARorder(maxOrder, orderRelLim, 4, timeRelLim*pre, 0)
@@ -55,25 +56,37 @@ with {
      // : smootherARorder(maxOrder, 4, 4, timeRelLim, lookaheadSamples/ma.SR)
     : smootherARorder(maxOrder, 4, 4, timeRelLim*(1-pre), lookaheadSamples/ma.SR)
   ;
+  smoothedOffset =
+    ((offset*(offset>0))
+     :ba.slidingMax(lookaheadSamples,lookaheadSamples)
+     : smootherARorder(maxOrder, 4, 4, lookaheadSamples/ma.SR, lookaheadSamples/ma.SR)
+    ) 
+    +
+    ((offset*(offset<0))
+     :ba.slidingMin(lookaheadSamples,lookaheadSamples)
+     : smootherARorder(maxOrder, 4, 4, 0,lookaheadSamples/ma.SR)
+    )
+  ;
   pre = checkbox("pre");
   maxAmount = hslider("max amount[unit:dB]", -3, -6, 0, 0.01);
 };
 
-simpleCompressor(limGain,x) =
+simpleCompressor(limGain,offset,x) =
   // x ,
-  (inputSignal
-   // *gain
-   // :aa.softclipQuadratic2
-   // :fi.svf.bell(HSfreq,HSq,HSgain*checkbox("HS"))
-   // *0.5
-  )
+  // *gain
+  // :aa.softclipQuadratic2
+  // :fi.svf.bell(HSfreq,HSq,HSgain*checkbox("HS"))
+  // *0.5
+  inputGain 
 , gain
+, offset
+, x
   // , abs(inputSignal)
   // , attEnv(abs(x))
 with {
   // envFollow = abs(inputSignal):holdEnv
   // : attRelEnv;
-  gain = abs(inputSignal)
+  gain = abs((x-offset)*inputGain)
          : ((
              (_,(holdEnv
                  : ba.linear2db
@@ -84,9 +97,9 @@ with {
          : mainGroup(hbargraph("GR", -24, 0))
            // : ba.db2linear
   ;
-  inputSignal = x*inputGain
-                // :fi.highpass(3,hpFreq)
-  ;
+  // inputSignal = x*inputGain
+  // :fi.highpass(3,hpFreq)
+  // ;
 
   HSfreq = 20000;
   HSq = 0.343;
@@ -252,15 +265,23 @@ DCcompensator(limGain,x) =
   // , positiveEnv(x)
   // , negativeEnv(x)
   // , offset(x)
-  limGain,
-  select2(checkbox("DC compensate")
-         ,x
-         , x - offset(x)
-         )
- ;
- positiveEnv(x) =
-   // smootherARorder(maxOrder, orderDCrel, orderDCatt, timeDCrel, timeDCatt, x*(x<0));
-   smootherARorder(maxOrder, orderDCrel, 1, timeDCrel, 0, x*(x<0))
+  // TODO: we don't need the lim gain in here
+  limGain
+, (offset(
+      x
+      // better without?
+      *select2(checkbox("lim DC"),1,limGain)
+    )*checkbox("DC compensate"))
+, x
+  // , select2(checkbox("DC compensate")
+  // ,x
+  // , x - offset(x)
+  // )
+with {
+
+  positiveEnv(x) =
+    // smootherARorder(maxOrder, orderDCrel, orderDCatt, timeDCrel, timeDCatt, x*(x<0));
+    smootherARorder(maxOrder, orderDCrel, 1, timeDCrel, 0, x*(x<0))
  ;
  // :smootherARorder(maxOrder, 1, orderDCatt, 0, timeDCatt) ;
  negativeEnv(x) =
@@ -270,10 +291,12 @@ DCcompensator(limGain,x) =
  // : smootherARorder(maxOrder,orderDCatt, 1, timeDCatt, 0);
  offset(x) =
    ((positiveEnv(x)+negativeEnv(x))*.5)
-   : smootherARorder(maxOrder,orderDCatt, orderDCatt, timeDCatt, timeDCatt)
+   : smootherARorder(maxOrder,orderDCatt, orderDCatt, timeDCatt*(limGain>DCthres), timeDCatt*(limGain>DCthres))
      // :absEnv
  ;
+ DCthres = hslider("DC thres", 0.999, 0, 1, 0.001);
  absEnv(x) =
    // smootherARorder(maxOrder, 1, orderDCatt, 0, timeDCatt, abs(x))
    smootherARorder(maxOrder,orderDCatt, 1, timeDCatt, 0, abs(x))
    * select2(x>0,-1,1);
+};
