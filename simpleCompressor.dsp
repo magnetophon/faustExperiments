@@ -27,12 +27,12 @@ import("stdfaust.lib");
 process =
   hgroup("", 
          vgroup("DCcompensator", DCcompensator)
-         :hgroup("simpleCompressor", simpleCompressor) 
+         :vgroup("simpleCompressor", simpleCompressor) 
          : vgroup("limiter", limiter))~_
                                        :(!,_,_,_);
 
 limiter(inputGain,compGain,offset,x) =
-  max(maxAmount,rawGain*strength)
+  max(maxAmount,rawGain*FBstrength)
   : ba.db2linear
     // smoothedGain
 , (inputGain@lookaheadSamples*smoothedGain*(x@lookaheadSamples-smoothedOffset))
@@ -44,10 +44,14 @@ with {
   // TODO: make att time SR independant?
   lookaheadSamples = 64;
   rawGain =
-    smootherARorder(orderHold, orderHold, orderHold, 0, timeHold, abs((x-offset)*inputGain*ba.db2linear(compGain)))
+    smootherARorder(orderHold, orderHold, orderHold, 0, timeHoldLim, abs((x-offset)*inputGain*ba.db2linear(compGain)))
     :ba.linear2db
-    : gain_computer(1,thresh,knee)
-    : smootherARorder(maxOrder, orderRelLim, 4, timeRelLim*pre, 0)
+     // TODO: we don't need the knee nor the strength, so we can do this much cheaper
+     // : gain_computer(1,limThresh,0)
+     // : max(0,_-limThresh)*-1
+    : min(0,limThresh-_)
+      // : smootherARorder(maxOrder, orderRelLim, 4, timeRelLim*pre, 0)
+    : smootherARorder(orderRelLim, orderRelLim, orderRelLim, timeRelLim*pre, 0)
   ;
   smoothedGain =
     rawGain+compGain
@@ -67,8 +71,10 @@ with {
      : smootherARorder(maxOrder, 4, 4, 0,lookaheadSamples/ma.SR)
     )
   ;
-  pre = checkbox("pre");
-  maxAmount = hslider("max amount[unit:dB]", -3, -6, 0, 0.01);
+  pre =
+    1;
+  // checkbox("pre");
+  maxAmount = hslider("max amount[unit:dB]", -30, -30, 0, 0.01);
 };
 
 simpleCompressor(limGain,offset,x) =
@@ -88,13 +94,17 @@ with {
   // : attRelEnv;
   gain = abs((x-offset)*inputGain)
          : ((
-             (_,(holdEnv
-                 : ba.linear2db
-                 : gain_computer(strength,thresh,knee)))
-             : attRelEnv)~(_<:(_,_))
-                          :(!,_)
+             (
+               // _,
+               (holdEnv
+                : ba.linear2db
+                : gain_computer(strength,thresh,knee)))
+             // : attRelEnvPrevDiv)~(_<:(_,_))
+             // :(!,_)
+             : attRelEnv
            )
-         : mainGroup(hbargraph("GR", -24, 0))
+           )
+         : hbargraph("GR", -24, 0)
            // : ba.db2linear
   ;
   // inputSignal = x*inputGain
@@ -106,20 +116,15 @@ with {
   HSgain =
     9;
   // envFollow = abs(x):attEnv:holdEnv:relEnv;
-  // holdEnv(prevDiv,x) = smootherARorder(orderHold, orderHold, orderHold, 0, timeHold, x);
-  holdEnv(prevDiv,x) = smootherARorder(orderHold, orderHold, orderHold, 0,
-                                       it.interpolate_linear(prevDiv,timeHold,timeHold*slowGroup(hslider("mult hold", 0.1, 0, 1, 0.001)))
-                                       , x*limGain);
-  // attRelEnv(x) = smootherARorder(maxOrder, orderAtt, orderRel, timeAtt, timeRel, x);
-  attRelEnv(prevDiv,x) =
+  holdEnv(x) = smootherARorder(orderHold, orderHold, orderHold, 0, timeHold, x*limGain);
+  holdEnvPrevDiv(prevDiv,x) = smootherARorder(orderHold, orderHold, orderHold, 0,
+                                              it.interpolate_linear(prevDiv,timeHold,timeHold*slowGroup(hslider("mult hold", 0.1, 0, 1, 0.001)))
+                                              , x*limGain);
+  attRelEnv(x) = smootherARorder(maxOrder, orderRel, orderAtt, timeRel, timeAtt, x);
+  attRelEnvPrevDiv(prevDiv,x) =
     smootherARorder(maxOrder, orderRel, orderAtt, it.interpolate_linear(prevDiv,timeRel,timeRel*slowGroup(hslider("mult rel", 0.1, 0, 1, 0.001))),  timeAtt, x)
     <:(
     (
-      // select2(checkbox("sel") ,
-      // , ((x-_)/max(x,ma.EPSILON))
-      // ((x-slow(x))/max(x,ma.EPSILON))
-      // , ((slow(x)-x)/max(x,ma.EPSILON))
-
       slowGroup(select2(checkbox("sel")),
                 
                 (
@@ -135,18 +140,13 @@ with {
                   )
                )
 
-      // ,
-      // (
-      // ((slow(ba.db2linear(x))-ba.db2linear(x))/max(ba.db2linear(x),ma.EPSILON))
-      // :ba.linear2db
-      // )
-      // )
       :max(0):min(1)
       :slowGroup(hbargraph("div", 0, 1))
     )
   , _
   )
   ;
+
   // TODO: this can be an env follower (if we keep the rel at 0)
   // have to flip the input first
   slow(x) = slowGroup(smootherARorder(2, orderRelSlow, orderAttSlow, timeRelSlow, timeAttSlow, x));
@@ -161,7 +161,7 @@ with {
 ///////////////////////////////////////////////////////////////////////////////
 //                               groups                                     //
 ///////////////////////////////////////////////////////////////////////////////
-mainGroup(x) = vgroup("main", x);
+// mainGroup(x) = vgroup("main", x);
 slowGroup(x) = vgroup("slow", x);
 ///////////////////////////////////////////////////////////////////////////////
 //                               GUI                                     //
@@ -183,26 +183,32 @@ orderAttHold = hslider("order att hold", 4, 1, maxOrder, 1);
 orderRel = 2;
 // hslider("order rel", 2, 1, maxOrder, 1);
 orderRelLim =
-  // 2;
-  hslider("order rel lim", 2, 1, maxOrder, 1);
+  2;
+// hslider("order rel lim", 2, 1, maxOrder, 1);
 timeHold =
   // timeRel*0.333;
-  mainGroup(hslider("hold time[scale:log]", 0.11, 0.001, 0.2, 0.001));
-timeAtt = mainGroup(hslider("att time[scale:log]", 0.001, 0.001, 0.05, 0.001)-0.001);
+  hslider("hold time[scale:log]", 0.069, 0.001, 0.2, 0.001);
+timeHoldLim =
+  // timeRel*0.333;
+  hslider("hold time lim[scale:log]", 0.013, 0.001, 0.2, 0.001);
+timeAtt = hslider("att time[scale:log]", 0.024, 0.001, 0.05, 0.001)-0.001;
 timeAttSlow = hslider("att time slow[scale:log]", 0.2, 0.001, 1, 0.001)-0.001;
 timeRelSlow = hslider("rel time slow[scale:log]", 0.001, 0.001, 0.5, 0.001)-0.001;
 timeAttHold = hslider("att hold time[scale:log]", 0.001, 0.001, 0.1, 0.001)-0.001;
-timeRel = mainGroup(hslider("rel time[scale:log]", 0.15, 0.013, 0.5, 0.001));
-timeRelLim = mainGroup(hslider("rel time lim[scale:log]", 0.013, 0.001, 0.1, 0.001));
+timeRel = hslider("rel time[scale:log]", 0.2, 0.013, 0.5, 0.001);
+timeRelLim = hslider("rel time lim[scale:log]", 0.024, 0.001, 0.1, 0.001);
 
-inputGain = mainGroup(hslider("[01]input gain[unit:dB]", 0, 0, 30, 0.1):ba.db2linear:si.smoo);
+inputGain = hslider("[01]input gain[unit:dB]", 0, 0, 30, 0.1):ba.db2linear:si.smoo;
 hpFreq = hslider("high pass freq", 20, 2, 40, 1);
 strength =
-  // it.remap(0, 0.5, 0, 1,oneKnob:min(0.5));
-  mainGroup(hslider("[02]strength[unit:%]", 100, 0, 100, 1)) * 0.01;
-thresh = mainGroup(hslider("[14]threshold[unit:dB]",-1,-10,0,0.1));
+  hslider("[02]strength[unit:%]", 100, 0, 100, 1) * 0.01;
+FBstrength =
+  hslider("[02]FB strength[unit:%]", 50, 0, 100, 1) * 0.01;
+// TODO: make thres relative to limThresh?
+thresh = hslider("[14]threshold[unit:dB]",-0.4,-10,0,0.1);
+limThresh = hslider("[14]lim threshold[unit:dB]",0,-10,0,0.1);
 knee =
-  mainGroup(hslider("[17]knee[unit:dB]",1,0,72,0.1));
+  hslider("[17]knee[unit:dB]",0,0,30,0.1);
 // it.remap(0.5, 1, 12, 0,oneKnob:max(0.5));
 
 orderDCatt =
@@ -213,10 +219,10 @@ orderDCrel =
   hslider("order rel DC", 4, 1, maxOrder, 1);
 timeDCatt =
   // 0;
-  hslider("att time DC[scale:log]", 0.006, 0.001, 0.10, 0.001)-0.001;
+  (hslider("att time DC[scale:log]", 0.013, 0.001, 0.10, 0.001)-0.001)*0.1;
 timeDCrel =
   // 0.3;
-  hslider("rel time DC[scale:log]", 0.069, 0.013, 0.5, 0.001);
+  hslider("rel time DC[scale:log]", 0.272, 0.013, 0.5, 0.001);
 
 gain_computer(strength,thresh,knee,level) =
   select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2))),
@@ -269,8 +275,8 @@ DCcompensator(limGain,x) =
   limGain
 , (offset(
       x
-      // better without?
-      *select2(checkbox("lim DC"),1,limGain)
+      // better without?  sometimes.
+      // *select2(checkbox("lim DC"),1,limGain)
     )*checkbox("DC compensate"))
 , x
   // , select2(checkbox("DC compensate")
@@ -282,21 +288,15 @@ with {
   positiveEnv(x) =
     // smootherARorder(maxOrder, orderDCrel, orderDCatt, timeDCrel, timeDCatt, x*(x<0));
     smootherARorder(maxOrder, orderDCrel, 1, timeDCrel, 0, x*(x<0))
- ;
- // :smootherARorder(maxOrder, 1, orderDCatt, 0, timeDCatt) ;
- negativeEnv(x) =
-   // smootherARorder(maxOrder,  orderDCatt, orderDCrel, timeDCatt, timeDCrel, x*(x>0));
-   smootherARorder(maxOrder,  1, orderDCrel, 0, timeDCrel, x*(x>0))
- ;
- // : smootherARorder(maxOrder,orderDCatt, 1, timeDCatt, 0);
- offset(x) =
-   ((positiveEnv(x)+negativeEnv(x))*.5)
-   : smootherARorder(maxOrder,orderDCatt, orderDCatt, timeDCatt*(limGain>DCthres), timeDCatt*(limGain>DCthres))
-     // :absEnv
- ;
- DCthres = hslider("DC thres", 0.999, 0, 1, 0.001);
- absEnv(x) =
-   // smootherARorder(maxOrder, 1, orderDCatt, 0, timeDCatt, abs(x))
-   smootherARorder(maxOrder,orderDCatt, 1, timeDCatt, 0, abs(x))
-   * select2(x>0,-1,1);
+  ;
+  // :smootherARorder(maxOrder, 1, orderDCatt, 0, timeDCatt) ;
+  negativeEnv(x) =
+    // smootherARorder(maxOrder,  orderDCatt, orderDCrel, timeDCatt, timeDCrel, x*(x>0));
+    smootherARorder(maxOrder,  1, orderDCrel, 0, timeDCrel, x*(x>0))
+  ;
+  // : smootherARorder(maxOrder,orderDCatt, 1, timeDCatt, 0);
+  offset(x) =
+    ((positiveEnv(x)+negativeEnv(x))*.5)
+    // TODO: needed??
+    : smootherARorder(maxOrder,orderDCatt, orderDCatt, timeDCatt , timeDCatt);
 };
