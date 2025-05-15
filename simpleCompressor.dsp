@@ -32,9 +32,11 @@ process =
                                        :(!,_,_,_);
 
 limiter(inputGain,compGain,offset,x) =
-  max(maxAmount,rawGain*FBstrength)
-  : ba.db2linear
-    // smoothedGain
+  // max(maxAmount,
+  rawGain
+  // *FBstrength)
+  // : ba.db2linear
+  // smoothedGain
 , (inputGain@lookaheadSamples*smoothedGain*(x@lookaheadSamples-smoothedOffset))
   // , (ba.linear2db(smoothedGain)+ ba.linear2db(compGain):ba.db2linear)
 , smoothedGain
@@ -116,10 +118,10 @@ with {
   HSgain =
     9;
   // envFollow = abs(x):attEnv:holdEnv:relEnv;
-  holdEnv(x) = smootherARorder(orderHold, orderHold, orderHold, 0, timeHold, x*limGain);
+  holdEnv(x) = smootherARorder(orderHold, orderHold, orderHold, 0, timeHold, x*ba.db2linear(limGain*FBstrength)) ;
   holdEnvPrevDiv(prevDiv,x) = smootherARorder(orderHold, orderHold, orderHold, 0,
                                               it.interpolate_linear(prevDiv,timeHold,timeHold*slowGroup(hslider("mult hold", 0.1, 0, 1, 0.001)))
-                                              , x*limGain);
+                                              , x*ba.db2linear(limGain*FBstrength));
   attRelEnv(x) = smootherARorder(maxOrder, orderRel, orderAtt, timeRel, timeAtt, x);
   attRelEnvPrevDiv(prevDiv,x) =
     smootherARorder(maxOrder, orderRel, orderAtt, it.interpolate_linear(prevDiv,timeRel,timeRel*slowGroup(hslider("mult rel", 0.1, 0, 1, 0.001))),  timeAtt, x)
@@ -212,16 +214,16 @@ knee =
 // it.remap(0.5, 1, 12, 0,oneKnob:max(0.5));
 
 orderDCatt =
-  // 1;
-  hslider("order att DC", 4, 1, maxOrder, 1);
+  4;
+// hslider("order att DC", 4, 1, maxOrder, 1);
 orderDCrel =
-  // 4;
-  hslider("order rel DC", 4, 1, maxOrder, 1);
+  4;
+// hslider("order rel DC", 4, 1, maxOrder, 1);
 timeDCatt =
-  // 0;
-  (hslider("att time DC[scale:log]", 0.013, 0.001, 0.10, 0.001)-0.001)*0.1;
+  // 0.002;
+  (hslider("att time DC[scale:log]", 0.021, 0.001, 0.10, 0.001)-0.001)*0.1;
 timeDCrel =
-  // 0.3;
+  // 0.272;
   hslider("rel time DC[scale:log]", 0.272, 0.013, 0.5, 0.001);
 
 gain_computer(strength,thresh,knee,level) =
@@ -271,13 +273,17 @@ DCcompensator(limGain,x) =
   // , positiveEnv(x)
   // , negativeEnv(x)
   // , offset(x)
-  // TODO: we don't need the lim gain in here
   limGain
 , (offset(
       x
-      // better without?  sometimes.
-      // *select2(checkbox("lim DC"),1,limGain)
-    )*checkbox("DC compensate"))
+      // *
+      // limit the output of the offset, not the input: smoother
+      // select2(checkbox("lim DC"),1,
+      // ba.db2linear(limGain)
+      // )
+    )
+   *checkbox("DC compensate")
+  )
 , x
   // , select2(checkbox("DC compensate")
   // ,x
@@ -297,6 +303,11 @@ with {
   // : smootherARorder(maxOrder,orderDCatt, 1, timeDCatt, 0);
   offset(x) =
     ((positiveEnv(x)+negativeEnv(x))*.5)
+
+    *
+    // select2(1-checkbox("lim DC"),1,
+    ba.db2linear(limGain)
+    // )
     // TODO: needed??
     : smootherARorder(maxOrder,orderDCatt, orderDCatt, timeDCatt , timeDCatt);
 };
