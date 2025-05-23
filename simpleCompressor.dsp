@@ -43,82 +43,84 @@ posNegCompressor(x) =
   : posNegGain
 ;
 posNegGain(positiveEnv,negativeEnv,x) =
-  ((x@lookaheadSamples-smoothedOffset*DCenable) * smoothedGain)
+  ((x@lookaheadSamples-smoothedOffset*symmetry) * smoothedGain)
   // , offset
   // , positiveEnv,negativeEnv
   // , gain
   // , hold
-, (smoothedGain/(inputGain*outputGain))
-, smoothedOffset
-, abs(x)
+  // , (smoothedGain/(inputGain*outputGain))
+  // , smoothedOffset
+  // , abs(x)
   // , (x-offset)
-   with {
-    offset =
-      (positiveEnv+negativeEnv) *.5*DCenable;
-    hold = max(positiveEnv-offset,((negativeEnv-offset)*-1))*inputGain*outputGain;
-    gain =
-      ((
-        (
-          // _,
-          (hold
-           : ba.linear2db
-             // we don't need the knee nor the strength, so we can do this much cheaper
-           // : gain_computer(strength,thresh,knee)))
-           : min(0,thresh-_)))
-        // : attRelEnvPrevDiv)~(_<:(_,_))
-        // :(!,_)
-        // : attRelEnv
-        : relEnv
-      )
-      )
-      : meterGUI(guiType)
-      : ba.db2linear
-    ;
-
-    attRelEnv(x) = smootherARorder(maxOrder, orderRel, orderAtt, timeRel, timeAtt, x);
-    relEnv(x) = smootherARorder(orderRel, orderRel, orderRel, timeRel, 0, x);
-
-    smoothedGain =
-      gain*inputGain*outputGain
-      :ba.slidingMin(lookaheadSamples,lookaheadSamples)
-       // : smootherARorder(maxOrder, 4, 4, timeRelLim, lookaheadSamples/ma.SR)
-      : smootherARorder(4, 4, 4, lookaheadSamples/ma.SR, lookaheadSamples/ma.SR)
-    ;
-    smoothedOffset =
+with {
+  offset =
+    (positiveEnv+negativeEnv) *.5*symmetry;
+  hold = max(positiveEnv-offset,((negativeEnv-offset)*-1))
+         // *inputGain
+  ;
+  gain =
+    ((
       (
-        (
-          // positiveEnv
-          (offset*(offset>0))
-          :ba.slidingMax(lookaheadSamples,lookaheadSamples)
-          : smootherARorder(4, 4, 4, lookaheadSamples/ma.SR, timeRelSlow)
-            // : smootherARorder(maxOrder, 4, 4, lookaheadSamples/ma.SR, lookaheadSamples/ma.SR)
-        )
-        +
-        (
+        // _,
+        (hold
+         : ba.linear2db
+           + inputGain
+           // we don't need the knee nor the strength, so we can do this much cheaper
+           // : gain_computer(strength,thresh,knee)))
+         : min(0,thresh-_)))
+      // : attRelEnvPrevDiv)~(_<:(_,_))
+      // :(!,_)
+      : attRelEnv
+    )
+    )
+    : meterGUI(guiType)
+      // : ba.db2linear
+  ;
 
-          // negativeEnv
-          (offset*(offset<0))
-          :ba.slidingMin(lookaheadSamples,lookaheadSamples)
-          : smootherARorder(4, 4, 4, timeRelSlow,lookaheadSamples/ma.SR)
-            // : smootherARorder(maxOrder, 4, 4, lookaheadSamples/ma.SR,lookaheadSamples/ma.SR)
-        )
+  attRelEnv(x) = smootherARorder(maxOrder, orderRel, orderAtt, timeRel, timeAtt, x);
+
+  smoothedGain =
+    gain+inputGain+outputGain
+    : ba.db2linear
+    :ba.slidingMin(lookaheadSamples,lookaheadSamples)
+     // : smootherARorder(maxOrder, 4, 4, timeRelLim, lookaheadSamples/ma.SR)
+    : smootherARorder(4, 4, 4, lookaheadSamples/ma.SR, lookaheadSamples/ma.SR)
+  ;
+  smoothedOffset =
+    (
+      (
+        // positiveEnv
+        (offset*(offset>0))
+        :ba.slidingMax(lookaheadSamples,lookaheadSamples)
+        : smootherARorder(4, 4, 4, lookaheadSamples/ma.SR, symmetryRel)
+          // : smootherARorder(maxOrder, 4, 4, lookaheadSamples/ma.SR, lookaheadSamples/ma.SR)
       )
-      // *0.5
-    ;
-    pre =
-      1;
-    // checkbox("pre");
-  };
+      +
+      (
+
+        // negativeEnv
+        (offset*(offset<0))
+        :ba.slidingMin(lookaheadSamples,lookaheadSamples)
+        : smootherARorder(4, 4, 4, symmetryRel,lookaheadSamples/ma.SR)
+          // : smootherARorder(maxOrder, 4, 4, lookaheadSamples/ma.SR,lookaheadSamples/ma.SR)
+      )
+    )
+    // *0.5
+  ;
+  pre =
+    1;
+  // checkbox("pre");
+};
 
 
 
-   compressorGUI(0) =
-     hgroup("",
-            vgroup("DCcompensator", DCcompensator)
-            :vgroup("simpleCompressor", simpleCompressor)
-            : vgroup("limiter", limiter))~_
-                                          // :(!,_,_,_)
-                                          :(!,_)
+compressorGUI(0) =
+  hgroup("",
+         vgroup("DCcompensator", DCcompensator)
+         :vgroup("simpleCompressor", simpleCompressor)
+         : vgroup("limiter", limiter))~_
+                                       // :(!,_,_,_)
+                                       :(!,_)
    ;
 
    compressorGUI(x) =
@@ -263,6 +265,18 @@ posNegGain(positiveEnv,negativeEnv,x) =
 
      relEnv(x) = smootherARorder(maxOrder,1, orderRel, 0, timeRel, x);
    };
+   lin2log(minX, maxX,x) =
+     it.remap(
+       minX, maxX, ba.hz2midikey(minX), ba.hz2midikey(maxX),x
+     )
+     : ba.midikey2hz;
+
+   log2lin(minX, maxX,x) =
+     ba.hz2midikey(x)
+     :it.remap(
+       ba.hz2midikey(minX), ba.hz2midikey(maxX)
+       ,minX, maxX
+     );
 
 
    ///////////////////////////////////////////////////////////////////////////////
@@ -274,10 +288,10 @@ posNegGain(positiveEnv,negativeEnv,x) =
    //                               GUI                                     //
    ///////////////////////////////////////////////////////////////////////////////
 
-   DCenable = DCenableGUI(guiType);
-   DCenableGUI(0) =  checkbox("DC compensate");
-   DCenableGUI(1) = DCenableGUI(0);
-   DCenableGUI(2) = hslider("[3]DC enable[style:knob][stratus:3]", 5, 0, 10, 0.1)>=5;
+   symmetry = symmetryGUI(guiType);
+   symmetryGUI(0) =  hslider("[3]symmetry", 1, 0, 1, 0.001):si.smoo;
+   symmetryGUI(1) = symmetryGUI(0);
+   symmetryGUI(2) = hslider("[3]symmetry[style:knob][stratus:3]", 10, 0, 10, 0.1)*0.1:si.smoo;
 
    meterGUI(0) = hbargraph("GR", -24, 0);
    meterGUI(1) = meterGUI(0);
@@ -301,33 +315,59 @@ posNegGain(positiveEnv,negativeEnv,x) =
      2;
    // hslider("order rel lim", 2, 1, maxOrder, 1);
    timeHold = timeHoldGUI(guiType);
-   timeHoldGUI(0) = hslider("hold time[scale:log]", 0.069, 0.001, 0.2, 0.001);
-   timeHoldGUI(x) = 0.069;
+   timeHoldGUI(0) = hslider("[11]hold time[scale:log]", 0.272, 0.013, 0.5, 0.001);
+   timeHoldGUI(x) = timeRel;
    timeHoldLim = timeHoldLimGUI(guiType);
    // timeRel*0.333;
    timeHoldLimGUI(0) = hslider("hold time lim[scale:log]", 0.013, 0.001, 0.2, 0.001);
    timeHoldLimGUI(x) = 0.013;
    timeAtt = timeAttGUI(guiType);
-   timeAttGUI(0) = hslider("att time[scale:log]", 0.024, 0.001, 0.05, 0.001)-0.001;
-   timeAttGUI(x) = 0.023;
+   timeAttGUI(0) = hslider("[01]attack[scale:log]", 0.001, 0.001, 0.05, 0.001)-0.001;
+   timeAttGUI(x) = 0;
    timeAttSlow = hslider("att time slow[scale:log]", 0.2, 0.001, 1, 0.001)-0.001;
-   timeRelSlow = hslider("rel time slow[scale:log]", 0.2, 0.001, 0.5, 0.001)-0.001;
+   timeRelSlow = timeRelSlowGUI(guiType);
+   // hslider("rel time slow[scale:log]", 0.2, 0.001, 0.5, 0.001)-0.001;
    timeAttHold = hslider("att hold time[scale:log]", 0.001, 0.001, 0.1, 0.001)-0.001;
    timeRel = timeRelGUI(guiType);
-   timeRelGUI(0) = hslider("rel time[scale:log]", 0.2, 0.013, 0.5, 0.001);
-   timeRelGUI(x) = 0.2;
+   timeRelGUI(2) = hslider("[1]release[style:knob][stratus:1]",
+                           it.remap(0.013,0.5,0,10, log2lin(0.013,0.5,0.272))
+                           , 0, 10 , 0.001)
+                   :it.remap(0,10,0.013,0.5)
+                   :lin2log(0.013,0.5)
+   ;
+   timeRelGUI(x) = hslider("[1]release[scale:log]", 0.272, 0.013, 0.5, 0.001);
+   // hslider("[%index] att CF [style:knob]",
+   // log2lin(minX, maxX, default),
+   // minX,
+   // maxX,
+   // log2lin(minX, maxX, stepsize)
+   // ) :lin2log(minX, maxX)
+
+
    timeRelLim = timeRelLimGUI(guiType);
    timeRelLimGUI(0) = hslider("rel time lim[scale:log]", 0.024, 0.001, 0.1, 0.001);
    timeRelLimGUI(x) = 0.024;
 
    inputGain = inputGainGUI(guiType);
-   inputGainGUI(0) = hslider("[01]input gain[unit:dB]", 0, 0, 30, 0.1):ba.db2linear:si.smoo;
+   inputGainGUI(0) = hslider("[01]input gain[unit:dB]", 30, 0, 30, 0.1)
+                     // :ba.db2linear
+                     :si.smoo
+   ;
    inputGainGUI(1) = inputGainGUI(0);
-   inputGainGUI(2) = hslider("[0]input gain[style:knob][stratus:0]", 10, 0, 10, 0.001):it.remap(0,10,0,30):ba.db2linear:si.smoo;
+   inputGainGUI(2) = hslider("[0]input gain[style:knob][stratus:0]", 10, 0, 10, 0.001):it.remap(0,10,0,30)
+                                                                                       // :ba.db2linear
+                     :si.smoo
+   ;
    outputGain = outputGainGUI(guiType);
-   outputGainGUI(0) = hslider("[1]output gain[unit:dB]", 0, -30, 0, 0.1):ba.db2linear:si.smoo;
+   outputGainGUI(0) = hslider("[2]output gain[unit:dB]", 0, -30, 0, 0.1)
+                      // :ba.db2linear
+                      :si.smoo
+   ;
    outputGainGUI(1) = outputGainGUI(0);
-   outputGainGUI(2) = hslider("[1]output gain[style:knob][stratus:1]", 10, 0, 10, 0.001):it.remap(0,10,-30,0):ba.db2linear:si.smoo;
+   outputGainGUI(2) = hslider("[2]output gain[style:knob][stratus:1]", 10, 0, 10, 0.001):it.remap(0,10,-30,0)
+                                                                                         // :ba.db2linear
+                      :si.smoo
+   ;
    mix = mixGUI(guiType);
    mixGUI(0) = hslider("[2]mix", 1, 0, 1, 0.001):si.smoo;
    mixGUI(1) = mixGUI(0);
@@ -340,9 +380,11 @@ posNegGain(positiveEnv,negativeEnv,x) =
    FBstrengthGUI(0) = hslider("[02]FB strength[unit:%]", 50, 0, 100, 1) * 0.01;
    FBstrengthGUI(x) = 0.5;
    // TODO: make thres relative to limThresh?
+   // we need some headroom, will distort at higher threshold
+   // TODO: does it distort because of the symetry
    thresh = threshGUI(guiType);
-   threshGUI(0) = hslider("[14]threshold[unit:dB]",-0.4,-30,0,0.1);
-   threshGUI(x) = -0.4;
+   threshGUI(0) = hslider("[11]threshold[unit:dB]",-1.5,-30,0,0.1);
+   threshGUI(x) = -1.5;
    limThresh = limThreshGUI(guiType);
    limThreshGUI(0) = hslider("[14]lim threshold[unit:dB]",0,-10,0,0.1);
    limThreshGUI(x) = 0;
@@ -360,9 +402,10 @@ posNegGain(positiveEnv,negativeEnv,x) =
    timeDCattGUI(0) =
      (hslider("att time DC[scale:log]", 0.021, 0.001, 0.10, 0.001)-0.001)*0.1;
    timeDCattGUI(x) = 0.002;
-   timeDCrel = timeDCrelGUI(guiType);
-   timeDCrelGUI(0) = hslider("rel time DC[scale:log]", 0.272, 0.013, 0.5, 0.001);
-   timeDCrelGUI(x) = 0.272;
+   symmetryRel =
+     symmetryRelGUI(guiType);
+   symmetryRelGUI(0) = hslider("[31]rel time DC[scale:log]", 0.272, 0.013, 0.5, 0.001);
+   symmetryRelGUI(x) = timeRel;
 
    gain_computer(strength,thresh,knee,level) =
      select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2))),
@@ -412,17 +455,17 @@ posNegGain(positiveEnv,negativeEnv,x) =
      // , negativeEnv(x)
      // , offset(x)
      limGain
-   , (offset(x) * DCenable)
+   , (offset(x) * symmetry)
    , x
    with {
      positiveEnv(x) =
-       // smootherARorder(maxOrder, orderDCrel, orderDCatt, timeDCrel, timeDCatt, x*(x<0));
-       smootherARorder(maxOrder, orderDCrel, 1, timeDCrel, 0, x*(x<0))
+       // smootherARorder(maxOrder, orderDCrel, orderDCatt, symmetryRel, timeDCatt, x*(x<0));
+       smootherARorder(maxOrder, orderDCrel, 1, timeRelHold, 0, x*(x<0))
      ;
      // :smootherARorder(maxOrder, 1, orderDCatt, 0, timeDCatt) ;
      negativeEnv(x) =
-       // smootherARorder(maxOrder,  orderDCatt, orderDCrel, timeDCatt, timeDCrel, x*(x>0));
-       smootherARorder(maxOrder,  1, orderDCrel, 0, timeDCrel, x*(x>0))
+       // smootherARorder(maxOrder,  orderDCatt, orderDCrel, timeDCatt, symmetryRel, x*(x>0));
+       smootherARorder(maxOrder,  1, orderDCrel, 0, timeRelHold, x*(x>0))
      ;
      // : smootherARorder(maxOrder,orderDCatt, 1, timeDCatt, 0);
      offset(x) =
@@ -442,12 +485,12 @@ posNegGain(positiveEnv,negativeEnv,x) =
    , negativeEnv(x)
    with {
      positiveEnv(x) =
-       // smootherARorder(maxOrder, orderDCrel, orderDCatt, timeDCrel, timeDCatt, x*(x<0));
-       smootherARorder(maxOrder, orderDCrel, 1, 0, timeDCrel, x*(x>0))
+       // smootherARorder(maxOrder, orderDCrel, orderDCatt, symmetryRel, timeDCatt, x*(x<0));
+       smootherARorder(maxOrder, orderDCrel, 1, 0, timeHold, x*(x>0))
      ;
      // :smootherARorder(maxOrder, 1, orderDCatt, 0, timeDCatt) ;
      negativeEnv(x) =
-       // smootherARorder(maxOrder,  orderDCatt, orderDCrel, timeDCatt, timeDCrel, x*(x>0));
-       smootherARorder(maxOrder,  1, orderDCrel, timeDCrel, 0, x*(x<0))
+       // smootherARorder(maxOrder,  orderDCatt, orderDCrel, timeDCatt, symmetryRel, x*(x>0));
+       smootherARorder(maxOrder,  1, orderDCrel, timeHold, 0, x*(x<0))
      ;
    };
