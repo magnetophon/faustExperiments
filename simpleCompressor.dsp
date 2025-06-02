@@ -28,8 +28,8 @@ declare filename "simpleCompressor.dsp";
 //
 //  use prevDiv to set DC attack to 0 and release to less
 
-// 0=full gui, 1=minimal gui, 2=stratus test app
-guiType = 0;
+// 0=full gui, 1=minimal gui, 2=stratus test app, 3=stratus final app
+guiType = 3;
 
 import("stdfaust.lib");
 
@@ -292,10 +292,11 @@ compressorGUI(0) =
    symmetryGUI(0) =  hslider("[3]symmetry", 1, 0, 1, 0.001):si.smoo;
    symmetryGUI(1) = symmetryGUI(0);
    symmetryGUI(2) = hslider("[3]symmetry[style:knob][stratus:3]", 10, 0, 10, 0.1)*0.1:si.smoo;
+   symmetryGUI(3) = hslider("[3]symmetry[style:knob][stratus:3]", 1, 0, 1, 0.01):si.smoo;
 
    meterGUI(0) = hbargraph("GR", -24, 0);
    meterGUI(1) = meterGUI(0);
-   meterGUI(2) = _;
+   meterGUI(x) = _;
    maxOrder = 2;
    // orderHold = 16;
    // hslider("order hold", maxOrder, 1, maxOrder, 1);
@@ -333,8 +334,8 @@ compressorGUI(0) =
                            it.remap(0.013,0.5,0,10, log2lin(0.013,0.5,0.272))
                            , 0, 10 , 0.001)
                    :it.remap(0,10,0.013,0.5)
-                   :lin2log(0.013,0.5)
-   ;
+                   :lin2log(0.013,0.5) ;
+   timeRelGUI(3) = timeRelGUI(2);
    timeRelGUI(x) = hslider("[1]release[scale:log]", 0.272, 0.013, 0.5, 0.001);
    // hslider("[%index] att CF [style:knob]",
    // log2lin(minX, maxX, default),
@@ -354,24 +355,21 @@ compressorGUI(0) =
                      :si.smoo
    ;
    inputGainGUI(1) = inputGainGUI(0);
-   inputGainGUI(2) = hslider("[0]input gain[style:knob][stratus:0]", 10, 0, 10, 0.001):it.remap(0,10,0,30)
-                                                                                       // :ba.db2linear
-                     :si.smoo
-   ;
+   inputGainGUI(2) = hslider("[0]input gain[style:knob][stratus:0]", 10, 0, 10, 0.001):it.remap(0,10,0,30) :si.smoo;
+   inputGainGUI(3) = hslider("[0]input gain[style:knob][stratus:0]", 30, 0, 30, 0.1):si.smoo;
    outputGain = outputGainGUI(guiType);
    outputGainGUI(0) = hslider("[2]output gain[unit:dB]", 0, -30, 0, 0.1)
                       // :ba.db2linear
                       :si.smoo
    ;
    outputGainGUI(1) = outputGainGUI(0);
-   outputGainGUI(2) = hslider("[2]output gain[style:knob][stratus:1]", 10, 0, 10, 0.001):it.remap(0,10,-30,0)
-                                                                                         // :ba.db2linear
-                      :si.smoo
-   ;
+   outputGainGUI(2) = hslider("[2]output gain[style:knob][stratus:2]", 10, 0, 10, 0.001):it.remap(0,10,-30,0) :si.smoo ;
+   outputGainGUI(3) = hslider("[2]output gain[style:knob][stratus:2]", 0, -30, 0, 0.1):si.smoo ;
    mix = mixGUI(guiType);
-   mixGUI(0) = hslider("[2]mix", 1, 0, 1, 0.001):si.smoo;
-   mixGUI(1) = mixGUI(0);
-   mixGUI(2) = hslider("[2]mix[style:knob][stratus:2]", 10, 0, 10, 0.1):it.remap(0,10,0,1):si.smoo;
+   // mixGUI(0) = hslider("[2]mix", 1, 0, 1, 0.001):si.smoo;
+   // mixGUI(1) = mixGUI(0);
+   // mixGUI(2) = hslider("[2]mix[style:knob][stratus:2]", 10, 0, 10, 0.1):it.remap(0,10,0,1):si.smoo;
+   // mixGUI(3) = hslider("[2]mix[style:knob][stratus:2]", 1, 0, 1, 0.01):si.smoo;
    hpFreq = hslider("high pass freq", 20, 2, 40, 1);
    strength = strengthGUI(guiType);
    strengthGUI(0) = hslider("[02]strength[unit:%]", 100, 0, 100, 1) * 0.01;
