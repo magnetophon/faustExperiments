@@ -4,9 +4,10 @@ process(x) =
 , (
   0.25
   // envelope(x)
-  *os.osc(pitch(x)*2))
-, ba.slidingMax(samples(x),maxHoldSamples,abs(x))
-, envelope(x)
+  *os.osc(myPitch(x)*2))
+  // , ba.slidingMax(samples(x,1),maxHoldSamples,abs(x))
+,
+  envelope(x)
 ;
 
 
@@ -14,18 +15,28 @@ process(x) =
 maxHoldSamples = 4096;
 
 envelope(x) =
-  ba.slidingMax(samples(x),maxHoldSamples,abs(x))
-  :max(0)
-  :smootherARorder(4,4,4, att, rel(x));
+  envLoop(x)~_:(_,!);
+myPitch(x) =
+  envLoop(x)~_:(!,_);
+// (ba.slidingMax(samples(x,_),maxHoldSamples,abs(x))
+//  :max(0) // slidingMax defaults to -inf
+//  :smootherARorder(4,4,4, att, rel(x,_)))~(_<:(_,_));
 
-samples(x) =
+envLoop(x,prevEnv) =
+  ba.slidingMax(samples(x,prevEnv),maxHoldSamples,abs(x))
+  :max(0) // slidingMax defaults to -inf
+  :smootherARorder(4,4,4, att, rel(x,prevEnv))
+, pitch(x,prevEnv)
+;
+
+samples(x,prevEnv) =
   hslider("mult", 1, 0.5, 2, 0.01)
-  *ma.SR / pitch(x)
+  *ma.SR / pitch(x,prevEnv)
   :max(0):min(maxHoldSamples)
   :hbargraph("samples", 0, maxHoldSamples);
 
-pitch(x) =
-  pitchTracker(4,tau,x)
+pitch(x,prevEnv) =
+  pitchTracker(4,tau,x,prevEnv)
   // :max(30.87)
   // :min(maxF)
   : hbargraph("pitch", 30.87, 500)
@@ -41,7 +52,7 @@ zcrN(N,minF,maxF,loudEnough,period, x) =
   select2(
     bypass(rawFreq):hbargraph("BP", 0, 1)
    ,(zcRate@(
-        hslider("back mult", 4, 1, 16, 1)* ma.SR / rawFreq
+        hslider("back mult", 4, 0, 16, 1)* ma.SR / rawFreq
         :max(0):min(maxHoldSamples)):ba.sAndH(bypass(rawFreq)))
    ,zcRate
   )
@@ -52,9 +63,11 @@ with {
   // TODO: when we get too quiet:
   // - hold both the current pitch and the (avg?) pitch from one cylce back
   // - crossfade during 1 cycle between the current hold and the older one
-  bypass(f) = loudEnough
-              * (f>minF)
-              * (f<maxF)
+  bypass(f) =
+    // 1
+    loudEnough
+    * (f>minF)
+    * (f<maxF)
   ;
 };
 
@@ -85,21 +98,21 @@ declare pitchTracker author "Dario Sanfilippo";
 declare pitchTracker copyright "Copyright (C) 2022 Dario Sanfilippo
       <sanfilippo.dario@gmail.com>";
 declare pitchTracker license "MIT License";
-pitchTracker(N, t, x) = loop ~ _
+pitchTracker(N, t, x,prevEnv) = loop ~ _
 with {
   xHighpassed = fi.highpass(1, 20.0, x);
   loop(y) = (zcrN(hslider("zcr N" , 1, 1, 8, 1)
-                 , minF,maxF,1
-                 ,t, fi.lowpass(N, max(20.0, y), xHighpassed)) * ma.SR * .5);
+                 , minF,maxF,prevEnv>0.1
+                 ,t, fi.lowpass(N, max(20.0, y), xHighpassed)) * ma.SR * .5):max(minF:min(maxF));
   // ,t, fi.lowpass(N, max(20.0, y), xHighpassed)) * ma.SR * .5)~_;
 };
 
 minF = hslider("min pitch", 20, 20, 100, 1);
 maxF = hslider("max pitch", 200, 100, 500, 1);
 att = 0;
-rel(x) = hslider("rel", 1, 0.1, 2, 0.01)/pitch(x);
+rel(x,prevEnv) = hslider("rel", 1, 0.1, 2, 0.01)/pitch(x,prevEnv);
 
-tau = hslider("tau", 13, 0.1, 100, 0.01)*0.001;
+tau = hslider("tau", 42, 0.1, 100, 0.01)*0.001;
 
 smootherARorder(maxOrder,orderAtt, orderRel, att, rel, xx) =
   xx : seq(i, maxOrder, loop(i) ~ _)
