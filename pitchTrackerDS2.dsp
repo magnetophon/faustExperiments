@@ -51,10 +51,17 @@ declare zcr license "MIT-style STK-4.3 license";
 zcrN(N,minF,maxF,loudEnough,period, x) =
   select2(
     bypass(rawFreq):hbargraph("BP", 0, 1)
-   ,(zcRate@(
-        hslider("back mult", 4, 0, 16, 1)* ma.SR / rawFreq
-        :max(0):min(maxHoldSamples)):ba.sAndH(bypass(rawFreq)))
-   ,zcRate
+  , ba.slidingMean(meanSamples,zcRate)
+    @(
+      meanSamples
+      // hslider("back mult", 4, 0, 16, 1)* ma.SR / rawFreq
+      // :max(0):min(maxHoldSamples)
+    )
+    :ba.sAndH(bypass(rawFreq))
+     // ,(zcRate@(
+     // hslider("back mult", 4, 0, 16, 1)* ma.SR / rawFreq
+     // :max(0):min(maxHoldSamples)):ba.sAndH(bypass(rawFreq)))
+  ,zcRate
   )
 with {
   zcRate = ma.zc(x)
@@ -64,11 +71,11 @@ with {
   // - hold both the current pitch and the (avg?) pitch from one cylce back
   // - crossfade during 1 cycle between the current hold and the older one
   bypass(f) =
-    // 1
     loudEnough
     * (f>minF)
     * (f<maxF)
   ;
+  meanSamples = hslider("mean", 0.1, 0, 0.5, 0.001)*ma.SR;
 };
 
 
