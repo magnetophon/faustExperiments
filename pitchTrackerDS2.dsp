@@ -124,15 +124,15 @@ declare pitchTracker license "MIT License";
 pitchTracker(N, t, x,prevEnv) = loop ~ _
 with {
   xHighpassed = fi.highpass(1, 20.0, x);
-  loop(y) = (zcrN(hslider("zcr N" , 1, 1, 8, 1)
+  loop(y) = (zcrN(hslider("zcr N" , 4, 1, 8, 1)
                  , minF,maxF,prevEnv>threshold
                  ,t, fi.lowpass(N, max(minF, y), xHighpassed)) * ma.SR * .5):max(minF:min(maxF));
   // ,t, fi.lowpass(N, max(20.0, y), xHighpassed)) * ma.SR * .5)~_;
 };
 
-minF = hslider("min pitch", 41, 20, 100, 1);
+minF = hslider("min pitch", 30.87, 20, 100, 1);
 maxF = hslider("max pitch", 420, 100, 2000, 1);
-threshold = hslider("threshold", -30, -90, 0, 0.1):ba.db2linear;
+threshold = hslider("threshold", -22, -90, 0, 0.1):ba.db2linear;
 att = 0;
 rel(x,prevEnv) = hslider("rel", 1, 0.1, 2, 0.01)/pitch(x,prevEnv);
 
