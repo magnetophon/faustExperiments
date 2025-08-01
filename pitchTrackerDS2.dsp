@@ -51,16 +51,8 @@ declare zcr license "MIT-style STK-4.3 license";
 zcrN(N,minF,maxF,loudEnough,period, x) =
   select2(
     bypass(rawFreq):hbargraph("BP", 0, 1)
-  , ba.slidingMean(meanSamples,zcRate)
-    @(
-      meanSamples
-      // hslider("back mult", 4, 0, 16, 1)* ma.SR / rawFreq
-      // :max(0):min(maxHoldSamples)
-    )
-    :ba.sAndH(bypass(rawFreq))
-     // ,(zcRate@(
-     // hslider("back mult", 4, 0, 16, 1)* ma.SR / rawFreq
-     // :max(0):min(maxHoldSamples)):ba.sAndH(bypass(rawFreq)))
+                    // , meanAtDelayHeld
+  , resetAvg
   ,zcRate
   )
 with {
@@ -76,6 +68,30 @@ with {
     * (f<maxF)
   ;
   meanSamples = hslider("mean", 0.1, 0, 0.5, 0.001)*ma.SR;
+  reset(f) =
+    (1-bypass(f))
+    | newNote(f);
+  newNote(f) =
+    (f>((f:ba.hz2midikey+0.5):ba.midikey2hz))
+    | (f<((f:ba.hz2midikey-0.5):ba.midikey2hz));
+  meanAtDelayHeld =
+    ba.slidingMean(meanSamples,zcRate)
+    @(
+      meanSamples*hslider("mean delay mult", 4.2, 0, 8, 0.1)
+    )
+    :ba.sAndH(bypass(rawFreq));
+  resetAvg =
+    ((resetSum~_
+               - ((avgCounter>meanSamples)*(zcRate@meanSamples)))
+     / avgCounter)
+    @(meanSamples*hslider("mean delay mult", 1.4, 0, 8, 0.1))
+    :ba.sAndH(bypass(rawFreq));
+
+  avgCounter = ba.countup(meanSamples, reset(rawFreq))+1:hbargraph("avg counter", 1, 0.5*48000);
+  resetSum(prev) =
+    select2(reset(rawFreq)
+           , zcRate+prev
+           , zcRate);
 };
 
 
@@ -110,17 +126,17 @@ with {
   xHighpassed = fi.highpass(1, 20.0, x);
   loop(y) = (zcrN(hslider("zcr N" , 1, 1, 8, 1)
                  , minF,maxF,prevEnv>threshold
-                 ,t, fi.lowpass(N, max(20.0, y), xHighpassed)) * ma.SR * .5):max(minF:min(maxF));
+                 ,t, fi.lowpass(N, max(minF, y), xHighpassed)) * ma.SR * .5):max(minF:min(maxF));
   // ,t, fi.lowpass(N, max(20.0, y), xHighpassed)) * ma.SR * .5)~_;
 };
 
-minF = hslider("min pitch", 20, 20, 100, 1);
-maxF = hslider("max pitch", 200, 100, 500, 1);
+minF = hslider("min pitch", 41, 20, 100, 1);
+maxF = hslider("max pitch", 420, 100, 2000, 1);
 threshold = hslider("threshold", -30, -90, 0, 0.1):ba.db2linear;
 att = 0;
 rel(x,prevEnv) = hslider("rel", 1, 0.1, 2, 0.01)/pitch(x,prevEnv);
 
-tau = hslider("tau", 42, 0.1, 100, 0.01)*0.001;
+tau = hslider("tau", 42, 1, 100, 1)*0.001;
 
 smootherARorder(maxOrder,orderAtt, orderRel, att, rel, xx) =
   xx : seq(i, maxOrder, loop(i) ~ _)
