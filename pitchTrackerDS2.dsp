@@ -3,6 +3,7 @@ process(x) =
   x
 , (
   0.25
+  // (correlation(x):an.amp_follower_ar(att,hslider("cor rel", 0.02, 0.01, 0.5, 0.01)))
   // envelope(x)
   *os.osc(myPitch(x)*2))
   // , ba.slidingMax(samples(x,1),maxHoldSamples,abs(x))
@@ -21,6 +22,9 @@ myPitch(x) =
 // (ba.slidingMax(samples(x,_),maxHoldSamples,abs(x))
 //  :max(0) // slidingMax defaults to -inf
 //  :smootherARorder(4,4,4, att, rel(x,_)))~(_<:(_,_));
+
+// correlation(x) = (x*x@(ma.SR/myPitch(x):max(0):min(maxHoldSamples)))/max(ma.EPSILON,x*x):max(0):min(1):hbargraph("correlation", 0, 1);
+correlation(x) = ((x*x@(ma.SR/myPitch(x):max(0):min(maxHoldSamples)))/max(threshold,x*x)):max(0):min(1):hbargraph("correlation", 0, 1);
 
 envLoop(x,prevEnv) =
   ba.slidingMax(samples(x,prevEnv),maxHoldSamples,abs(x))
