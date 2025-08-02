@@ -1,3 +1,6 @@
+// TODO: smootherARorder:
+// log crossfade for times
+// put nonlinearitys between stages that invert each other
 import("stdfaust.lib");
 process(x) =
   x
@@ -12,8 +15,8 @@ process(x) =
 ;
 
 
-// maxHoldSamples = 2048;
-maxHoldSamples = 4096;
+maxHoldSamples = 2048;
+// maxHoldSamples = 4096;
 
 envelope(x) =
   envLoop(x)~_:(_,!);
@@ -85,17 +88,17 @@ with {
     )
     :ba.sAndH(bypass(rawFreq));
   resetAvg =
-    ((resetSum~_
-               - ((avgCounter>meanSamples)*(zcRate@meanSamples)))
+    ((resetSum~_)
      / avgCounter)
     @(meanSamples*hslider("mean delay mult", 1.4, 0, 8, 0.1))
     :ba.sAndH(bypass(rawFreq));
 
-  avgCounter = ba.countup(meanSamples, reset(rawFreq))+1:hbargraph("avg counter", 1, 0.5*48000);
   resetSum(prev) =
     select2(reset(rawFreq)
            , zcRate+prev
-           , zcRate);
+           , zcRate)
+    - ((avgCounter>meanSamples)*(zcRate@meanSamples));
+  avgCounter = ba.countup(meanSamples, reset(rawFreq))+1:hbargraph("avg counter", 1, 0.5*48000);
 };
 
 
