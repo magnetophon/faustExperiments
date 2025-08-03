@@ -10,7 +10,7 @@ process(x) =
   // envelope(x)
   *os.osc(myPitch(x)*2))
 , envelope(x)
-, correlation(x)
+  // , correlation(x)
 ;
 
 
@@ -120,10 +120,13 @@ declare pitchTracker license "MIT License";
 pitchTracker(N, t, x,prevEnv) = loop ~ _
 with {
   xHighpassed = fi.highpass(1, 20.0, x);
-  loop(y) = (zcrN(hslider("zcr N" , 4, 1, 8, 1)
-                 , minF,maxF,prevEnv>threshold
-                 ,t, fi.lowpass(N, max(minF, y), xHighpassed)) * ma.SR * .5):max(minF:min(maxF));
-  // ,t, fi.lowpass(N, max(20.0, y), xHighpassed)) * ma.SR * .5)~_;
+  // TODO: check if this is beter:
+  // xHighpassed = fi.highpass(N, minF, x);
+  loop(y) =
+    (zcrN(hslider("zcr N" , 4, 1, 8, 1)
+         , minF,maxF,prevEnv>threshold
+         ,t, fi.lowpass(N, max(minF, y), xHighpassed))
+     * ma.SR * .5):max(minF):min(maxF);
 };
 
 minF = hslider("min pitch", 30.87, 20, 100, 1);
