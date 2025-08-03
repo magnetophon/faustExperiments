@@ -9,9 +9,8 @@ process(x) =
   // (correlation(x):an.amp_follower_ar(att,hslider("cor rel", 0.02, 0.01, 0.5, 0.01)))
   // envelope(x)
   *os.osc(myPitch(x)*2))
-  // , ba.slidingMax(samples(x,1),maxHoldSamples,abs(x))
-,
-  envelope(x)
+, envelope(x)
+, correlation(x)
 ;
 
 
@@ -22,9 +21,6 @@ envelope(x) =
   envLoop(x)~_:(_,!);
 myPitch(x) =
   envLoop(x)~_:(!,_);
-// (ba.slidingMax(samples(x,_),maxHoldSamples,abs(x))
-//  :max(0) // slidingMax defaults to -inf
-//  :smootherARorder(4,4,4, att, rel(x,_)))~(_<:(_,_));
 
 // correlation(x) = (x*x@(ma.SR/myPitch(x):max(0):min(maxHoldSamples)))/max(ma.EPSILON,x*x):max(0):min(1):hbargraph("correlation", 0, 1);
 correlation(x) = ((x*x@(ma.SR/myPitch(x):max(0):min(maxHoldSamples)))/max(threshold,x*x)):max(0):min(1):hbargraph("correlation", 0, 1);
@@ -58,13 +54,12 @@ declare zcr license "MIT-style STK-4.3 license";
 zcrN(N,minF,maxF,loudEnough,period, x) =
   select2(
     bypass(rawFreq):hbargraph("BP", 0, 1)
-                    // , meanAtDelayHeld
   , resetAvg
   ,zcRate
   )
 with {
   zcRate = ma.zc(x)
-           : smootherARorder(8,N,N, period,period);
+           : smootherARorder(4,4,4, period,period);
   rawFreq = zcRate * ma.SR * .5:hbargraph("raw F", 30.87, 500);
   // TODO: when we get too quiet:
   // - hold both the current pitch and the (avg?) pitch from one cylce back
@@ -81,12 +76,6 @@ with {
   newNote(f) =
     (f>((f:ba.hz2midikey+0.5):ba.midikey2hz))
     | (f<((f:ba.hz2midikey-0.5):ba.midikey2hz));
-  meanAtDelayHeld =
-    ba.slidingMean(meanSamples,zcRate)
-    @(
-      meanSamples*hslider("mean delay mult", 4.2, 0, 8, 0.1)
-    )
-    :ba.sAndH(bypass(rawFreq));
   resetAvg =
     ((resetSum~_)
      / avgCounter)
