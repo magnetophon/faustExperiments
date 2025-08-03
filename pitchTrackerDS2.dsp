@@ -45,18 +45,17 @@ pitch(x,prevEnv) =
   : hbargraph("pitch", 30.87, 500)
 ;
 
-// * `tau`: (time to decay by e^-1) sets the averaging frame in seconds.
 declare zcr author "Dario Sanfilippo";
 declare zcr copyright "Copyright (C) 2020 Dario Sanfilippo
       <sanfilippo.dario@gmail.com>";
 declare zcr license "MIT-style STK-4.3 license";
-// zcrN(N,minF,maxF,loudEnough,period, prevF, x) =
 zcrN(N,minF,maxF,loudEnough,period, x) =
   select2(
     bypass(rawFreq):hbargraph("BP", 0, 1)
-  , resetAvg
+  , (resetAvg~_)
   ,zcRate
   )
+
 with {
   zcRate = ma.zc(x)
            : smootherARorder(4,4,4, period,period);
@@ -69,25 +68,64 @@ with {
     * (f>minF)
     * (f<maxF)
   ;
-  meanSamples = hslider("mean", 0.1, 0, 0.5, 0.001)*ma.SR;
-  reset(f) =
-    (1-bypass(f))
-    | newNote(f);
-  newNote(f) =
-    (f>((f:ba.hz2midikey+0.5):ba.midikey2hz))
-    | (f<((f:ba.hz2midikey-0.5):ba.midikey2hz));
-  resetAvg =
+  meanSamples = hslider("mean", 0.2, 0, 0.5, 0.001)*ma.SR;
+  // todo: only count when quality is good?
+ // TODO:
+  // maybe: at each reset start 2 averages: one with the current value and one with the last avg
+  // or: one that resets on each pitch that is too far appart and one that only restest when the level is too low
+  resetAvg(prevRate) =
     ((resetSum~_)
      / avgCounter)
-    @(meanSamples*hslider("mean delay mult", 1.4, 0, 8, 0.1))
-    :ba.sAndH(bypass(rawFreq));
+    // @(meanSamples*hslider("mean delay mult", 1.4, 0, 8, 0.1))
+    // :ba.sAndH(bypass(rawFreq))
+    :getValAtHighetstCounter
+  with {
+    reset(f) =
+      (1-bypass(f))
+      | newNote(f)
+      : hbargraph("reset", 0, 1)
+    ;
+    // TODO: tweak ranges, compare f to avg
+    newNote(f) =
+      // (f>((f':ba.hz2midikey+newNoteSens):ba.midikey2hz))
+      // | (f<((f':ba.hz2midikey-newNoteSens):ba.midikey2hz)) ;
+      (f>((prevF:ba.hz2midikey+newNoteSens):ba.midikey2hz))
+      | (f<((prevF:ba.hz2midikey-newNoteSens):ba.midikey2hz)) ;
+    newNoteSens = hslider("new note sens", 2.5, 0, 12, 0.001);
+    resetSum(prev) =
+      select2(reset(rawFreq)
+             , zcRate+prev
+             , zcRate)
+      - ((avgCounter>meanSamples)*(zcRate@meanSamples));
+    prevF =
+      prevRate *
+      ma.SR * .5:max(minF:min(maxF));
+    avgCounter = ba.countup(meanSamples, reset(rawFreq))+1:hbargraph("avg counter", 1, 0.5*48000);
+    highestCounter =
+      loop~_
+    with {
+      loop(prevHighest) =
+        select2(bypass(rawFreq)
+               , prevHighest
+               , max( prevHighest , avgCounter)
+               )*(1-(bypass(rawFreq):ba.impulsify)):hbargraph("highest", 0, 0.5*48000);
+    };
+    // sample the value with the highest avgCounter value since the last bypass
+    getValAtHighetstCounter(value) =
+      select2(bypass(rawFreq)
+             , (loop~_)
+             , value
+             )
+    with {
+      loop(prevValue) =
+        select2(avgCounter>=highestCounter
+               , prevValue
+               , value);
+    };
 
-  resetSum(prev) =
-    select2(reset(rawFreq)
-           , zcRate+prev
-           , zcRate)
-    - ((avgCounter>meanSamples)*(zcRate@meanSamples));
-  avgCounter = ba.countup(meanSamples, reset(rawFreq))+1:hbargraph("avg counter", 1, 0.5*48000);
+  };
+
+
 };
 
 
