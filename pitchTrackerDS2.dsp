@@ -32,9 +32,17 @@ process(x) =
      envelope(x)>(threshold):ba.impulsify
                              // :si.onePoleSwitching(attack,decay)
                              // :smootherARorder(4,4,2, attack, decay)
+                             // : (loop~(_,_))
      : en.ar(attack, decay)
        * attackReplace
-   ;
+   with {
+     loop(prevEnv, prevGate) =
+       select2(prevEnv<1
+              , en.are(attack, decay)
+              , 1
+              );
+   };
+
 
    attack = hslider("attack", 0.5, 0, 1, 0.001)*0.02;
    decay = hslider("decay", 0.1, 0, 0.3, 0.001);
@@ -51,8 +59,9 @@ process(x) =
    ;
 
    samples(x,prevEnv) =
-     hslider("mult", 1, 0.5, 2, 0.01)
-     *ma.SR / pitch(x,prevEnv)
+     // hslider("mult", 1, 0.5, 2, 0.01)
+     // *
+     ma.SR / pitch(x,prevEnv)
      :max(0):min(maxHoldSamples)
      :hbargraph("samples", 0, maxHoldSamples);
 
@@ -76,7 +85,14 @@ process(x) =
 
    with {
      zcRate = ma.zc(x)
-              : smootherARorder(4,4,4, period,period);
+              // <:select2(checkbox("dyn")
+              // , smootherARorder(4,4,4, period,period)
+              // ,
+              : fi.dynamicSmoothing(sensitivity, baseCF)
+                // )
+     ;
+     sensitivity = hslider("sensitivity", 0.07, 0, 1, 0.001);
+     baseCF = hslider("base CF", 16, 6, 21, 0.001);
      rawFreq = zcRate * ma.SR * .5:hbargraph("raw F", 30.87, 500);
      // TODO: when we get too quiet:
      // - hold both the current pitch and the (avg?) pitch from one cylce back
@@ -84,8 +100,7 @@ process(x) =
      bypass(f) =
        loudEnough
        * (f>minF)
-       * (f<maxF)
-     ;
+       * (f<maxF);
      meanSamples = hslider("mean", 0.2, 0, 0.5, 0.001)*ma.SR;
      // todo: only count when quality is good?
      // TODO:
@@ -109,7 +124,7 @@ process(x) =
          // | (f<((f':ba.hz2midikey-newNoteSens):ba.midikey2hz)) ;
          (f>((prevF:ba.hz2midikey+newNoteSens):ba.midikey2hz))
          | (f<((prevF:ba.hz2midikey-newNoteSens):ba.midikey2hz)) ;
-       newNoteSens = hslider("new note sens", 2.5, 0, 12, 0.001);
+       newNoteSens = hslider("new note sens", 1.5, 0, 12, 0.001);
        resetSum(prev) =
          select2(reset(rawFreq)
                 , zcRate+prev
@@ -191,7 +206,10 @@ process(x) =
    maxF = hslider("max pitch", 420, 100, 2000, 1);
    threshold = hslider("threshold", -22, -90, 0, 0.1):ba.db2linear;
    att = 0;
-   rel(x,prevEnv) = hslider("rel", 1, 0.1, 2, 0.01)/pitch(x,prevEnv);
+   rel(x,prevEnv) =
+     // hslider("rel", 1, 0.1, 2, 0.01)
+     1
+     /pitch(x,prevEnv);
 
    tau = hslider("tau", 42, 1, 100, 1)*0.001;
 
