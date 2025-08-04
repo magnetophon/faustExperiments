@@ -2,6 +2,7 @@
 // log crossfade for times
 // put nonlinearitys between stages that invert each other
 import("stdfaust.lib");
+
 process(x) =
   (
     ((x/envelope(x))*attackEnv(x))
@@ -29,24 +30,23 @@ process(x) =
      envLoop(x)~_:(!,_);
 
    attackEnv(x) =
-     envelope(x)>(threshold):ba.impulsify
-                             // :si.onePoleSwitching(attack,decay)
-                             // :smootherARorder(4,4,2, attack, decay)
-                             // : (loop~(_,_))
-     : en.ar(attack, decay)
-       * attackReplace
+    (loop~_)
+    * attackReplace
    with {
-     loop(prevEnv, prevGate) =
-       select2(prevEnv<1
-              , en.are(attack, decay)
-              , 1
-              );
+     trig = envelope(x)>(threshold):ba.impulsify;
+     loop(prevEnv ) =
+       ( (prevEnv<1)
+         & (prevEnv>0)
+         & (prevEnv>prevEnv')
+       )
+       | trig
+       :smootherARorder(4,4,2, attack, decay);
    };
 
 
-   attack = hslider("attack", 0.5, 0, 1, 0.001)*0.02;
-   decay = hslider("decay", 0.1, 0, 0.3, 0.001);
-   attackReplace = hslider("attck replace", 1, 0, 1, 0.001);
+   attack = hslider("attack", 0.2, 0, 1, 0.001)*0.02;
+   decay = hslider("decay", 0.15, 0, 0.3, 0.001);
+   attackReplace = hslider("attack replace", 1, 0, 1, 0.001);
 
    // correlation(x) = (x*x@(ma.SR/myPitch(x):max(0):min(maxHoldSamples)))/max(ma.EPSILON,x*x):max(0):min(1):hbargraph("correlation", 0, 1);
    correlation(x) = ((x*x@(ma.SR/myPitch(x):max(0):min(maxHoldSamples)))/max(threshold,x*x)):max(0):min(1):hbargraph("correlation", 0, 1);
