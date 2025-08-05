@@ -23,9 +23,12 @@ CZsynth(x, env, pitch) =
   : si.interpolate(octave:ma.frac)
 with {
   fund = os.lf_sawpos(pitch*oct2mult(minOctave));
-  f0 = (fund * oct2mult(floor(octave) - minOctave)):ma.frac;
-  f1 = f0*2:ma.frac;
+  f0 = (fund * oct2mult(floor(octave) - minOctave)):ma.frac:preFilter;
+  f1 = f0*2:ma.frac:preFilter;
   index = env;
+  preFilter = ve.korg35LPF(normFreq,Q);
+  normFreq = hslider("filt freq", 1, 0, 1, 0.001):si.smoo;
+  Q = hslider("Q", 0, 0, 10, 0.001);
 };
 
 oct2mult(oct) = pow(2,oct);
