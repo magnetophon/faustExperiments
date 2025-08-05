@@ -5,8 +5,7 @@ import("stdfaust.lib");
 
 process(x) =
   envPitch(x)~_
-              <: (attackReplacer(x) + synthLevel(x)* CZsynth(x))
-;
+              <: (attackReplacer(x) + synthLevel(x)* CZsynth(x));
 
 attackReplacer(x, env,pitch) =
   (x / max(ma.EPSILON,env))
@@ -17,16 +16,29 @@ synthLevel(x, env, pitch) =
   *0.6;
 
 CZsynth(x, env, pitch) =
-  (  os.CZsquare(f0,index)
-   , os.CZsquare(f1,index)
-  )
+  phasesAndFilters
+  : oscillators(index)
   : si.interpolate(octave:ma.frac)
 with {
   fund = os.lf_sawpos(pitch*oct2mult(minOctave));
-  f0 = (fund * oct2mult(floor(octave) - minOctave)):ma.frac:preFilter;
-  f1 = f0*2:ma.frac:preFilter;
-  index = env;
-  preFilter = ve.korg35LPF(normFreq,Q);
+  f0 = (fund * oct2mult(floor(octave) - minOctave)):ma.frac;
+  f1 = f0*2:ma.frac;
+  phasesAndFilters =
+    (f1, f0)
+    :swap(bool)
+    :(preFilter,preFilter)
+    :swap(1-bool);
+  swap(bool,a,b) =
+    select2(bool, a, b)
+  , select2(bool, b, a);
+  bool =
+    floor(abs(octave - minOctave))%2;
+  oscillators(index, f0, f1) =
+    os.CZsquare(f0,index)
+  , os.CZsquare(f1,index);
+  index = env+(hslider("index", 0, 0, 1, 0.001):si.smoo);
+  preFilter =
+    ve.korg35LPF(normFreq,Q);
   normFreq = hslider("filt freq", 1, 0, 1, 0.001):si.smoo;
   Q = hslider("Q", 0, 0, 10, 0.001);
 };
