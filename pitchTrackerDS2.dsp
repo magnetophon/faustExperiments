@@ -5,18 +5,34 @@ import("stdfaust.lib");
 
 process(x) =
   envPitch(x)~_
-              <: (attackReplacer(x) + CZsynth(x))
+              <: (attackReplacer(x) + synthLevel(x)* CZsynth(x))
 ;
 
 attackReplacer(x, env,pitch) =
-  ((x/max(ma.EPSILON,env))*attackEnv(env,x));
+  (x / max(ma.EPSILON,env))
+  * attackEnv(env);
+
+synthLevel(x, env, pitch) =
+  (1-attackEnv(env))
+  *0.6;
 
 CZsynth(x, env, pitch) =
-  (1-attackEnv(env,x))
-  *0.6
-  *os.osc(pitch*octave);
+  (  os.CZsquare(f0,index)
+   , os.CZsquare(f1,index)
+  )
+  : si.interpolate(octave:ma.frac)
+with {
+  fund = os.lf_sawpos(pitch*oct2mult(minOctave));
+  f0 = (fund * oct2mult(floor(octave) - minOctave)):ma.frac;
+  f1 = f0*2:ma.frac;
+  index = env;
+};
 
-attackEnv(env,x) =
+oct2mult(oct) = pow(2,oct);
+
+// os.CZsquare(fund, index)
+
+attackEnv(env) =
   (loop~_)
   * attackReplace
 with {
@@ -30,9 +46,10 @@ with {
     :smootherARorder(4,4,2, attack, decay);
 };
 
-octave = pow(2,hslider("octave", 0, -4, 4, 1));
+octave = hslider("octave", 0, minOctave, 4, 0.001): si.smoo;
 
 maxHoldSamples = 2048;
+minOctave = -4;
 
 
 attack = hslider("attack", 0.2, 0, 1, 0.001)*0.02;
