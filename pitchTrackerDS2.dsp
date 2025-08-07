@@ -5,17 +5,17 @@ import("stdfaust.lib");
 
 process(x) =
   envPitch(x)~_
-              <: (attackReplacer(x) + synthLevel(x)* CZsynth(x));
+              <: (attackReplacer(x) + synthLevel* CZsynth);
 
 attackReplacer(x, env,pitch) =
   (x / max(ma.EPSILON,env))
   * attackEnv(env);
 
-synthLevel(x, env, pitch) =
+synthLevel(env, pitch) =
   (1-attackEnv(env))
   *0.6;
 
-CZsynth(x, env, pitch) =
+CZsynth(env, pitch) =
   phasesAndFilters
   : oscillators(index)
   : si.interpolate(octave:ma.frac)
@@ -44,7 +44,7 @@ with {
   BP = (normFreq-Fthres):max(0)/(1-Fthres);
 
   normFreq = hslider("filt freq", 1, 0, 1, 0.001):si.smoo;
-  Q = hslider("Q", 0, 0, 10, 0.001);
+  Q = hslider("Q", 0, 0, 10, 0.001):si.smoo;
 };
 
 oct2mult(oct) = pow(2,oct);
@@ -102,7 +102,7 @@ declare zcr author "Dario Sanfilippo";
 declare zcr copyright "Copyright (C) 2020 Dario Sanfilippo
       <sanfilippo.dario@gmail.com>";
 declare zcr license "MIT-style STK-4.3 license";
-zcrN(minF,maxF,loudEnough,period, x) =
+zcrN(minF,maxF,loudEnough, x) =
   select2(
     bypass(rawFreq)
     // :hbargraph("BP", 0, 1)
@@ -228,12 +228,17 @@ with {
   // xHighpassed = fi.highpass(N, minF, x);
   loop(y) =
     (zcrN(minF,maxF,prevEnv>threshold
-          ,t, fi.lowpass(N, max(minF, y), xHighpassed))
+          , fi.lowpass(N, max(minF, y), xHighpassed))
      * ma.SR * .5):max(minF):min(maxF);
 };
 
-minF = hslider("min pitch", 30.87, 20, 100, 1);
-maxF = hslider("max pitch", 420, 100, 2000, 1);
+// The lowest note on a typical 5-string bass is B0 (30.87 Hz).
+minF = 30.87;
+// hslider("min pitch", 30.87, 20, 100, 1);
+// If the guitar has 24 frets, the highest note would be E6, which is 1318.51 Hz.
+maxF =
+  1318.51;
+// hslider("max pitch", 420, 100, 1318.51, 1);
 threshold = hslider("threshold", -22, -90, 0, 0.1):ba.db2linear;
 att = 0;
 rel(x,prevEnv) =
