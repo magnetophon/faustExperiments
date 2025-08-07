@@ -5,13 +5,19 @@ import("stdfaust.lib");
 
 
 
-threshold = hslider("[1]threshold", -22, -90, 0, 0.1):ba.db2linear;
-octave = hslider("[2]octave", 0, minOctave, 4, 0.001): si.smoo;
+thresholdSlider = hslider("[1]threshold", -22, -90, 0, 0.1):ba.db2linear;
+octaveSlider = hslider("[2]octave", 0, minOctave, 4, 0.001): si.smoo;
+octMod = hslider("[2]octave mod", 0, -11, 11, 0.001): si.smoo;
 indexSlider = hslider("[3]index", 0, 0, 1, 0.001):si.smoo;
-normFreq = hslider("[4]filt freq", 1, 0, 1, 0.001):si.smoo;
-Q = hslider("[5]Q", 0, 0, 10, 0.001):si.smoo;
+indexMod = hslider("[3]index mod", 0, -4, 4, 0.001):si.smoo;
+filterFreqSlider = hslider("[4]filt freq", 1, 0, 1, 0.001):si.smoo;
+filterFreqMod = hslider("[4]filt freq mod", 0, -4, 4, 0.001):si.smoo;
+Qslider = hslider("[5]Q", 0, 0, 10, 0.001):si.smoo;
+Qmod = hslider("[5]Q mod", 0, -30, 30, 0.001):si.smoo;
 
 
+maxHoldSamples = 2048;
+minOctave = -4;
 
 process(x) =
   envPitch(x)~_
@@ -46,12 +52,16 @@ with {
   oscillators(index, f0, f1) =
     os.CZsquare(f0,index)
   , os.CZsquare(f1,index);
-  index = env+indexSlider;
   preFilter(x) =
-    (ve.korg35LPF(normFreq:max(0):min(Fthres),Q,x),x)
-    :si.interpolate(BP);
+    (ve.korg35LPF(filterFreq:max(0):min(Fthres),Q,x),x)
+    :si.interpolate(filterBP);
   Fthres = 0.95;
-  BP = (normFreq-Fthres):max(0)/(1-Fthres);
+  filterBP = (filterFreq-Fthres):max(0)/(1-Fthres);
+
+  octave = (octaveSlider + octMod*env):max(minOctave);
+  index = indexSlider+ indexMod*env;
+  filterFreq = filterFreqSlider + filterFreqMod*env:max(0):min(1);
+  Q = Qslider + Qmod*env:max(0):min(10);
 
 };
 
@@ -63,7 +73,7 @@ attackEnv(env) =
   (loop~_)
   * attackReplace
 with {
-  trig = env>threshold:ba.impulsify;
+  trig = env>thresholdSlider:ba.impulsify;
   loop(prevEnv ) =
     ( (prevEnv<1)
       & (prevEnv>0)
@@ -74,8 +84,6 @@ with {
 };
 
 
-maxHoldSamples = 2048;
-minOctave = -4;
 
 
 attack = 0.004;
@@ -234,7 +242,7 @@ with {
   // TODO: check if this is beter:
   // xHighpassed = fi.highpass(N, minF, x);
   loop(y) =
-    (zcrN(minF,maxF,prevEnv>threshold
+    (zcrN(minF,maxF,prevEnv>thresholdSlider
           , fi.lowpass(N, max(minF, y), xHighpassed))
      * ma.SR * .5):max(minF):min(maxF);
 };
@@ -273,4 +281,4 @@ with {
 };
 
 // correlation(x) = (x*x@(ma.SR/myPitch(x):max(0):min(maxHoldSamples)))/max(ma.EPSILON,x*x):max(0):min(1):hbargraph("correlation", 0, 1);
-correlation(x) = ((x*x@(ma.SR/myPitch(x):max(0):min(maxHoldSamples)))/max(threshold,x*x)):max(0):min(1):hbargraph("correlation", 0, 1);
+correlation(x) = ((x*x@(ma.SR/myPitch(x):max(0):min(maxHoldSamples)))/max(thresholdSlider,x*x)):max(0):min(1):hbargraph("correlation", 0, 1);
