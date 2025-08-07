@@ -3,6 +3,16 @@
 // put nonlinearitys between stages that invert each other
 import("stdfaust.lib");
 
+
+
+threshold = hslider("[1]threshold", -22, -90, 0, 0.1):ba.db2linear;
+octave = hslider("[2]octave", 0, minOctave, 4, 0.001): si.smoo;
+indexSlider = hslider("[3]index", 0, 0, 1, 0.001):si.smoo;
+normFreq = hslider("[4]filt freq", 1, 0, 1, 0.001):si.smoo;
+Q = hslider("[5]Q", 0, 0, 10, 0.001):si.smoo;
+
+
+
 process(x) =
   envPitch(x)~_
               <: (attackReplacer(x) + synthLevel* CZsynth);
@@ -36,15 +46,13 @@ with {
   oscillators(index, f0, f1) =
     os.CZsquare(f0,index)
   , os.CZsquare(f1,index);
-  index = env+(hslider("index", 0, 0, 1, 0.001):si.smoo);
+  index = env+indexSlider;
   preFilter(x) =
     (ve.korg35LPF(normFreq:max(0):min(Fthres),Q,x),x)
     :si.interpolate(BP);
   Fthres = 0.95;
   BP = (normFreq-Fthres):max(0)/(1-Fthres);
 
-  normFreq = hslider("filt freq", 1, 0, 1, 0.001):si.smoo;
-  Q = hslider("Q", 0, 0, 10, 0.001):si.smoo;
 };
 
 oct2mult(oct) = pow(2,oct);
@@ -65,7 +73,6 @@ with {
     :smootherARorder(4,4,2, attack, decay);
 };
 
-octave = hslider("octave", 0, minOctave, 4, 0.001): si.smoo;
 
 maxHoldSamples = 2048;
 minOctave = -4;
@@ -239,7 +246,6 @@ minF = 30.87;
 maxF =
   1318.51;
 // hslider("max pitch", 420, 100, 1318.51, 1);
-threshold = hslider("threshold", -22, -90, 0, 0.1):ba.db2linear;
 att = 0;
 rel(x,prevEnv) =
   // hslider("rel", 1, 0.1, 2, 0.01)
