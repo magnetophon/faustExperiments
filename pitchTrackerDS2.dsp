@@ -37,8 +37,12 @@ with {
     os.CZsquare(f0,index)
   , os.CZsquare(f1,index);
   index = env+(hslider("index", 0, 0, 1, 0.001):si.smoo);
-  preFilter =
-    ve.korg35LPF(normFreq,Q);
+  preFilter(x) =
+    (ve.korg35LPF(normFreq:max(0):min(Fthres),Q,x),x)
+    :si.interpolate(BP);
+  Fthres = 0.95;
+  BP = (normFreq-Fthres):max(0)/(1-Fthres);
+
   normFreq = hslider("filt freq", 1, 0, 1, 0.001):si.smoo;
   Q = hslider("Q", 0, 0, 10, 0.001);
 };
@@ -67,9 +71,12 @@ maxHoldSamples = 2048;
 minOctave = -4;
 
 
-attack = hslider("attack", 0.2, 0, 1, 0.001)*0.02;
-decay = hslider("decay", 0.15, 0, 0.3, 0.001);
-attackReplace = hslider("attack replace", 1, 0, 1, 0.001);
+attack = 0.004;
+// hslider("attack", 0.2, 0, 1, 0.001)*0.02;
+decay = 0.15;
+// hslider("decay", 0.15, 0, 0.3, 0.001);
+attackReplace = 1;
+// hslider("attack replace", 1, 0, 1, 0.001);
 
 envPitch(x,prevEnv) =
   ba.slidingMax(samples(x,prevEnv),maxHoldSamples,abs(x))
@@ -83,22 +90,22 @@ samples(x,prevEnv) =
   // *
   ma.SR / pitch(x,prevEnv)
   :max(0):min(maxHoldSamples)
-  :hbargraph("samples", 0, maxHoldSamples);
+          // :hbargraph("samples", 0, maxHoldSamples)
+;
 
 pitch(x,prevEnv) =
   pitchTracker(4,tau,x,prevEnv)
-  // :max(30.87)
-  // :min(maxF)
-  : hbargraph("pitch", 30.87, 500)
+  // : hbargraph("pitch", 30.87, 500)
 ;
 
 declare zcr author "Dario Sanfilippo";
 declare zcr copyright "Copyright (C) 2020 Dario Sanfilippo
       <sanfilippo.dario@gmail.com>";
 declare zcr license "MIT-style STK-4.3 license";
-zcrN(N,minF,maxF,loudEnough,period, x) =
+zcrN(minF,maxF,loudEnough,period, x) =
   select2(
-    bypass(rawFreq):hbargraph("BP", 0, 1)
+    bypass(rawFreq)
+    // :hbargraph("BP", 0, 1)
   , (resetAvg~_)
   ,zcRate
   )
@@ -111,17 +118,21 @@ with {
            : fi.dynamicSmoothing(sensitivity, baseCF)
              // )
   ;
-  sensitivity = hslider("sensitivity", 0.07, 0, 1, 0.001);
-  baseCF = hslider("base CF", 16, 6, 21, 0.001);
-  rawFreq = zcRate * ma.SR * .5:hbargraph("raw F", 30.87, 500);
-  // TODO: when we get too quiet:
-  // - hold both the current pitch and the (avg?) pitch from one cylce back
-  // - crossfade during 1 cycle between the current hold and the older one
+  sensitivity = 0.07;
+  // hslider("sensitivity", 0.07, 0, 1, 0.001);
+  baseCF = 16;
+  // hslider("base CF", 16, 6, 21, 0.001);
+  rawFreq = zcRate * ma.SR * .5
+            // :hbargraph("raw F", 30.87, 500)
+  ;
   bypass(f) =
     loudEnough
     * (f>minF)
     * (f<maxF);
-  meanSamples = hslider("mean", 0.2, 0, 0.5, 0.001)*ma.SR;
+  meanSamples =
+    0.2
+    // hslider("mean", 0.2, 0, 0.5, 0.001)
+    *ma.SR;
   // todo: only count when quality is good?
   // TODO:
   // maybe: at each reset start 2 averages: one with the current value and one with the last avg
@@ -129,22 +140,19 @@ with {
   resetAvg(prevRate) =
     ((resetSum~_)
      / avgCounter)
-    // @(meanSamples*hslider("mean delay mult", 1.4, 0, 8, 0.1))
-    // :ba.sAndH(bypass(rawFreq))
     :getValAtHighetstCounter
   with {
     reset(f) =
       (1-bypass(f))
       | newNote(f)
-      : hbargraph("reset", 0, 1)
+      // : hbargraph("reset", 0, 1)
     ;
     // TODO: tweak ranges, compare f to avg
     newNote(f) =
-      // (f>((f':ba.hz2midikey+newNoteSens):ba.midikey2hz))
-      // | (f<((f':ba.hz2midikey-newNoteSens):ba.midikey2hz)) ;
       (f>((prevF:ba.hz2midikey+newNoteSens):ba.midikey2hz))
       | (f<((prevF:ba.hz2midikey-newNoteSens):ba.midikey2hz)) ;
-    newNoteSens = hslider("new note sens", 1.5, 0, 12, 0.001);
+    newNoteSens = 1.5;
+    // hslider("new note sens", 1.5, 0, 12, 0.001);
     resetSum(prev) =
       select2(reset(rawFreq)
              , zcRate+prev
@@ -153,7 +161,9 @@ with {
     prevF =
       prevRate *
       ma.SR * .5:max(minF:min(maxF));
-    avgCounter = ba.countup(meanSamples, reset(rawFreq))+1:hbargraph("avg counter", 1, 0.5*48000);
+    avgCounter = ba.countup(meanSamples, reset(rawFreq))+1
+                 // :hbargraph("avg counter", 1, 0.5*48000)
+    ;
     highestCounter =
       loop~_
     with {
@@ -163,7 +173,8 @@ with {
                , max( prevHighest , avgCounter)
                )
         *(1-(bypass(rawFreq):ba.impulsify))
-        :hbargraph("highest", 0, 0.5*48000);
+        // :hbargraph("highest", 0, 0.5*48000)
+      ;
     };
     // sample the value with the highest avgCounter value since the last bypass
     getValAtHighetstCounter(value) =
@@ -216,9 +227,8 @@ with {
   // TODO: check if this is beter:
   // xHighpassed = fi.highpass(N, minF, x);
   loop(y) =
-    (zcrN(hslider("zcr N" , 4, 1, 8, 1)
-         , minF,maxF,prevEnv>threshold
-         ,t, fi.lowpass(N, max(minF, y), xHighpassed))
+    (zcrN(minF,maxF,prevEnv>threshold
+          ,t, fi.lowpass(N, max(minF, y), xHighpassed))
      * ma.SR * .5):max(minF):min(maxF);
 };
 
@@ -250,3 +260,6 @@ with {
   TWOPIT = 2 * ma.PI * ma.T;
 };
 };
+
+// correlation(x) = (x*x@(ma.SR/myPitch(x):max(0):min(maxHoldSamples)))/max(ma.EPSILON,x*x):max(0):min(1):hbargraph("correlation", 0, 1);
+correlation(x) = ((x*x@(ma.SR/myPitch(x):max(0):min(maxHoldSamples)))/max(threshold,x*x)):max(0):min(1):hbargraph("correlation", 0, 1);
