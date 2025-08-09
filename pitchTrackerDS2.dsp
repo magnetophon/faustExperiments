@@ -5,7 +5,8 @@ import("stdfaust.lib");
 
 
 
-thresholdSlider = hslider("[1]threshold", -22, -90, 0, 0.1):ba.db2linear;
+thresholdSlider = hslider("[0]threshold", -22, -44, 0, 0.1):ba.db2linear;
+levelMod = hslider("[1]level mod", 1, 0, 2, 0.001):si.smoo;
 octaveSlider = hslider("[2]octave", 0, minOctave, 4, 0.001): si.smoo;
 octMod = hslider("[2]octave mod", 0, -11, 11, 0.001): si.smoo;
 indexSlider = hslider("[3]index", 0, 0, 1, 0.001):si.smoo;
@@ -19,9 +20,10 @@ Qmod = hslider("[5]Q mod", 0, -30, 30, 0.001):si.smoo;
 maxHoldSamples = 2048;
 minOctave = -4;
 
+
 process(x) =
   envPitch(x)~_
-              <: (attackReplacer(x) + synthLevel* CZsynth);
+              <: (attackReplacer(x) + synthLevel* CZsynth)*totalLevel;
 
 attackReplacer(x, env,pitch) =
   (x / max(ma.EPSILON,env))
@@ -30,6 +32,22 @@ attackReplacer(x, env,pitch) =
 synthLevel(env, pitch) =
   (1-attackEnv(env))
   *0.6;
+
+// remap(from1, from2, to1, to2, x)
+
+xfadeSelectorOLD(sel,nr) =
+  ((sel<=nr)*((sel-nr)+1):max(0)) + ((sel>nr)*((nr-sel)+1):max(0));
+
+xfadeSelector(sel, nr) = (1 - abs(sel - nr)) : max(0);
+
+totalLevel(env, pitch) =
+  (env/0.6)*xfadeSelector(levelMod, 0)
+  + blockLevel(env)*xfadeSelector(levelMod, 1)
+  + xfadeSelector(levelMod, 2)
+;
+
+blockLevel(env) =
+  it.remap(thresholdSlider*0.5,thresholdSlider, 0, 1,env:max(thresholdSlider*0.5):min(thresholdSlider));
 
 CZsynth(env, pitch) =
   phasesAndFilters
