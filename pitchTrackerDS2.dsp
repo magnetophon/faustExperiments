@@ -5,16 +5,16 @@ import("stdfaust.lib");
 
 
 
-thresholdSlider = hslider("[0]threshold", -22, -44, 0, 0.1):ba.db2linear;
-levelMod = hslider("[1]level mod", 1, 0, 2, 0.001):si.smoo;
-octaveSlider = hslider("[2]octave", 0, minOctave, 4, 0.001): si.smoo;
-octMod = hslider("[2]octave mod", 0, -11, 11, 0.001): si.smoo;
-indexSlider = hslider("[3]index", 0, 0, 1, 0.001):si.smoo;
-indexMod = hslider("[3]index mod", 0, -4, 4, 0.001):si.smoo;
-filterFreqSlider = hslider("[4]filt freq", 1, 0, 1, 0.001):si.smoo;
-filterFreqMod = hslider("[4]filt freq mod", 0, -4, 4, 0.001):si.smoo;
-Qslider = hslider("[5]Q", 0, 0, 10, 0.001):si.smoo;
-Qmod = hslider("[5]Q mod", 0, -30, 30, 0.001):si.smoo;
+thresholdSlider = hslider("h:/v:main/[0]threshold", -22, -44, 0, 0.1):ba.db2linear;
+levelMod = hslider("h:/v:mod/[1]level mod", 1, 0, 2, 0.001):si.smoo;
+octaveSlider = hslider("h:/v:main/[2]octave", 0, minOctave, 4, 0.001): si.smoo;
+octMod = hslider("h:/v:mod/[2]octave mod", 0, -11, 11, 0.001): si.smoo;
+indexSlider = hslider("h:/v:main/[3]index", 0, 0, 1, 0.001):si.smoo;
+indexMod = hslider("h:/v:mod/[3]index mod", 0, -4, 4, 0.001):si.smoo;
+filterFreqSlider = hslider("h:/v:main/[4]filt freq", 1, 0, 1, 0.001):si.smoo;
+filterFreqMod = hslider("h:/v:mod/[4]filt freq mod", 0, -4, 4, 0.001):si.smoo;
+Qslider = hslider("h:/v:main/[5]Q", 0, 0, 10, 0.001):si.smoo;
+Qmod = hslider("h:/v:mod/[5]Q mod", 0, -30, 30, 0.001):si.smoo;
 
 
 maxHoldSamples = 2048;
@@ -85,7 +85,6 @@ with {
 
 oct2mult(oct) = pow(2,oct);
 
-// os.CZsquare(fund, index)
 
 attackEnv(env) =
   (loop~_)
