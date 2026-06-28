@@ -1,28 +1,28 @@
 import("stdfaust.lib");
-procArray(N, processor, isLinear, loParams, hiParams) = paramArray:ro.interleave(N, K):par(i, 4, processor)// arrays:ro.interleave(N, K):par(i, 4, processor)
+
+procArray(N, processor, isLinear, loParams, hiParams) = paramArray:ro.interleave(N, K):par(i, N, processor)
     with {
-
         K = inputs(processor);
-        paramArray = (loParams, hiParams):ro.interleave(K, 2):par(i, K, oneArray(isLinear));
-
-        FUND = case{// 
-        (fund, align, 0)=>fund;
-        (fund, align, 1)=>(fund+align):ma.frac;
-        // align phase with fund
-        };
-
-        // oneArray(isLinear, lo, h) =
+        // broadcast a single flag to K copies; leave a K-wide flag untouched
+        // flags = ba.if(outputs(isLinear)==1, par(i, K, isLinear), isLinear);
+        flags = broadcast(outputs(isLinear))
+            with {
+                broadcast = case{(1)=>par(i, K, isLinear);
+                (n)=>isLinear;
+                };
+            };
+        paramArray = (loParams, hiParams):ro.interleave(K, 2):par(i, K, oneArray(ba.take(i+1, flags)));
         oneArray = case{(0)=>logArray;
         (1)=>linArray;
         };
         linArray(lo, hi) = par(i, N, ((hi-lo)*frac(i))+lo);
         logArray(lo, hi) = par(i, N, lo*pow(hi/lo, frac(i)));
-
         frac(i) = i/(N-1);
     };
-process = procArray(4,
+
+process = procArray(16,
     smoother,
-    1,
+    (0, 1, 0),
     (smallMult, smallOrder, _),
     (bigMult, bigOrder, _));
 
