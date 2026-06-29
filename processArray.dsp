@@ -8,7 +8,7 @@ import("stdfaust.lib");
 // from low to high. Each per-input range is shaped by a supplied interpolator, so
 // the steps need not be evenly spaced. With several parameters interpolated at once,
 // each copy takes one value from every range: copy `j` gets the `j`-th value of each.
-// 
+//
 // If fewer parameter bounds are supplied than `processor` has inputs, the remaining
 // inputs are not generated but taken from `processArray`'s own signal inputs: one
 // `N`-wide bus per missing parameter (a "no array" input). With `nIn = inputs(processor)`
@@ -19,34 +19,33 @@ import("stdfaust.lib");
 //
 // #### Interpolators
 //
-// An interpolator is a function `interp(lo, hi, frac)` returning a single value,
+// An interpolator is a function `interp(frac, lo, hi)` returning a single value,
 // where `frac` runs `0..1` stepwise across the `N` copies (`frac(j) = j/(N-1)`).
 // `processArray` handles the `par(i, N, ...)` replication and hands each copy its
 // own `frac`, so an interpolator only ever deals with a 0..1 fraction and works
-// unchanged for any `N`.
+// unchanged for any `N`. You can pass one interpolator, which shapes every parameter
+// the same way, or a list with one interpolator per parameter, to shape each
+// parameter differently.
 //
-// You can pass one interpolator, which shapes every parameter the same way, or a
-// list with one interpolator per parameter, to shape each parameter differently.
-//
-// Argument order puts `frac` *last* (the reverse of `interpolators.lib`'s
-// `(dv, v0, v1)`) so parametric interpolators can be curried: `powInterp(2)` fixes
-// the exponent and leaves a ready-to-use `(lo, hi, frac)` interpolator, which
-// `frac`-first would not allow. The cost is that `it.interpolate_linear` /
-// `it.interpolate_cosine` can't be passed directly, so `linInterp` / `cosInterp`
-// below are thin argument-reordering wrappers around them.
+// Interpolators take `frac` *first*, matching `interpolators.lib`'s `(dv, v0, v1)`
+// order, so `it.interpolate_linear` / `it.interpolate_cosine` can be passed straight
+// through with no wrapper. Parametric interpolators put their own parameter ahead of
+// `frac` so it can be curried off: `powInterp(2)` fixes the exponent and leaves a
+// ready-to-use `(frac, lo, hi)` interpolator.
 //
 // Built-in interpolators (all live in basics.lib as `ba.*`):
 //
-// * `ba.linInterp(lo, hi, frac)` — linear; wraps `it.interpolate_linear`.
-// * `ba.cosInterp(lo, hi, frac)` — raised-cosine S-curve; wraps `it.interpolate_cosine`.
-// * `ba.logInterp(lo, hi, frac)` — logarithmic; requires nonzero, same-sign bounds.
+// * `ba.logInterp(frac, lo, hi)` — logarithmic; requires nonzero, same-sign bounds.
 //   Not available in `interpolators.lib` (no ratio-law interpolator there).
-// * `ba.powInterp(p, lo, hi, frac)` — power/skew; partially apply `p`
+// * `ba.powInterp(p, frac, lo, hi)` — power/skew; partially apply `p`
 //   (`ba.powInterp(2)` biases toward `lo`, `ba.powInterp(0.5)` toward `hi`).
 //   Not available in `interpolators.lib` (no curvature parameter there).
 //
-// A custom interpolator is any function of the same `(lo, hi, frac)` shape, e.g.
-// `myInterp(lo, hi, frac) = lo + (hi-lo)*frac*frac;`.
+// For linear and cosine interpolation, pass `it.interpolate_linear` /
+// `it.interpolate_cosine` directly — they already have the `(frac, lo, hi)` shape.
+//
+// A custom interpolator is any function of the same `(frac, lo, hi)` shape, e.g.
+// `myInterp(frac, lo, hi) = lo + (hi-lo)*frac*frac;`.
 //
 // #### Usage
 //
@@ -58,7 +57,7 @@ import("stdfaust.lib");
 //
 // * `N`: number of parallel copies (int, known at compile time, `N >= 2`)
 // * `processor`: the function to replicate
-// * `interp`: interpolator function(s) of shape `interp(lo, hi, frac)`; either a
+// * `interp`: interpolator function(s) of shape `interp(frac, lo, hi)`; either a
 //   single function applied to every array, or a list of one function per supplied array
 // * `loBounds`: list of low bounds, one per array (at most `inputs(processor)` of them)
 // * `hiBounds`: list of high bounds, matching `loBounds`
@@ -71,20 +70,20 @@ import("stdfaust.lib");
 // #### Test
 // ```
 // ba = library("basics.lib");
+// it = library("interpolators.lib");
 // // 3-input processor, 2 arrays supplied -> 1 N-wide bus input:
 // processArray_proc(a, b, c) = a + b + c;
-// processArray_test = si.bus(4) : ba.processArray(4, processArray_proc, ba.linInterp, (0.1, 1.0), (1.0, 10.0));
+// processArray_test = si.bus(4) : ba.processArray(4, processArray_proc, it.interpolate_linear, (0.1, 1.0), (1.0, 10.0));
 // ```
 //----------------------------
 
 // --- Built-in interpolators (these belong in basics.lib as ba.*) ---
-// lin and cos reuse interpolators.lib; we only reorder its args to put frac last,
-// so parametric interpolators (powInterp) stay curry-able. See the header note.
-linInterp(lo, hi, frac) = it.interpolate_linear(frac, lo, hi);
-cosInterp(lo, hi, frac) = it.interpolate_cosine(frac, lo, hi);
-// log and pow have no equivalent in interpolators.lib, so they are defined here.
-logInterp(lo, hi, frac) = lo*pow(hi/lo, frac);
-powInterp(p, lo, hi, frac) = lo+(hi-lo)*pow(frac, p);
+// lin and cos already exist in interpolators.lib as it.interpolate_linear /
+// it.interpolate_cosine with this exact (frac, lo, hi) shape, so no wrappers are
+// needed — pass those directly. log and pow have no equivalent there, so they are
+// defined here.
+logInterp(frac, lo, hi) = lo*pow(hi/lo, frac);
+powInterp(p, frac, lo, hi) = lo+(hi-lo)*pow(frac, p);
 
 processArray(N, processor, interp, loBounds, hiBounds) = build(nNoArray)
     with {
@@ -124,7 +123,7 @@ processArray(N, processor, interp, loBounds, hiBounds) = build(nNoArray)
         (b)=>(genArrays, si.bus(nNoArray*N)):ro.interleave(N, nIn):par(i, N, processor);
         };
         // Replicate one array: apply the chosen interpolator at each frac step.
-        oneArray(thisInterp, lo, hi) = par(i, N, thisInterp(lo, hi, frac(i)));
+        oneArray(thisInterp, lo, hi) = par(i, N, thisInterp(frac(i), lo, hi));
         // frac runs 0..1 across the N copies. NOTE: divides by N-1, so N must be >= 2.
         frac(i) = i/(N-1);
     };
@@ -132,14 +131,14 @@ processArray(N, processor, interp, loBounds, hiBounds) = build(nNoArray)
 // ====================== TESTS (adapted from the originals) ======================
 
 processArray_proc(a, b) = a*b;
-processArrayBasic = si.bus(4):processArray(4, processArray_proc, linInterp, (0), (1));
+processArrayBasic = si.bus(4):processArray(4, processArray_proc, it.interpolate_linear, (0), (1));
 
 // --- Simplest: one array, one signal input ---
 // A 1-input gain whose gain is the array parameter; the audio input `x` has no
 // array, so it arrives as one N-wide bus. With N=3 the three copies get gains
 // 0.0, 0.5, 1.0, each applied to its own input-bus channel.
 processArray_gain(g, x) = x*g;
-processArray_simple = si.bus(3):processArray(3, processArray_gain, linInterp, (0.0), (1.0));
+processArray_simple = si.bus(3):processArray(3, processArray_gain, it.interpolate_linear, (0.0), (1.0));
 
 // --- Advanced: 5-input/2-output toy proc, 3 arrays, per-array interp, 2 no-array buses ---
 // `amt` ramps linearly 0->1, `freqRatio` ramps logarithmically 100->8000
@@ -147,13 +146,11 @@ processArray_simple = si.bus(3):processArray(3, processArray_gain, linInterp, (0
 // power/skew curve -1->1. The remaining two inputs (l, r) have no array, so they
 // arrive as two N-wide buses: nNoArray = 5-3 = 2 buses x N=5 = 10 signal inputs.
 // The proc returns a stereo pair, so outputs = N x 2 = 10.
-// interp is given per array as a list: (linInterp, logInterp, powInterp(2)).
+// interp is given per array as a list: (it.interpolate_linear, logInterp, powInterp(2)).
 processArray_toy(amt, freqRatio, offset, l, r) = (l*amt+offset)*freqRatio, (r*amt-offset)*freqRatio;
-processArray_advanced = // signal bus is optional  
-//si.bus(10):
-processArray(5,
+processArray_advanced = si.bus(10):processArray(5,
     processArray_toy,
-    (linInterp, logInterp, powInterp(2)),
+    (it.interpolate_linear, logInterp, powInterp(2)),
     (0.0, 100.0, -1.0),
     (1.0, 8000.0, 1.0));
 
