@@ -7,17 +7,20 @@ import("stdfaust.lib");
 
 //========================================================================
 // Lookahead smoother for a limiter: Hermite attack + Hermite release.
-// (v0.9: cheaper, same behavior. ONE pair cascade over the raw signal
-// now feeds everything: a cascade stage delayed by nExtra IS the stage
-// of the nExtra-delayed signal, so the big window, the attack window
-// and the taps are all just (delay, combine) reads of the same stages,
-// and the second reduce instance is gone. The follower's argmin
-// cross-multiplies the required-slope fractions instead of dividing
-// (deadlines are clamped >= 1 > 0, so nb/db < na/da <=> nb*da < na*db),
-// and both folds are balanced trees -- leftmost-min selection is
-// associative, and the argmin chain sits on the feedback loop's
-// critical path, so its depth drops from nC-1 to ceil(log2(nC)).
-// Same constraints, same triggers, same segments.
+// (v0.9: cheaper, bit-identical output. ONE pair cascade over the raw
+// signal now feeds everything: a cascade stage delayed by nExtra IS
+// the stage of the nExtra-delayed signal, so the big window, the
+// attack window and the taps are all just (delay, combine) reads of
+// the same stages, and the second reduce instance is gone. Both folds
+// (the window combine and the follower's argmin) are balanced trees:
+// leftmost-min selection is associative, so the winner is unchanged,
+// but the argmin chain sits on the feedback loop's critical path and
+// its depth drops from nC-1 to ceil(log2(nC)). Measured on the
+// isolated algorithm (harness-fed input, -double, -O3 -march=native,
+// 48 kHz): 306 -> 188 ns/sample, 1.6x. Also tried: replacing the
+// per-candidate divisions with cross-multiplied comparisons; it
+// measured SLOWER (the divisions run in parallel ahead of the select
+// chain, the cross-mults sit inside it), so the divide stays.
 // v0.8: the next-deeper aim chain moved inside slidingMinIdxBank --
 // the bank takes the beyond pair and emits (value, play idx, npV, npD)
 // per scale, so lookaheadSmoother is pure wiring. Also fixes a v0.7
@@ -114,7 +117,8 @@ import("stdfaust.lib");
 //   fast S&H stress signal measures exactly this gap.
 // * The shared cascade buys its ops with state: the attack-window and
 //   tap reads sit up to nExtra deeper in the shared delay lines, so
-//   the buffers grow vs v0.8. Lower maxSR if you never run 192k.
+//   the buffers grow vs v0.8 (2.4 -> 3.9 MB at maxSR = 192k in double,
+//   0.5 -> 0.9 MB at maxSR = 48k). Lower maxSR if you never run 192k.
 //========================================================================
 
 //========================================================================
@@ -412,17 +416,12 @@ with {
 //
 // Output: the smoothed gain envelope.
 //
-// Per sample, every candidate is scored by requiredSlope =
-// (value - gain)/deadline; the critical candidate is the argmin
-// (steepest descent required), and its chord
-// (npVal - value)/(npDl - deadline) is the landing slope. Candidates
-// at or above gain have requiredSlope >= 0 and never win while any
-// descent is needed. The argmin never divides (v0.9): deadlines are
-// clamped >= 1 > 0, so nb/db < na/da <=> nb*da < na*db, and each
-// reduce step cross-multiplies (2 mults) instead of every candidate
-// paying a division. (A disabled candidate's ma.MAX numerator can
-// overflow the product to inf in float32; inf loses the strict <
-// exactly like the finite quotient did, so disabled still never wins.)
+// Per sample, every candidate gets (requiredSlope, value, deadline,
+// npVal, npDl) with requiredSlope = (value - gain)/deadline; the
+// critical candidate is the argmin (steepest descent required), and
+// its chord (npVal - value)/(npDl - deadline) is the landing slope.
+// Candidates at or above gain have requiredSlope >= 0 and never win
+// while any descent is needed.
 //
 // Triggers, mutually exclusive:
 // * attack:  critVal < gain, and (critVal != p1 or critDl < T-k)
@@ -443,27 +442,26 @@ with {
         dirPrev = gain - gain';        // current slope, units/sample
 
         // ---- critical-constraint selection ----
-        // lanes: (val - gain, max(1, dl), val, dl, npv, npd); the first
-        // two exist only to steer the argmin
         trip(val, dl, npv, npd) =
-            val - gain, max(1, dl), val, dl, npv, npd;
+            (val - gain) / max(1, dl), val, dl, npv, npd;
         scored  = cands : par(i, nC, trip);
-        crit    = scored : red6(nC);
-        critVal = crit : (!, !, _, !, !, !);
-        critDl  = crit : (!, !, !, _, !, !);
-        critNpV = crit : (!, !, !, !, _, !);
-        critNpD = crit : (!, !, !, !, !, _);
-        amin6(na,ca,va,da,ua,wa, nb,cb,vb,db,ub,wb) =
-            select2(pk, na, nb), select2(pk, ca, cb), select2(pk, va, vb),
-            select2(pk, da, db), select2(pk, ua, ub), select2(pk, wa, wb)
-        with { pk = (nb * ca) < (na * cb); };
+        crit    = scored : red5(nC);
+        critVal = crit : (!, _, !, !, !);
+        critDl  = crit : (!, !, _, !, !);
+        critNpV = crit : (!, !, !, _, !);
+        critNpD = crit : (!, !, !, !, _);
+        amin5(sa,va,da,ua,wa, sb,vb,db,ub,wb) =
+            select2(pk, sa, sb), select2(pk, va, vb), select2(pk, da, db),
+            select2(pk, ua, ub), select2(pk, wa, wb)
+        with { pk = sb < sa; };
         // balanced tree: leftmost-min selection is associative, so the
         // winner matches the sequential fold, with a dependency chain
-        // of ceil(log2(nC)) instead of nC-1 -- and this chain sits on
-        // the feedback loop's critical path.
-        red6(1) = si.bus(6);
-        red6(2) = amin6;
-        red6(N) = (red6(half), red6(N - half)) : amin6
+        // of ceil(log2(nC)) instead of nC-1 selects -- and this chain
+        // sits on the feedback loop's critical path (the divisions all
+        // run in parallel ahead of it).
+        red5(1) = si.bus(5);
+        red5(2) = amin5;
+        red5(N) = (red5(half), red5(N - half)) : amin5
         with { half = int(N/2); };
 
         // ---- triggers ----
