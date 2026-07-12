@@ -1,5 +1,5 @@
 declare name "hermiteSmoother";
-declare version "0.3";
+declare version "0.4";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -7,28 +7,52 @@ import("stdfaust.lib");
 
 //========================================================================
 // Lookahead smoother for a limiter: Hermite attack + Hermite release.
-// (continues hermiteLimiter.dsp v0.2; this version is JUST the smoother:
-// input is the raw GR signal, no level detector, no audio path. The full
-// limiter is detector -> this -> apply to delayed audio.)
+// (v0.4: multidetector integrated -- the per-scale sliding-min bank now
+// guards the attack against intermediate peaks, solving the old first
+// limitation. Input is the raw GR signal; the full limiter is
+// detector -> this -> apply to delayed audio.)
 //
 // The smoother is unit-agnostic: it chases whatever the raw GR is (dB,
 // linear, or the +-1 test signal); "deepest" = smallest.
 //
-// The output chases v1, the sliding min of the raw GR over the attack
-// window. v1 is piecewise constant; every step of v1 triggers a new
-// cubic Hermite segment from the current (gain, slope):
+// --- attack: chase the critical constraint --------------------------
+// The pair cascade inside the attack window's sliding min already
+// computes every power-of-two block minimum (that is the multidetector's
+// sequentialOperatorParOut), so the bank comes for free: fan the cascade
+// out to nB aligned taps, each the min over the NEXT 2^i samples
+// (trailing edge = the sample playing now), each with the EXACT play
+// index of its minimum riding along as a timestamp.
 //
-// * v1 steps DOWN (deeper min enters at the newest slot): attack.
-//   Target (v1, land when it first plays: T = i1, oldest occurrence).
-//   Hard deadline. End slope aims at a deeper point beyond the attack
-//   window if the big window (nAtt + nExtra) sees one.
+// Per sample the follower builds (requiredSlope, value, deadline)
+// triples for the exact full-window target (v1, i1) and every active
+// tap, and chases the CRITICAL one: steepest required average slope
+// (value - gain) / deadline. A new segment is latched when the critical
+// value changes, or when its deadline undercuts the running leg's
+// remaining time (critDl < T-k; catches an equal-depth peak that plays
+// sooner, e.g. on plateaus). Because tap deadlines are exact, a latched
+// leg counts down in lockstep with the live deadline: no spurious
+// retriggers, and landings stay sample-exact. Checkpoint legs land
+// aimed at the final target, (v1-critVal)/(i1-critDl), so intermediate
+// touchdowns stay C1 on the way down; the final target lands aimed at a
+// deeper point beyond the attack window if the big window (nAtt+nExtra)
+// sees one. Taps longer than the current window read ma.MAX and never
+// win the argmin.
+//
+// Why this is safe: a monotone-decreasing curve with p(e_i) <= m_i for
+// every scale (m_i = min over next 2^i samples, e_i = its exact play
+// time) cannot poke through any peak that is the minimum of some dyadic
+// prefix. Residual (honest) gap: a min-summary cannot see a
+// "second-deepest" peak shadowed by a deeper-LATER one inside every
+// scale that covers it; per-sample criticality closes these in practice
+// and the safety clamp remains as backstop.
+//
+// --- release (unchanged from v0.3) -----------------------------------
 // * v1 steps UP (min falls out at the oldest slot), or re-targets to a
 //   value between gain and the old target: release. Up-glides are safe
 //   at ANY duration: monotone to v1 stays <= v1 <= grPlay while that min
 //   is in the window. So T is taste, switchable:
 //   - knob mode: T = release knob, fixed time per event (chained
-//     re-triggers each restart the clock, so a rising staircase moves
-//     slower than the knob)
+//     re-triggers each restart the clock)
 //   - auto mode: T = i1n = samples until the min VALUE leaves the window
 //     (newest occurrence): arrive at the ceiling exactly when the
 //     ceiling expires. Parameter-free, perpetually in flight.
@@ -36,16 +60,15 @@ import("stdfaust.lib");
 //   at the next ceiling = the min over the samples newer than the newest
 //   occurrence of the current min (window w = nAtt-1-i1n; degrades to
 //   flat when the min is the newest sample). Aim is gated off when the
-//   segment arrives before the ceiling expires, since it would land
-//   still rising and then hold.
+//   segment arrives before the ceiling expires.
+//
+// --- shared machinery -------------------------------------------------
 // * Segments start at k = 1: the first step happens on the trigger
-//   sample. Per-sample re-triggers (v1 ramping smoothly on continuous
-//   material) then degrade into per-sample re-planning instead of
-//   freezing the envelope, and p(1/T) ~= p0 + m0 keeps the previous
-//   velocity through the trigger (C1). Landing is at tau = 1, one sample
-//   before the target plays; the envelope holds the target while it
-//   plays, and the min only falls out one sample after playing, so the
-//   release cannot start early.
+//   sample, so per-sample re-triggers degrade into per-sample
+//   re-planning instead of freezing, and p(1/T) ~= p0 + m0 keeps the
+//   previous velocity through the trigger (C1). Landing is at tau = 1,
+//   one sample before the target plays; the target is held through its
+//   play sample.
 // * Tangents are clamped to the sign-symmetric Fritsch-Carlson monotone
 //   box [min(0,3d), max(0,3d)], d = average slope: no bulge past either
 //   endpoint. Side effect: an attack fired mid-release flattens a
@@ -56,25 +79,21 @@ import("stdfaust.lib");
 // so up to ~100 ms total.
 //
 // Known limitations, on purpose for now:
-// * A mid-flight attack re-trigger replans toward the newest deepest
-//   point only; a shallower minimum that plays *sooner* is not
-//   re-checked, so right after a re-trigger the curve can sit slightly
-//   above the gain an intermediate peak needs at its play time. The
-//   safety clamp (min(gain, grPlay)) restores brickwall at the cost of
-//   a corner in exactly that case.
+// * The shadowed-second-deepest gap described above (backstopped by the
+//   clamp; measure it on the fast S&H stress signal).
 // * After landing on a min while the big window still shows a deeper
 //   point that has not entered the attack window yet, the envelope
 //   starts releasing and attacks back down when the point arrives (a
 //   small bump). Gating the release on the big-window min would hold
 //   instead.
-// * 4 sliding-reduce instances (attack oldest, attack newest, big, next
-//   ceiling); a fused reduce carrying (value, tOldest, tNewest) could
-//   cut that down later.
+// * 4 pair-reduce instances (attack oldest incl. taps, attack newest,
+//   big, next ceiling); a fused reduce carrying (value, tOldest,
+//   tNewest) could cut that down later.
 //========================================================================
 
 //========================================================================
 // library part, from slidingMinIdx.dsp v0.1
-// (slidingMinIdxNewest added; slidingMaxIdx omitted, not needed here)
+// (slidingMinIdxNewest and slidingMinIdxBank added)
 //========================================================================
 
 //-------------------------`slidingReducePair`--------------------------
@@ -204,39 +223,119 @@ with {
     };
 };
 
+//-------------------------`slidingMinIdxBank`---------------------------
+// slidingMinIdx + the multidetector: the pair cascade IS the
+// multidetector's sequentialOperatorParOut, so the per-scale taps come
+// for free. The cascade is fanned out to:
+//   * the full-window (min, idx), verbatim slidingMinIdx semantics
+//   * nB = maxNrBits(maxN) taps: tap i = min over the NEXT pow2(i)
+//     samples (all taps share their trailing edge with the full window's
+//     oldest sample = the one playing now), plus the EXACT play index of
+//     that minimum (oldest-occurrence tie-break = deadline convention).
+// A tap whose window exceeds the current n outputs (ma.MAX, 1): a value
+// that can never become a binding constraint.
+//
+// #### Usage
+//
+// ```
+// _ : slidingMinIdxBank(n,maxN) : si.bus(2 + 2*maxNrBits(maxN))
+// ```
+//
+// * out1, out2:           full-window min and idx (as slidingMinIdx)
+// * out(3+2i), out(4+2i): tap i value and play idx, i = 0 .. nB-1
+//----------------------------------------------------------------------
+slidingMinIdxBank(n,maxN) =
+    (_, ba.time)
+    : sequentialOperatorParOut(nB-1)
+    <: (fullWin, tapBank)
+with {
+    nB     = maxNrBits(maxN);
+    intMax = 2147483647;
+    idxFromOldest(tMin) = (n-1) - (ba.time - tMin);
+    minIdxOp(v1,t1,v2,t2) =
+        select2(pickSecond, v1, v2),
+        select2(pickSecond, t1, t2)
+    with {
+        pickSecond = (v2 < v1) | ((v2 == v1) & ((t2 - t1) < 0));
+    };
+
+    // full-window path, verbatim from slidingReducePair:
+    fullWin = par(i, nB, (par(j, 2, _@sumOfPrevBlockSizes(i)) : useVal(i)))
+              : combinePairs(nB)
+              : (_, idxFromOldest);
+    useVal(i) = select2(isUsed(i), ma.MAX, _),
+                select2(isUsed(i), intMax, _);
+
+    // tap path: cascade stage i covers [t-pow2(i)+1, t]; delaying the
+    // pair by n-pow2(i) moves that to [t-n+1, t-n+pow2(i)]: the first
+    // pow2(i) samples to play. The delayed timestamp then yields the
+    // exact play index through the same idxFromOldest.
+    tapBank = par(i, nB, tap(i));
+    tap(i)  = par(j, 2, de.delay(maxN - pow2(i), max(0, n - pow2(i))))
+              : (_, idxFromOldest)
+              : disable(i);
+    disable(i) = select2(active(i), ma.MAX, _),
+                 select2(active(i), 1, _);
+    active(i) = pow2(i) <= n;
+
+    // shared helpers (op bound to minIdxOp, otherwise verbatim):
+    sequentialOperatorParOut(N) = seq(i, N, operator(i));
+    operator(i) = si.bus(2*i),
+        (si.bus(2) <: (si.bus(2), ((si.bus(2), par(j, 2, _@pow2(i))) : minIdxOp)));
+    combinePairs(2) = minIdxOp;
+    combinePairs(N) = (minIdxOp, si.bus(2*(N-2))) : combinePairs(N-1);
+    sumOfPrevBlockSizes(0) = 0;
+    sumOfPrevBlockSizes(i) = (ba.subseq((allBlockSizes),0,i):>_);
+    allBlockSizes = par(i, maxNrBits(maxN-1), (pow2(i)) * isUsed(i));
+    maxNrBits(x) = int2nrOfBits(x);
+    isUsed(i) = ba.take(i+1, (int2bin(n,(maxN-1)*2+1)));
+    pow2(i) = 1<<i;
+    int2bin(x,m) = par(j, maxNrBits(m-1), int(floor((x)/(pow2(j))))%2);
+    int2nrOfBits(x) = int(floor(log(x)/log(2))+1);
+};
+
 //========================================================================
 // smoother
 //========================================================================
 
 //---------------------------`hermiteFollower`---------------------------
-// Event-driven gain envelope: chases v1 with latched Hermite segments.
+// Event-driven gain envelope: chases the critical constraint with
+// latched Hermite segments.
 //
 // #### Usage
 //
 // ```
-// hermiteFollower(v1, i1, endDirDn, endDirUp, TRel, grPlay, clampOn) : _
+// hermiteFollower(nB, taps, v1, i1, endDirDn, endDirUp, TRel,
+//                 grPlay, clampOn) : _
 // ```
 //
 // Where:
 //
-// * `v1`, `i1`: slidingMinIdx over the attack window: deepest required
-//   gain and samples until it first plays (oldest occurrence)
-// * `endDirDn`: landing slope for attacks (units/sample, <= 0)
-// * `endDirUp`: landing slope for releases (units/sample, >= 0)
+// * `nB`: number of taps (compile-time int)
+// * `taps`: 2*nB signals: (value, exact play idx) per scale, from
+//   slidingMinIdxBank; disabled taps read (ma.MAX, 1)
+// * `v1`, `i1`: full-window min and samples until it first plays
+// * `endDirDn`: landing slope for the FINAL attack target (<= 0)
+// * `endDirUp`: landing slope for releases (>= 0)
 // * `TRel`: release segment length in samples (knob or auto, see caller)
 // * `grPlay`: required gain of the sample playing right now
 // * `clampOn`: 1 = hard safety clamp min(gain, grPlay)
 //
 // Output: the smoothed gain envelope.
 //
+// Per sample, every candidate (v1 plus each tap) gets a triple
+// (requiredSlope, value, deadline) with requiredSlope =
+// (value - gain)/deadline; the critical candidate is the argmin
+// (steepest descent required). Candidates at or above gain have
+// requiredSlope >= 0 and never win while any descent is needed.
+//
 // Triggers, mutually exclusive:
-// * attack:  v1 < gain                    -> T = i1 (hard deadline)
-// * release: (v1 != p1) & (v1 >= gain)    -> T = TRel (taste)
-//   (also catches the ceiling re-targeting DOWN to between gain and the
-//   old target: still an up-glide, still safe at any T)
-// Idle (arrived, v1 == p1) holds.
+// * attack:  critVal < gain, and (critVal != p1 or critDl < T-k)
+//            -> T = critDl (exact deadline)
+// * release: (v1 != p1) & (v1 >= gain)   -> T = TRel (taste)
+// Idle (arrived, target unchanged) holds.
 //----------------------------------------------------------------------
-hermiteFollower(v1, i1, endDirDn, endDirUp, TRel, grPlay, clampOn) =
+hermiteFollower(nB, taps, v1, i1, endDirDn, endDirUp, TRel, grPlay, clampOn) =
     (loop ~ si.bus(7)) : (_, si.block(6))
 with {
     // state: gain, p0, m0, p1, m1, k, T (previous-sample values inside loop)
@@ -244,23 +343,50 @@ with {
         gainN, p0N, m0N, p1N, m1N, kN, TN
     with {
         dirPrev = gain - gain';        // current slope, units/sample
-        attTrig = v1 < gain;
+
+        // ---- critical-constraint selection ----
+        trip(val, dl) = (val - gain) / max(1, dl), val, dl;
+        cands   = (v1, i1, taps) : par(i, nB + 1, trip);
+        crit    = cands : red3(nB + 1);
+        critVal = crit : (!, _, !);
+        critDl  = crit : (!, !, _);
+        amin3(sa,va,da, sb,vb,db) =
+            select2(pk, sa, sb), select2(pk, va, vb), select2(pk, da, db)
+        with { pk = sb < sa; };
+        red3(1) = si.bus(3);
+        red3(2) = amin3;
+        red3(N) = (amin3, si.bus(3*(N-2))) : red3(N-1);
+
+        // ---- triggers ----
+        attNeed = critVal < gain;
+        // re-latch when the critical value changes, or when its (exact)
+        // deadline undercuts the running leg's remaining time -- catches
+        // an equal-depth peak that plays sooner (plateaus). On a steady
+        // leg the live deadline counts down in lockstep with T-k, so
+        // this stays quiet.
+        attTrig = attNeed & ((critVal != p1) | (critDl < (T - k)));
         relTrig = (v1 != p1) & (v1 >= gain);
         trig    = attTrig | relTrig;
 
-        // new-segment values (only used when trig == 1)
-        Tt    = max(1, select2(attTrig, TRel, i1));
-        delta = (v1 - gain) / Tt;      // average slope, sign = direction
+        // ---- new-segment values (only used when trig == 1) ----
+        Tt    = max(1, select2(attTrig, TRel, critDl));
+        p1t   = select2(attTrig, v1, critVal);
+        delta = (p1t - gain) / Tt;     // average slope, sign = direction
+        // an intermediate checkpoint lands aimed at the final target;
+        // the final target lands aimed beyond the window (endDirDn)
+        aimDn = select2(critVal > v1,
+                        endDirDn,
+                        (v1 - critVal) / max(1, i1 - critDl));
         // sign-symmetric Fritsch-Carlson monotone box
         lo    = min(0, 3*delta);
         hi    = max(0, 3*delta);
         m0t   = max(lo, min(hi, dirPrev));
-        m1t   = max(lo, min(hi, select2(attTrig, endDirUp, endDirDn)));
+        m1t   = max(lo, min(hi, select2(attTrig, endDirUp, aimDn)));
 
         TN  = select2(trig, T,  Tt);
         p0N = select2(trig, p0, gain);
         m0N = select2(trig, m0, m0t);
-        p1N = select2(trig, p1, v1);
+        p1N = select2(trig, p1, p1t);
         m1N = select2(trig, m1, m1t);
         // segments start at k = 1: first step on the trigger sample, so
         // per-sample re-triggers re-plan instead of stalling, and the
@@ -286,8 +412,9 @@ with {
 };
 
 //--------------------------`lookaheadSmoother`--------------------------
-// Full smoother wiring: the lookahead windows, both end-slopes, release
-// timing, and the Hermite follower. Input is the RAW GR signal.
+// Full smoother wiring: the lookahead windows, the multidetector tap
+// bank, both end-slopes, release timing, and the Hermite follower.
+// Input is the RAW GR signal.
 //
 // #### Usage
 //
@@ -305,41 +432,42 @@ with {
 //----------------------------------------------------------------------
 lookaheadSmoother(nAtt, maxAtt, nExtra, maxExtra, relTime, autoRel, relAim,
                   clampOn, rawGR) =
-    (small, i1new, big, grPlay) : wire
+    hermiteFollower(nB, taps, v1, i1, dn, up, TRel, grPlay, clampOn)
 with {
+    nB     = int(floor(log(maxAtt)/log(2)) + 1);
     nTot   = nAtt + nExtra;
     maxTot = maxAtt + maxExtra;
     // all attack-window queries share one input; its oldest sample is the
     // one playing now. small covers plays-now .. +(nAtt-1), big covers
     // plays-now .. +(nTot-1)
     grSm   = de.delay(maxExtra, nExtra, rawGR);
-    small  = grSm : slidingMinIdx(nAtt, maxAtt);            // v1, i1
-    i1new  = grSm : slidingMinIdxNewest(nAtt, maxAtt) : (!, _);
-    big    = rawGR : slidingMinIdx(nTot, maxTot);           // v2, i2
+    bank   = grSm : slidingMinIdxBank(nAtt, maxAtt);    // v1, i1, taps
+    v1     = bank : (_, si.block(1 + 2*nB));
+    i1     = bank : (!, _, si.block(2*nB));
+    taps   = bank : (si.block(2), si.bus(2*nB));
+    i1n    = grSm : slidingMinIdxNewest(nAtt, maxAtt) : (!, _);
+    big    = rawGR : slidingMinIdx(nTot, maxTot);       // v2, i2
+    v2     = big : (_, !);
+    i2     = big : (!, _);
     grPlay = de.delay(maxTot - 1, nTot - 1, rawGR);
 
-    wire(v1, i1, i1n, v2, i2, gp) =
-        hermiteFollower(v1, i1, dn, up, TRel, gp, clampOn)
-    with {
-        // attack aim: land on v1 moving toward a deeper v2 beyond the
-        // attack window. v2 < v1 implies i2 > i1, but guard anyway.
-        dn = select2(v2 < v1, 0, (v2 - v1) / max(1, i2 - i1));
-        // next ceiling: min over the samples newer than the newest
-        // occurrence of the current min. When the min IS the newest
-        // sample, the 1-sample window contains the min itself, so the
-        // chord degrades to 0 (flat) on its own.
-        wNext = max(1, nAtt - 1 - i1n);
-        next  = grSm : slidingMinIdx(wNext, maxAtt);        // vN, iNsub
-        chord = next : chordOf;
-        // vN plays at full-window index i1n + 1 + iNsub, so the chord
-        // from (i1n, v1) to there has run 1 + iNsub (>= 1; guarded for
-        // the zero-init pollution period)
-        chordOf(vN, iNsub) = (vN - v1) / max(1, 1 + iNsub);
-        TRel = select2(autoRel, relTime, i1n);
-        // aim only when the segment arrives at/after ceiling expiry;
-        // arriving early means holding, so land flat instead
-        up   = select2(relAim & (max(1, TRel) >= i1n), 0, chord);
-    };
+    // attack aim: land on v1 moving toward a deeper v2 beyond the attack
+    // window. v2 < v1 implies i2 > i1, but guard anyway.
+    dn = select2(v2 < v1, 0, (v2 - v1) / max(1, i2 - i1));
+    // next ceiling: min over the samples newer than the newest occurrence
+    // of the current min. When the min IS the newest sample, the 1-sample
+    // window contains the min itself, so the chord degrades to 0 (flat).
+    wNext = max(1, nAtt - 1 - i1n);
+    next  = grSm : slidingMinIdx(wNext, maxAtt);        // vN, iNsub
+    chord = next : chordOf;
+    // vN plays at full-window index i1n + 1 + iNsub, so the chord from
+    // (i1n, v1) to there has run 1 + iNsub (>= 1; guarded for the
+    // zero-init pollution period)
+    chordOf(vN, iNsub) = (vN - v1) / max(1, 1 + iNsub);
+    TRel = select2(autoRel, relTime, i1n);
+    // aim only when the segment arrives at/after ceiling expiry;
+    // arriving early means holding, so land flat instead
+    up   = select2(relAim & (max(1, TRel) >= i1n), 0, chord);
 };
 
 //-------------------------------- demo ---------------------------------
