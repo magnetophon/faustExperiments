@@ -1,5 +1,5 @@
 declare name "hermiteSmoother";
-declare version "0.4";
+declare version "0.5";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -7,7 +7,9 @@ import("stdfaust.lib");
 
 //========================================================================
 // Lookahead smoother for a limiter: Hermite attack + Hermite release.
-// (v0.4: multidetector integrated -- the per-scale sliding-min bank now
+// (v0.5: the smoother option checkboxes are gone -- fixed behavior is
+// knob release time, flat release landings, no hard safety clamp.
+// v0.4: multidetector integrated -- the per-scale sliding-min bank
 // guards the attack against intermediate peaks, solving the old first
 // limitation. Input is the raw GR signal; the full limiter is
 // detector -> this -> apply to delayed audio.)
@@ -43,24 +45,16 @@ import("stdfaust.lib");
 // time) cannot poke through any peak that is the minimum of some dyadic
 // prefix. Residual (honest) gap: a min-summary cannot see a
 // "second-deepest" peak shadowed by a deeper-LATER one inside every
-// scale that covers it; per-sample criticality closes these in practice
-// and the safety clamp remains as backstop.
+// scale that covers it; per-sample criticality closes these in
+// practice.
 //
-// --- release (unchanged from v0.3) -----------------------------------
+// --- release ----------------------------------------------------------
 // * v1 steps UP (min falls out at the oldest slot), or re-targets to a
 //   value between gain and the old target: release. Up-glides are safe
 //   at ANY duration: monotone to v1 stays <= v1 <= grPlay while that min
-//   is in the window. So T is taste, switchable:
-//   - knob mode: T = release knob, fixed time per event (chained
-//     re-triggers each restart the clock)
-//   - auto mode: T = i1n = samples until the min VALUE leaves the window
-//     (newest occurrence): arrive at the ceiling exactly when the
-//     ceiling expires. Parameter-free, perpetually in flight.
-//   End slope, switchable: flat (scalloped, hugs each ceiling) or aimed
-//   at the next ceiling = the min over the samples newer than the newest
-//   occurrence of the current min (window w = nAtt-1-i1n; degrades to
-//   flat when the min is the newest sample). Aim is gated off when the
-//   segment arrives before the ceiling expires.
+//   is in the window. So T is taste: T = release knob, fixed time per
+//   event (chained re-triggers each restart the clock). Segments land
+//   flat (scalloped, hugs each ceiling).
 //
 // --- shared machinery -------------------------------------------------
 // * Segments start at k = 1: the first step happens on the trigger
@@ -79,21 +73,20 @@ import("stdfaust.lib");
 // so up to ~100 ms total.
 //
 // Known limitations, on purpose for now:
-// * The shadowed-second-deepest gap described above (backstopped by the
-//   clamp; measure it on the fast S&H stress signal).
+// * The shadowed-second-deepest gap described above; with the hard
+//   clamp gone it is unbackstopped, so any brickwall violation on the
+//   fast S&H stress signal measures exactly this gap.
 // * After landing on a min while the big window still shows a deeper
 //   point that has not entered the attack window yet, the envelope
 //   starts releasing and attacks back down when the point arrives (a
 //   small bump). Gating the release on the big-window min would hold
 //   instead.
-// * 4 pair-reduce instances (attack oldest incl. taps, attack newest,
-//   big, next ceiling); a fused reduce carrying (value, tOldest,
-//   tNewest) could cut that down later.
+// * 2 pair-reduce instances (attack window incl. taps, big window).
 //========================================================================
 
 //========================================================================
 // library part, from slidingMinIdx.dsp v0.1
-// (slidingMinIdxNewest and slidingMinIdxBank added)
+// (slidingMinIdxBank added)
 //========================================================================
 
 //-------------------------`slidingReducePair`--------------------------
@@ -199,30 +192,6 @@ with {
     };
 };
 
-//------------------------`slidingMinIdxNewest`--------------------------
-// Same minimum, but on equal values the NEWEST occurrence wins. out2 is
-// then the number of samples until the minimum VALUE leaves the window
-// (assuming nothing equal re-enters; if it does, the index extends
-// automatically). This is the persistence convention the release wants:
-// "how long is this the ceiling", where slidingMinIdx answers the attack
-// question "when does this first play".
-//----------------------------------------------------------------------
-slidingMinIdxNewest(n,maxN) =
-    (_, ba.time)
-    : slidingReducePair(minIdxOp, n, maxN, ma.MAX, intMax)
-    : (_, idxFromOldest)
-with {
-    intMax = 2147483647;
-    idxFromOldest(tMin) = (n-1) - (ba.time - tMin);
-    // on equal values, the newer (larger) timestamp wins; wraparound-safe
-    minIdxOp(v1,t1,v2,t2) =
-        select2(pickSecond, v1, v2),
-        select2(pickSecond, t1, t2)
-    with {
-        pickSecond = (v2 < v1) | ((v2 == v1) & ((t2 - t1) > 0));
-    };
-};
-
 //-------------------------`slidingMinIdxBank`---------------------------
 // slidingMinIdx + the multidetector: the pair cascade IS the
 // multidetector's sequentialOperatorParOut, so the per-scale taps come
@@ -305,8 +274,7 @@ with {
 // #### Usage
 //
 // ```
-// hermiteFollower(nB, taps, v1, i1, endDirDn, endDirUp, TRel,
-//                 grPlay, clampOn) : _
+// hermiteFollower(nB, taps, v1, i1, endDirDn, TRel) : _
 // ```
 //
 // Where:
@@ -316,10 +284,7 @@ with {
 //   slidingMinIdxBank; disabled taps read (ma.MAX, 1)
 // * `v1`, `i1`: full-window min and samples until it first plays
 // * `endDirDn`: landing slope for the FINAL attack target (<= 0)
-// * `endDirUp`: landing slope for releases (>= 0)
-// * `TRel`: release segment length in samples (knob or auto, see caller)
-// * `grPlay`: required gain of the sample playing right now
-// * `clampOn`: 1 = hard safety clamp min(gain, grPlay)
+// * `TRel`: release segment length in samples
 //
 // Output: the smoothed gain envelope.
 //
@@ -332,10 +297,10 @@ with {
 // Triggers, mutually exclusive:
 // * attack:  critVal < gain, and (critVal != p1 or critDl < T-k)
 //            -> T = critDl (exact deadline)
-// * release: (v1 != p1) & (v1 >= gain)   -> T = TRel (taste)
+// * release: (v1 != p1) & (v1 >= gain)   -> T = TRel (taste); lands flat
 // Idle (arrived, target unchanged) holds.
 //----------------------------------------------------------------------
-hermiteFollower(nB, taps, v1, i1, endDirDn, endDirUp, TRel, grPlay, clampOn) =
+hermiteFollower(nB, taps, v1, i1, endDirDn, TRel) =
     (loop ~ si.bus(7)) : (_, si.block(6))
 with {
     // state: gain, p0, m0, p1, m1, k, T (previous-sample values inside loop)
@@ -381,7 +346,8 @@ with {
         lo    = min(0, 3*delta);
         hi    = max(0, 3*delta);
         m0t   = max(lo, min(hi, dirPrev));
-        m1t   = max(lo, min(hi, select2(attTrig, endDirUp, aimDn)));
+        // releases land flat (end slope 0)
+        m1t   = max(lo, min(hi, select2(attTrig, 0, aimDn)));
 
         TN  = select2(trig, T,  Tt);
         p0N = select2(trig, p0, gain);
@@ -406,75 +372,54 @@ with {
                    + h01 * p1N + h11 * TN * m1N;
 
         gliding = kN <= TN;
-        gainRaw = select2(gliding, gain, hermiteVal);   // idle holds
-        gainN   = select2(clampOn, gainRaw, min(gainRaw, grPlay));
+        gainN   = select2(gliding, gain, hermiteVal);   // idle holds
     };
 };
 
 //--------------------------`lookaheadSmoother`--------------------------
 // Full smoother wiring: the lookahead windows, the multidetector tap
-// bank, both end-slopes, release timing, and the Hermite follower.
+// bank, the attack end-slope, and the Hermite follower.
 // Input is the RAW GR signal.
 //
 // #### Usage
 //
 // ```
-// _ : lookaheadSmoother(nAtt, maxAtt, nExtra, maxExtra,
-//                       relTime, autoRel, relAim, clampOn) : _
+// _ : lookaheadSmoother(nAtt, maxAtt, nExtra, maxExtra, relTime) : _
 // ```
 //
-// * `relTime`: release segment length (samples), used when autoRel == 0
-// * `autoRel`: 1 = T = ceiling expiry (newest-occurrence index)
-// * `relAim`:  1 = land aimed at the next ceiling, 0 = land flat
+// * `relTime`: release segment length (samples)
 //
 // Latency: nAtt + nExtra - 1 samples; delay the raw GR (and the audio in
 // a full limiter) by the same amount to line up with the output.
 //----------------------------------------------------------------------
-lookaheadSmoother(nAtt, maxAtt, nExtra, maxExtra, relTime, autoRel, relAim,
-                  clampOn, rawGR) =
-    hermiteFollower(nB, taps, v1, i1, dn, up, TRel, grPlay, clampOn)
+lookaheadSmoother(nAtt, maxAtt, nExtra, maxExtra, relTime, rawGR) =
+    hermiteFollower(nB, taps, v1, i1, dn, relTime)
 with {
     nB     = int(floor(log(maxAtt)/log(2)) + 1);
     nTot   = nAtt + nExtra;
     maxTot = maxAtt + maxExtra;
-    // all attack-window queries share one input; its oldest sample is the
-    // one playing now. small covers plays-now .. +(nAtt-1), big covers
-    // plays-now .. +(nTot-1)
+    // the attack window's oldest sample is the one playing now: small
+    // covers plays-now .. +(nAtt-1), big covers plays-now .. +(nTot-1)
     grSm   = de.delay(maxExtra, nExtra, rawGR);
     bank   = grSm : slidingMinIdxBank(nAtt, maxAtt);    // v1, i1, taps
     v1     = bank : (_, si.block(1 + 2*nB));
     i1     = bank : (!, _, si.block(2*nB));
     taps   = bank : (si.block(2), si.bus(2*nB));
-    i1n    = grSm : slidingMinIdxNewest(nAtt, maxAtt) : (!, _);
     big    = rawGR : slidingMinIdx(nTot, maxTot);       // v2, i2
     v2     = big : (_, !);
     i2     = big : (!, _);
-    grPlay = de.delay(maxTot - 1, nTot - 1, rawGR);
 
     // attack aim: land on v1 moving toward a deeper v2 beyond the attack
     // window. v2 < v1 implies i2 > i1, but guard anyway.
     dn = select2(v2 < v1, 0, (v2 - v1) / max(1, i2 - i1));
-    // next ceiling: min over the samples newer than the newest occurrence
-    // of the current min. When the min IS the newest sample, the 1-sample
-    // window contains the min itself, so the chord degrades to 0 (flat).
-    wNext = max(1, nAtt - 1 - i1n);
-    next  = grSm : slidingMinIdx(wNext, maxAtt);        // vN, iNsub
-    chord = next : chordOf;
-    // vN plays at full-window index i1n + 1 + iNsub, so the chord from
-    // (i1n, v1) to there has run 1 + iNsub (>= 1; guarded for the
-    // zero-init pollution period)
-    chordOf(vN, iNsub) = (vN - v1) / max(1, 1 + iNsub);
-    TRel = select2(autoRel, relTime, i1n);
-    // aim only when the segment arrives at/after ceiling expiry;
-    // arriving early means holding, so land flat instead
-    up   = select2(relAim & (max(1, TRel) >= i1n), 0, chord);
 };
 
 //-------------------------------- demo ---------------------------------
 // out1: delayed raw GR (the constraint the smoother must stay <= )
 // out2: smoother output
 //
-// Brickwall check: out2 <= out1 at every sample.
+// Brickwall check: out2 <= out1 at every sample (no hard clamp, so any
+// violation measures the residual shadowed-peak gap).
 
 MainGroup(x) = hgroup("[0]shapedSmoother", x);
 TestGroup(x) = vgroup("[0]Test signal", x);
@@ -508,9 +453,6 @@ maxTot   = maxAtt + maxExtra;
 attMs   = SmootherGroup(hslider("[0]attack lookahead [unit:ms]", 25, 0, 50, 0.1));
 extraMs = SmootherGroup(hslider("[1]direction lookahead [unit:ms]", 25, 0, 50, 0.1));
 relMs   = SmootherGroup(hslider("[2]release [unit:ms]", 50, 0, 1000, 0.1));
-autoRel = SmootherGroup(checkbox("[3]auto release (T = ceiling expiry)"));
-relAim  = SmootherGroup(checkbox("[4]aim release at next ceiling"));
-clampOn = SmootherGroup(checkbox("[5]hard safety clamp"));
 
 nAtt    = max(2, min(maxAtt,   int(attMs   * 0.001 * ma.SR)));
 nExtra  = max(0, min(maxExtra, int(extraMs * 0.001 * ma.SR)));
@@ -523,6 +465,6 @@ with {
         nTot     = nAtt + nExtra;
         grPlay   = de.delay(maxTot - 1, nTot - 1, rawGR);
         smoothed = lookaheadSmoother(nAtt, maxAtt, nExtra, maxExtra,
-                                     relTime, autoRel, relAim, clampOn, rawGR);
+                                     relTime, rawGR);
     };
 };
