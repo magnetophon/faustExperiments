@@ -1,5 +1,5 @@
 declare name "hermiteSmoother";
-declare version "0.5";
+declare version "0.6";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -7,7 +7,10 @@ import("stdfaust.lib");
 
 //========================================================================
 // Lookahead smoother for a limiter: Hermite attack + Hermite release.
-// (v0.5: the smoother option checkboxes are gone -- fixed behavior is
+// (v0.6: release gated on the big window -- the release ceiling is now
+// the big-window min, so the follower holds instead of the old
+// release-then-re-attack bump while a deeper point is inbound.
+// v0.5: the smoother option checkboxes are gone -- fixed behavior is
 // knob release time, flat release landings, no hard safety clamp.
 // v0.4: multidetector integrated -- the per-scale sliding-min bank
 // guards the attack against intermediate peaks, solving the old first
@@ -49,12 +52,22 @@ import("stdfaust.lib");
 // practice.
 //
 // --- release ----------------------------------------------------------
-// * v1 steps UP (min falls out at the oldest slot), or re-targets to a
-//   value between gain and the old target: release. Up-glides are safe
-//   at ANY duration: monotone to v1 stays <= v1 <= grPlay while that min
-//   is in the window. So T is taste: T = release knob, fixed time per
-//   event (chained re-triggers each restart the clock). Segments land
-//   flat (scalloped, hugs each ceiling).
+// * The release ceiling is the BIG-window min v2 (deepest value
+//   anywhere in the next nAtt+nExtra samples): when it steps UP (the
+//   min falls out at the oldest slot) or re-targets between gain and
+//   the old target, a release chases it. Up-glides are safe at ANY
+//   duration: monotone to v2 stays <= v2 <= grPlay while that min is
+//   in the window. T is taste: T = release knob, fixed time per event
+//   (chained re-triggers each restart the clock). Segments land flat
+//   (scalloped, hugs each ceiling).
+// * When v2 undercuts the current gain -- a deeper point is visible in
+//   the direction lookahead but not yet inside the attack window -- the
+//   effective ceiling is the gain itself: the follower freezes (flat
+//   hold, killing any rise in flight) until the point enters the attack
+//   window and the attack machinery takes it, instead of releasing and
+//   attacking back down. This is what the direction lookahead buys on
+//   the release side; at nExtra = 0 (v2 = v1) the release behaves
+//   exactly as before.
 //
 // --- shared machinery -------------------------------------------------
 // * Segments start at k = 1: the first step happens on the trigger
@@ -76,11 +89,6 @@ import("stdfaust.lib");
 // * The shadowed-second-deepest gap described above; with the hard
 //   clamp gone it is unbackstopped, so any brickwall violation on the
 //   fast S&H stress signal measures exactly this gap.
-// * After landing on a min while the big window still shows a deeper
-//   point that has not entered the attack window yet, the envelope
-//   starts releasing and attacks back down when the point arrives (a
-//   small bump). Gating the release on the big-window min would hold
-//   instead.
 // * 2 pair-reduce instances (attack window incl. taps, big window).
 //========================================================================
 
@@ -274,7 +282,7 @@ with {
 // #### Usage
 //
 // ```
-// hermiteFollower(nB, taps, v1, i1, endDirDn, TRel) : _
+// hermiteFollower(nB, taps, v1, i1, endDirDn, relCeil, TRel) : _
 // ```
 //
 // Where:
@@ -284,6 +292,10 @@ with {
 //   slidingMinIdxBank; disabled taps read (ma.MAX, 1)
 // * `v1`, `i1`: full-window min and samples until it first plays
 // * `endDirDn`: landing slope for the FINAL attack target (<= 0)
+// * `relCeil`: release ceiling: the deepest value visible anywhere in
+//   the lookahead (the caller's big-window min). Releases rise toward
+//   it and never above it; when it undercuts the current gain the
+//   follower holds.
 // * `TRel`: release segment length in samples
 //
 // Output: the smoothed gain envelope.
@@ -297,10 +309,13 @@ with {
 // Triggers, mutually exclusive:
 // * attack:  critVal < gain, and (critVal != p1 or critDl < T-k)
 //            -> T = critDl (exact deadline)
-// * release: (v1 != p1) & (v1 >= gain)   -> T = TRel (taste); lands flat
+// * release: critVal >= gain & max(gain, relCeil) != p1
+//            -> target max(gain, relCeil), T = TRel (taste); lands
+//            flat. relCeil < gain thus latches a flat hold: freeze
+//            while a deeper point approaches the attack window.
 // Idle (arrived, target unchanged) holds.
 //----------------------------------------------------------------------
-hermiteFollower(nB, taps, v1, i1, endDirDn, TRel) =
+hermiteFollower(nB, taps, v1, i1, endDirDn, relCeil, TRel) =
     (loop ~ si.bus(7)) : (_, si.block(6))
 with {
     // state: gain, p0, m0, p1, m1, k, T (previous-sample values inside loop)
@@ -330,12 +345,18 @@ with {
         // leg the live deadline counts down in lockstep with T-k, so
         // this stays quiet.
         attTrig = attNeed & ((critVal != p1) | (critDl < (T - k)));
-        relTrig = (v1 != p1) & (v1 >= gain);
+        // release ceiling: rise toward relCeil, never above it. When
+        // relCeil < gain the effective ceiling is the gain itself, so
+        // the latched segment is a flat hold (delta = 0 clamps both
+        // tangents to 0), freezing any rise in flight. attNeed == 0
+        // keeps releases from hijacking a running attack leg.
+        effCeil = max(gain, relCeil);
+        relTrig = (attNeed == 0) & (effCeil != p1);
         trig    = attTrig | relTrig;
 
         // ---- new-segment values (only used when trig == 1) ----
         Tt    = max(1, select2(attTrig, TRel, critDl));
-        p1t   = select2(attTrig, v1, critVal);
+        p1t   = select2(attTrig, effCeil, critVal);
         delta = (p1t - gain) / Tt;     // average slope, sign = direction
         // an intermediate checkpoint lands aimed at the final target;
         // the final target lands aimed beyond the window (endDirDn)
@@ -378,8 +399,8 @@ with {
 
 //--------------------------`lookaheadSmoother`--------------------------
 // Full smoother wiring: the lookahead windows, the multidetector tap
-// bank, the attack end-slope, and the Hermite follower.
-// Input is the RAW GR signal.
+// bank, the attack end-slope, the release ceiling, and the Hermite
+// follower. Input is the RAW GR signal.
 //
 // #### Usage
 //
@@ -393,7 +414,7 @@ with {
 // a full limiter) by the same amount to line up with the output.
 //----------------------------------------------------------------------
 lookaheadSmoother(nAtt, maxAtt, nExtra, maxExtra, relTime, rawGR) =
-    hermiteFollower(nB, taps, v1, i1, dn, relTime)
+    hermiteFollower(nB, taps, v1, i1, dn, v2, relTime)
 with {
     nB     = int(floor(log(maxAtt)/log(2)) + 1);
     nTot   = nAtt + nExtra;
@@ -410,7 +431,8 @@ with {
     i2     = big : (!, _);
 
     // attack aim: land on v1 moving toward a deeper v2 beyond the attack
-    // window. v2 < v1 implies i2 > i1, but guard anyway.
+    // window. v2 < v1 implies i2 > i1, but guard anyway. v2 doubles as
+    // the release ceiling.
     dn = select2(v2 < v1, 0, (v2 - v1) / max(1, i2 - i1));
 };
 
