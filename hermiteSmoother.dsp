@@ -1,5 +1,5 @@
 declare name "hermiteSmoother";
-declare version "0.6";
+declare version "0.7";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -7,7 +7,11 @@ import("stdfaust.lib");
 
 //========================================================================
 // Lookahead smoother for a limiter: Hermite attack + Hermite release.
-// (v0.6: release gated on the big window -- the release ceiling is now
+// (v0.7: unified aim -- every candidate carries the nearest strictly
+// deeper point one scale out, from the neighbour tap in the bank;
+// checkpoint touchdowns aim there instead of at the final target, and
+// the big window is the top link of the same chain.
+// v0.6: release gated on the big window -- the release ceiling is now
 // the big-window min, so the follower holds instead of the old
 // release-then-re-attack bump while a deeper point is inbound.
 // v0.5: the smoother option checkboxes are gone -- fixed behavior is
@@ -36,12 +40,13 @@ import("stdfaust.lib");
 // remaining time (critDl < T-k; catches an equal-depth peak that plays
 // sooner, e.g. on plateaus). Because tap deadlines are exact, a latched
 // leg counts down in lockstep with the live deadline: no spurious
-// retriggers, and landings stay sample-exact. Checkpoint legs land
-// aimed at the final target, (v1-critVal)/(i1-critDl), so intermediate
-// touchdowns stay C1 on the way down; the final target lands aimed at a
-// deeper point beyond the attack window if the big window (nAtt+nExtra)
-// sees one. Taps longer than the current window read ma.MAX and never
-// win the argmin.
+// retriggers, and landings stay sample-exact. Every landing aims at
+// the nearest strictly-deeper point one scale out: a checkpoint at its
+// neighbour tap's min (passing outward through scales that share the
+// same min), the final target at the big window's min beyond the
+// attack window (nAtt+nExtra) -- one uniform chain, from pair data the
+// cascade already computes. Taps longer than the current window read
+// ma.MAX and never win the argmin.
 //
 // Why this is safe: a monotone-decreasing curve with p(e_i) <= m_i for
 // every scale (m_i = min over next 2^i samples, e_i = its exact play
@@ -282,16 +287,18 @@ with {
 // #### Usage
 //
 // ```
-// hermiteFollower(nB, taps, v1, i1, endDirDn, relCeil, TRel) : _
+// hermiteFollower(nC, cands, relCeil, TRel) : _
 // ```
 //
 // Where:
 //
-// * `nB`: number of taps (compile-time int)
-// * `taps`: 2*nB signals: (value, exact play idx) per scale, from
-//   slidingMinIdxBank; disabled taps read (ma.MAX, 1)
-// * `v1`, `i1`: full-window min and samples until it first plays
-// * `endDirDn`: landing slope for the FINAL attack target (<= 0)
+// * `nC`: number of candidates (compile-time int)
+// * `cands`: 4*nC signals: (value, deadline, next-deeper value,
+//   next-deeper deadline) per candidate. The deadline is the exact
+//   play index; the next-deeper pair is the nearest strictly-deeper
+//   point one scale out and becomes the landing chord (pass the own
+//   value as next-deeper value to land flat). Disabled candidates read
+//   (ma.MAX, 1, _, _) and never win.
 // * `relCeil`: release ceiling: the deepest value visible anywhere in
 //   the lookahead (the caller's big-window min). Releases rise toward
 //   it and never above it; when it undercuts the current gain the
@@ -300,11 +307,12 @@ with {
 //
 // Output: the smoothed gain envelope.
 //
-// Per sample, every candidate (v1 plus each tap) gets a triple
-// (requiredSlope, value, deadline) with requiredSlope =
-// (value - gain)/deadline; the critical candidate is the argmin
-// (steepest descent required). Candidates at or above gain have
-// requiredSlope >= 0 and never win while any descent is needed.
+// Per sample, every candidate gets (requiredSlope, value, deadline,
+// npVal, npDl) with requiredSlope = (value - gain)/deadline; the
+// critical candidate is the argmin (steepest descent required), and
+// its chord (npVal - value)/(npDl - deadline) is the landing slope.
+// Candidates at or above gain have requiredSlope >= 0 and never win
+// while any descent is needed.
 //
 // Triggers, mutually exclusive:
 // * attack:  critVal < gain, and (critVal != p1 or critDl < T-k)
@@ -315,7 +323,7 @@ with {
 //            while a deeper point approaches the attack window.
 // Idle (arrived, target unchanged) holds.
 //----------------------------------------------------------------------
-hermiteFollower(nB, taps, v1, i1, endDirDn, relCeil, TRel) =
+hermiteFollower(nC, cands, relCeil, TRel) =
     (loop ~ si.bus(7)) : (_, si.block(6))
 with {
     // state: gain, p0, m0, p1, m1, k, T (previous-sample values inside loop)
@@ -325,17 +333,21 @@ with {
         dirPrev = gain - gain';        // current slope, units/sample
 
         // ---- critical-constraint selection ----
-        trip(val, dl) = (val - gain) / max(1, dl), val, dl;
-        cands   = (v1, i1, taps) : par(i, nB + 1, trip);
-        crit    = cands : red3(nB + 1);
-        critVal = crit : (!, _, !);
-        critDl  = crit : (!, !, _);
-        amin3(sa,va,da, sb,vb,db) =
-            select2(pk, sa, sb), select2(pk, va, vb), select2(pk, da, db)
+        trip(val, dl, npv, npd) =
+            (val - gain) / max(1, dl), val, dl, npv, npd;
+        scored  = cands : par(i, nC, trip);
+        crit    = scored : red5(nC);
+        critVal = crit : (!, _, !, !, !);
+        critDl  = crit : (!, !, _, !, !);
+        critNpV = crit : (!, !, !, _, !);
+        critNpD = crit : (!, !, !, !, _);
+        amin5(sa,va,da,ua,wa, sb,vb,db,ub,wb) =
+            select2(pk, sa, sb), select2(pk, va, vb), select2(pk, da, db),
+            select2(pk, ua, ub), select2(pk, wa, wb)
         with { pk = sb < sa; };
-        red3(1) = si.bus(3);
-        red3(2) = amin3;
-        red3(N) = (amin3, si.bus(3*(N-2))) : red3(N-1);
+        red5(1) = si.bus(5);
+        red5(2) = amin5;
+        red5(N) = (amin5, si.bus(5*(N-2))) : red5(N-1);
 
         // ---- triggers ----
         attNeed = critVal < gain;
@@ -358,11 +370,10 @@ with {
         Tt    = max(1, select2(attTrig, TRel, critDl));
         p1t   = select2(attTrig, effCeil, critVal);
         delta = (p1t - gain) / Tt;     // average slope, sign = direction
-        // an intermediate checkpoint lands aimed at the final target;
-        // the final target lands aimed beyond the window (endDirDn)
-        aimDn = select2(critVal > v1,
-                        endDirDn,
-                        (v1 - critVal) / max(1, i1 - critDl));
+        // every landing aims at the nearest strictly-deeper point one
+        // scale out (the critical candidate's np pair); the chord is 0
+        // when nothing deeper is in sight (sentinel: npVal = own value)
+        aimDn = (critNpV - critVal) / max(1, critNpD - critDl);
         // sign-symmetric Fritsch-Carlson monotone box
         lo    = min(0, 3*delta);
         hi    = max(0, 3*delta);
@@ -399,8 +410,8 @@ with {
 
 //--------------------------`lookaheadSmoother`--------------------------
 // Full smoother wiring: the lookahead windows, the multidetector tap
-// bank, the attack end-slope, the release ceiling, and the Hermite
-// follower. Input is the RAW GR signal.
+// bank, the next-deeper aim chain, the release ceiling, and the
+// Hermite follower. Input is the RAW GR signal.
 //
 // #### Usage
 //
@@ -414,7 +425,7 @@ with {
 // a full limiter) by the same amount to line up with the output.
 //----------------------------------------------------------------------
 lookaheadSmoother(nAtt, maxAtt, nExtra, maxExtra, relTime, rawGR) =
-    hermiteFollower(nB, taps, v1, i1, dn, v2, relTime)
+    hermiteFollower(nB + 1, cands, v2, relTime)
 with {
     nB     = int(floor(log(maxAtt)/log(2)) + 1);
     nTot   = nAtt + nExtra;
@@ -425,15 +436,38 @@ with {
     bank   = grSm : slidingMinIdxBank(nAtt, maxAtt);    // v1, i1, taps
     v1     = bank : (_, si.block(1 + 2*nB));
     i1     = bank : (!, _, si.block(2*nB));
-    taps   = bank : (si.block(2), si.bus(2*nB));
+    tV(i)  = bank : ba.selector(2 + 2*i, 2 + 2*nB);     // tap i value
+    tD(i)  = bank : ba.selector(3 + 2*i, 2 + 2*nB);     // tap i play idx
     big    = rawGR : slidingMinIdx(nTot, maxTot);       // v2, i2
-    v2     = big : (_, !);
+    v2     = big : (_, !);       // v2 doubles as the release ceiling
     i2     = big : (!, _);
 
-    // attack aim: land on v1 moving toward a deeper v2 beyond the attack
-    // window. v2 < v1 implies i2 > i1, but guard anyway. v2 doubles as
-    // the release ceiling.
-    dn = select2(v2 < v1, 0, (v2 - v1) / max(1, i2 - i1));
+    // --- the next-deeper chain: an aim point for every scale ---
+    // A disabled tap (2^i > nAtt) reads ma.MAX, but its window clipped
+    // to nAtt IS the full window, so substitute (v1, i1) in the chain;
+    // values then decrease monotonically with scale (nested windows).
+    sV(i) = min(tV(i), v1);
+    sD(i) = select2(tV(i) == ma.MAX, tD(i), i1);
+    // np(k) = the nearest strictly-deeper point one scale out, indexed
+    // from the top: k = 0 is the largest tap, whose neighbour is the
+    // full window; k = nB-1 is the smallest tap. A neighbour with the
+    // SAME min is the same point, so its own np passes through (same
+    // point, same outward direction). Beyond the full window sits the
+    // big window; the sentinel (v1, i1+1) keeps the chord at 0 when
+    // nothing deeper is in sight anywhere. A strictly deeper point is
+    // always outside the inner window, so its play idx exceeds the
+    // inner one and the chords stay well-formed.
+    npFullV = select2(v2 < v1, v1, v2);
+    npFullD = select2(v2 < v1, i1 + 1, i2);
+    npV(0)  = select2(v1 < sV(nB-1), npFullV, v1);
+    npD(0)  = select2(v1 < sV(nB-1), npFullD, i1);
+    npV(k)  = select2(sV(nB-k) < sV(nB-1-k), npV(k-1), sV(nB-k));
+    npD(k)  = select2(sV(nB-k) < sV(nB-1-k), npD(k-1), sD(nB-k));
+
+    // candidates: (value, deadline, next-deeper value, next-deeper
+    // deadline); slot 0 is the full window, then the taps
+    cands = (v1, i1, npFullV, npFullD),
+            par(i, nB, (tV(i), tD(i), npV(nB-1-i), npD(nB-1-i)));
 };
 
 //-------------------------------- demo ---------------------------------
