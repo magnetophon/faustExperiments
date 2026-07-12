@@ -1,5 +1,5 @@
 declare name "hermiteSmoother";
-declare version "0.7";
+declare version "0.8";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -7,7 +7,14 @@ import("stdfaust.lib");
 
 //========================================================================
 // Lookahead smoother for a limiter: Hermite attack + Hermite release.
-// (v0.7: unified aim -- every candidate carries the nearest strictly
+// (v0.8: the next-deeper aim chain moved inside slidingMinIdxBank --
+// the bank takes the beyond pair and emits (value, play idx, npV, npD)
+// per scale, so lookaheadSmoother is pure wiring. Also fixes a v0.7
+// bug: sV(i) = min(tV(i), v1) always returned v1, because tap windows
+// nest inside the full window so every tap min is >= v1; the whole
+// chain collapsed onto the big-window link and every landing aimed
+// there. The per-scale neighbour aim only now takes effect.
+// v0.7: unified aim -- every candidate carries the nearest strictly
 // deeper point one scale out, from the neighbour tap in the bank;
 // checkpoint touchdowns aim there instead of at the final target, and
 // the big window is the top link of the same chain.
@@ -99,7 +106,9 @@ import("stdfaust.lib");
 
 //========================================================================
 // library part, from slidingMinIdx.dsp v0.1
-// (slidingMinIdxBank added)
+// (slidingMinIdxBank added; since v0.8 the bank takes a beyond pair and
+// emits per-scale (value, play idx, npV, npD) quads: the next-deeper
+// aim chain lives inside)
 //========================================================================
 
 //-------------------------`slidingReducePair`--------------------------
@@ -206,45 +215,74 @@ with {
 };
 
 //-------------------------`slidingMinIdxBank`---------------------------
-// slidingMinIdx + the multidetector: the pair cascade IS the
-// multidetector's sequentialOperatorParOut, so the per-scale taps come
-// for free. The cascade is fanned out to:
-//   * the full-window (min, idx), verbatim slidingMinIdx semantics
-//   * nB = maxNrBits(maxN) taps: tap i = min over the NEXT pow2(i)
-//     samples (all taps share their trailing edge with the full window's
-//     oldest sample = the one playing now), plus the EXACT play index of
-//     that minimum (oldest-occurrence tie-break = deadline convention).
+// slidingMinIdx + the multidetector + the aim chain: the pair cascade
+// IS the multidetector's sequentialOperatorParOut, so the per-scale
+// taps come for free, and every scale leaves the bank already carrying
+// its end direction -- the nearest strictly deeper point one scale out.
+//
+// Scales, small to large: tap i = min over the NEXT pow2(i) samples
+// (all taps share their trailing edge with the full window's oldest
+// sample = the one playing now), i = 0 .. nB-1; above them the full
+// window over n (verbatim slidingMinIdx semantics). Every min rides
+// with the EXACT play index of its oldest occurrence (deadline
+// convention).
+//
+// The next-deeper chain: np(scale) = the neighbour one scale out when
+// its min is STRICTLY deeper, else that neighbour's own np. Nested
+// dyadic windows share mins constantly, and under the oldest-occurrence
+// tie-break an equal neighbour is the SAME point (the bigger window
+// only adds newer samples), so passing outward through equal scales is
+// what keeps intermediate touchdowns from landing flat mid-descent.
+// The chain tops out at the caller-supplied beyond pair -- the nearest
+// known point past the full window; when it is not strictly deeper
+// than v1 the top link degrades to the flat sentinel (v1, i1+1), i.e.
+// a zero chord. A strictly deeper point always lies outside the inner
+// window, so np play indices exceed the inner ones and the chords stay
+// well-formed.
+//
 // A tap whose window exceeds the current n outputs (ma.MAX, 1): a value
-// that can never become a binding constraint.
+// that can never become a binding constraint. Its window clipped to n
+// IS the full window, so it enters the chain as (v1, i1), and equal
+// values pass outward through it like any shared min.
 //
 // #### Usage
 //
 // ```
-// _ : slidingMinIdxBank(n,maxN) : si.bus(2 + 2*maxNrBits(maxN))
+// _ : slidingMinIdxBank(n,maxN,beyondV,beyondD) : si.bus(4*(nB+1))
 // ```
 //
-// * out1, out2:           full-window min and idx (as slidingMinIdx)
-// * out(3+2i), out(4+2i): tap i value and play idx, i = 0 .. nB-1
+// * `beyondV`, `beyondD`: the nearest known point beyond the full
+//   window (value, play idx in the same 0-means-plays-now index space
+//   as i1). Pass (ma.MAX, 0) when nothing beyond is known.
+// * out1..out4:            v1, i1, npFullV, npFullD (full window)
+// * out(5+4i)..out(8+4i):  tap i value, play idx, npV, npD
 //----------------------------------------------------------------------
-slidingMinIdxBank(n,maxN) =
-    (_, ba.time)
-    : sequentialOperatorParOut(nB-1)
-    <: (fullWin, tapBank)
+slidingMinIdxBank(n,maxN,beyondV,beyondD,x) =
+    (v1, i1, npFullV, npFullD),
+    par(i, nB, (outV(i), outD(i), npTV(i), npTD(i)))
 with {
     nB     = maxNrBits(maxN);
     intMax = 2147483647;
     idxFromOldest(tMin) = (n-1) - (ba.time - tMin);
-    minIdxOp(v1,t1,v2,t2) =
-        select2(pickSecond, v1, v2),
-        select2(pickSecond, t1, t2)
+    minIdxOp(va,ta,vb,tb) =
+        select2(pickSecond, va, vb),
+        select2(pickSecond, ta, tb)
     with {
-        pickSecond = (v2 < v1) | ((v2 == v1) & ((t2 - t1) < 0));
+        pickSecond = (vb < va) | ((vb == va) & ((tb - ta) < 0));
     };
 
+    // shared cascade: pair i = (min, oldest timestamp) over the last
+    // pow2(i) input samples
+    casc  = (x, ba.time) : sequentialOperatorParOut(nB-1);
+    cV(i) = casc : ba.selector(2*i,     2*nB);
+    cT(i) = casc : ba.selector(2*i + 1, 2*nB);
+
     // full-window path, verbatim from slidingReducePair:
-    fullWin = par(i, nB, (par(j, 2, _@sumOfPrevBlockSizes(i)) : useVal(i)))
-              : combinePairs(nB)
-              : (_, idxFromOldest);
+    full = casc
+        : par(i, nB, (par(j, 2, _@sumOfPrevBlockSizes(i)) : useVal(i)))
+        : combinePairs(nB);
+    v1 = full : (_, !);
+    i1 = full : (!, _) : idxFromOldest;
     useVal(i) = select2(isUsed(i), ma.MAX, _),
                 select2(isUsed(i), intMax, _);
 
@@ -252,13 +290,30 @@ with {
     // pair by n-pow2(i) moves that to [t-n+1, t-n+pow2(i)]: the first
     // pow2(i) samples to play. The delayed timestamp then yields the
     // exact play index through the same idxFromOldest.
-    tapBank = par(i, nB, tap(i));
-    tap(i)  = par(j, 2, de.delay(maxN - pow2(i), max(0, n - pow2(i))))
-              : (_, idxFromOldest)
-              : disable(i);
-    disable(i) = select2(active(i), ma.MAX, _),
-                 select2(active(i), 1, _);
+    dl(i)  = de.delay(maxN - pow2(i), max(0, n - pow2(i)));
+    tV(i)  = cV(i) : dl(i);
+    tD(i)  = cT(i) : dl(i) : idxFromOldest;
     active(i) = pow2(i) <= n;
+    outV(i) = select2(active(i), ma.MAX, tV(i));
+    outD(i) = select2(active(i), 1,      tD(i));
+
+    // --- the next-deeper chain ---
+    // sV/sD: the tap clipped to the current window; a disabled tap's
+    // clipped window IS the full window
+    sV(i) = select2(active(i), v1, tV(i));
+    sD(i) = select2(active(i), i1, tD(i));
+    // top link: the beyond pair when strictly deeper, else the flat
+    // sentinel
+    npFullV = select2(beyondV < v1, v1,     beyondV);
+    npFullD = select2(beyondV < v1, i1 + 1, beyondD);
+    // chain indexed from the top: k = 0 is the largest tap, whose
+    // neighbour is the full window; tap i sits at k = nB-1-i
+    npKV(0) = select2(v1 < sV(nB-1), npFullV, v1);
+    npKD(0) = select2(v1 < sV(nB-1), npFullD, i1);
+    npKV(k) = select2(sV(nB-k) < sV(nB-1-k), npKV(k-1), sV(nB-k));
+    npKD(k) = select2(sV(nB-k) < sV(nB-1-k), npKD(k-1), sD(nB-k));
+    npTV(i) = npKV(nB-1-i);
+    npTD(i) = npKD(nB-1-i);
 
     // shared helpers (op bound to minIdxOp, otherwise verbatim):
     sequentialOperatorParOut(N) = seq(i, N, operator(i));
@@ -269,11 +324,11 @@ with {
     sumOfPrevBlockSizes(0) = 0;
     sumOfPrevBlockSizes(i) = (ba.subseq((allBlockSizes),0,i):>_);
     allBlockSizes = par(i, maxNrBits(maxN-1), (pow2(i)) * isUsed(i));
-    maxNrBits(x) = int2nrOfBits(x);
+    maxNrBits(m) = int2nrOfBits(m);
     isUsed(i) = ba.take(i+1, (int2bin(n,(maxN-1)*2+1)));
     pow2(i) = 1<<i;
-    int2bin(x,m) = par(j, maxNrBits(m-1), int(floor((x)/(pow2(j))))%2);
-    int2nrOfBits(x) = int(floor(log(x)/log(2))+1);
+    int2bin(v,m) = par(j, maxNrBits(m-1), int(floor((v)/(pow2(j))))%2);
+    int2nrOfBits(v) = int(floor(log(v)/log(2))+1);
 };
 
 //========================================================================
@@ -410,7 +465,7 @@ with {
 
 //--------------------------`lookaheadSmoother`--------------------------
 // Full smoother wiring: the lookahead windows, the multidetector tap
-// bank, the next-deeper aim chain, the release ceiling, and the
+// bank with its next-deeper aim chain, the release ceiling, and the
 // Hermite follower. Input is the RAW GR signal.
 //
 // #### Usage
@@ -433,41 +488,14 @@ with {
     // the attack window's oldest sample is the one playing now: small
     // covers plays-now .. +(nAtt-1), big covers plays-now .. +(nTot-1)
     grSm   = de.delay(maxExtra, nExtra, rawGR);
-    bank   = grSm : slidingMinIdxBank(nAtt, maxAtt);    // v1, i1, taps
-    v1     = bank : (_, si.block(1 + 2*nB));
-    i1     = bank : (!, _, si.block(2*nB));
-    tV(i)  = bank : ba.selector(2 + 2*i, 2 + 2*nB);     // tap i value
-    tD(i)  = bank : ba.selector(3 + 2*i, 2 + 2*nB);     // tap i play idx
     big    = rawGR : slidingMinIdx(nTot, maxTot);       // v2, i2
     v2     = big : (_, !);       // v2 doubles as the release ceiling
     i2     = big : (!, _);
-
-    // --- the next-deeper chain: an aim point for every scale ---
-    // A disabled tap (2^i > nAtt) reads ma.MAX, but its window clipped
-    // to nAtt IS the full window, so substitute (v1, i1) in the chain;
-    // values then decrease monotonically with scale (nested windows).
-    sV(i) = min(tV(i), v1);
-    sD(i) = select2(tV(i) == ma.MAX, tD(i), i1);
-    // np(k) = the nearest strictly-deeper point one scale out, indexed
-    // from the top: k = 0 is the largest tap, whose neighbour is the
-    // full window; k = nB-1 is the smallest tap. A neighbour with the
-    // SAME min is the same point, so its own np passes through (same
-    // point, same outward direction). Beyond the full window sits the
-    // big window; the sentinel (v1, i1+1) keeps the chord at 0 when
-    // nothing deeper is in sight anywhere. A strictly deeper point is
-    // always outside the inner window, so its play idx exceeds the
-    // inner one and the chords stay well-formed.
-    npFullV = select2(v2 < v1, v1, v2);
-    npFullD = select2(v2 < v1, i1 + 1, i2);
-    npV(0)  = select2(v1 < sV(nB-1), npFullV, v1);
-    npD(0)  = select2(v1 < sV(nB-1), npFullD, i1);
-    npV(k)  = select2(sV(nB-k) < sV(nB-1-k), npV(k-1), sV(nB-k));
-    npD(k)  = select2(sV(nB-k) < sV(nB-1-k), npD(k-1), sD(nB-k));
-
-    // candidates: (value, deadline, next-deeper value, next-deeper
-    // deadline); slot 0 is the full window, then the taps
-    cands = (v1, i1, npFullV, npFullD),
-            par(i, nB, (tV(i), tD(i), npV(nB-1-i), npD(nB-1-i)));
+    // the bank hands every scale its neighbour-derived aim; the big
+    // window is the beyond pair, the top link of the same chain. The
+    // bank output IS the follower's candidate list: (value, deadline,
+    // npV, npD) for the full window, then for every tap.
+    cands  = grSm : slidingMinIdxBank(nAtt, maxAtt, v2, i2);
 };
 
 //-------------------------------- demo ---------------------------------
