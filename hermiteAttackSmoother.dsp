@@ -1,5 +1,5 @@
 declare name "hermiteAttackSmoother";
-declare version "0.3";
+declare version "0.4";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -93,6 +93,31 @@ import("stdfaust.lib");
 //   <= 2.3e-4 linear, longest 1.9 ms; v0.2 measured exactly 0. If
 //   out <= grPlay must be bit-exact, min the output with ceilPlay,
 //   at the price of a C1 corner at the touch point.
+// * (v0.4) The trigger no longer re-plans on every change of the
+//   critical VALUE: a new minimum that plays at-or-after the running
+//   leg's arrival AND demands no steeper descent than the leg has
+//   left is flown past instead of re-latched; the leg keeps its
+//   countdown, and the deferred point is picked up at touchdown (a
+//   fixed occurrence's deadline stays exact while it waits, so
+//   nothing is lost). Every other trigger cause is verbatim v0.3:
+//   sooner-deadline undercuts, plateaus, the critDl = 0 stitch,
+//   launches from idle. Why: whenever the raw GR keeps creeping down
+//   after a drop (a staircase, or the sub-sample creep of real
+//   material), each newest window sample is a fresh minimum, so the
+//   != test re-latched EVERY sample -- and the min of a creeping
+//   window is always its NEWEST sample, so the critical deadline sat
+//   PINNED at a tap's trailing edge (play index 2^i - 1) instead of
+//   counting down. Each re-plan restarted the cubic onto that
+//   never-shrinking horizon: an exponential chase (time constant
+//   T/4) that only advanced when a smaller tap crossed the drop,
+//   halving the horizon through the scales (959 -> 511 -> ... -> 7
+//   -> 3 -> 1 at 48 kHz / 20 ms) and shedding ~45% of the leg's
+//   speed inside the last ~2 samples: a visible corner at the FOOT
+//   of every attack that landed on descending material. With the
+//   gate, a latch happens only where the reported deadline is honest
+//   (first sight, tap crossings, undercuts), so between those the
+//   leg genuinely flies its countdown and the collapse cannot
+//   assemble.
 //
 // Latency: nAtt - 1 samples.
 //
@@ -319,7 +344,19 @@ with {
         // (equal-depth peak that plays sooner: plateaus), or when idle
         // (tracking has moved gain off p1, so the != test alone no
         // longer suffices). On a steady leg all three stay quiet.
-        attTrig = attNeed & ((critVal != p1) | (critDl < (T - k)) | arrived);
+        // (v0.4) EXCEPT: a changed minimum that plays at-or-after the
+        // running leg's arrival and demands no steeper descent than
+        // the leg has left is flown past, not re-latched -- the creep
+        // gate; see the header. Chords are compared cross-multiplied
+        // (both deadlines >= 0, so the direction is preserved and no
+        // division lands on the loop's critical path; rRem = 0 makes
+        // steeper false, so a landed leg still holds its target
+        // through the play sample and re-launches via `arrived`).
+        rRem    = max(0, T - k);       // remaining steps of the leg
+        steeper = ((critVal - gain) * rRem) < ((p1 - gain) * critDl);
+        flyOn   = (steeper == 0) & (critDl >= rRem);
+        attTrig = attNeed & (((critVal != p1) & (flyOn == 0))
+                             | (critDl < rRem) | arrived);
         trig    = attTrig;
 
         // ---- new-segment values (only used when trig == 1) ----
