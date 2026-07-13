@@ -1,5 +1,5 @@
 declare name "hermiteAttackSmoother";
-declare version "0.1";
+declare version "0.3";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -30,8 +30,16 @@ import("stdfaust.lib");
 // runtime branching, so extraMs = 0 in v0.9 still runs the big
 // window's block reads, its combine tree and the release selects every
 // sample -- the isUsed gates are slider-derived, so nothing folds.
-// Removing the machinery at compile time is what pays.
-// [measured numbers: pending -- filled in below after benchmarking]
+// Removing the machinery at compile time is what pays. Measured on
+// the isolated algorithm (harness-fed S&H input, -double, -O3
+// -march=native, 48 kHz, defaults, maxSR = 192k): v0.9 133 ns/sample
+// (136 with the direction knob at 0 -- the knob saves nothing),
+// attack-only 115 ns/sample, ~13% less; the follower's per-candidate
+// divisions and argmin tree dominate and are unchanged. The bigger
+// win is state: sizeof(dsp) 5.6 MB -> 2.4 MB (2.3x), since every
+// shared-cascade read sits nExtra shallower and the big-window and
+// nExtra-deep tap lines are gone. Attack legs verified bit-identical
+// to v0.9 launched from equal idle states (square wave, double).
 //
 // Semantics changes vs v0.9, attack side:
 // * The aim chain's top link is the flat sentinel (v1, i1+1)
@@ -43,6 +51,48 @@ import("stdfaust.lib");
 //   the latched p1, so critVal == p1 no longer implies the leg is
 //   already handled; any needed descent from idle latches a new leg.
 //   (In v0.9 idle held gain == p1, which made the != test sufficient.)
+// * (v0.2) Launches from idle pick up the direction of the raw GR the
+//   follower was tracking -- including a RISING one -- as the leg's
+//   launch tangent, so the gain curve leaves the constraint at the
+//   constraint's own velocity (C1) instead of cornering flat. With an
+//   upstream release on the raw GR this is the normal case: every
+//   attack starts on a rising slope. The rising tangent is capped by
+//   the mirrored Fritsch-Carlson bound (|m0| <= 3*|delta|), which
+//   trades leg monotonicity for continuity; brickwall safety never
+//   rested on monotonicity but on the per-sample deadline re-trigger,
+//   which re-plans the moment any candidate outruns the running leg.
+//   Mid-leg re-latches kept the one-sided v0.9 clamp (launch flat or
+//   downward), so a re-plan during the pickup bump could not chain
+//   bumps.
+// * (v0.3) The v0.2 pickup only survived on drops that were already
+//   deep at first sight AND landed on a local minimum; instrumented
+//   renders showed every other launch cornering flat through two
+//   holes. (1) Whenever the raw GR keeps descending after the drop --
+//   a staircase, or merely the sub-sample creep of real material --
+//   each newest window sample is a fresh minimum, so critVal != p1
+//   re-latches EVERY sample and the one-sided clamp zeroed the
+//   tangent one sample after a perfect pickup. (2) When the
+//   constraint rises PAST a shallow future value, the trigger fires
+//   with gain - critVal at one rise-step, so the mirrored cap
+//   3*|delta| was ~0 exactly when the pickup should engage. Both fall
+//   to m0t = max(lo, dirPrev): re-latches are velocity-continuous in
+//   both directions, so the re-latch storm re-plans one smooth hump
+//   instead of killing it, and the rising side is uncapped -- dirPrev
+//   is the constraint's own tracked velocity, so the hump peaks at
+//   most (4/27)*T*dirPrev above the departure point, a fraction of
+//   the rise the constraint itself was making. Humps cannot chain:
+//   with m1 >= lo the launch acceleration is <= -4*m0/T whenever
+//   m0 > 0, so per-sample re-plans decay the velocity geometrically
+//   (time constant T/4 samples) and the hump rolls over on its own.
+//   Trade-off: the hump decays with time constant T/4, so when the
+//   tracked RISE decelerates faster than that (fast upstream
+//   release, or the release's one-pole target moving closer) the
+//   hump can poke above the rise briefly -- never above a peak
+//   deadline, those re-trigger. Measured on the demo torture signal
+//   (10 s, rel 50 ms, att 50 ms, 48 kHz, -double): 5 events,
+//   <= 2.3e-4 linear, longest 1.9 ms; v0.2 measured exactly 0. If
+//   out <= grPlay must be bit-exact, min the output with ceilPlay,
+//   at the price of a C1 corner at the touch point.
 //
 // Latency: nAtt - 1 samples.
 //
@@ -280,11 +330,18 @@ with {
         // scale out (the critical candidate's np pair); the chord is 0
         // when nothing deeper is in sight (sentinel: npVal = own value)
         aimDn = (critNpV - critVal) / max(1, critNpD - critDl);
-        // sign-symmetric Fritsch-Carlson monotone box
-        lo    = min(0, 3*delta);
-        hi    = max(0, 3*delta);
-        m0t   = max(lo, min(hi, dirPrev));
-        m1t   = max(lo, min(hi, aimDn));
+        // Fritsch-Carlson monotone bound; delta < 0 whenever trig fires
+        lo    = 3 * delta;
+        // v0.3: the launch tangent is velocity-continuous in BOTH
+        // directions, with the FC bound kept on the downside only.
+        // dirPrev is the constraint's own tracked slope on launches
+        // from idle (gain == ceilPlay there) and the running hump's
+        // decaying slope on re-latches, so every re-plan keeps C1.
+        // No mirrored cap and no arrived split -- see the header for
+        // why both defeated the pickup, and why re-plans cannot
+        // chain humps without the clamp.
+        m0t   = max(lo, dirPrev);
+        m1t   = max(lo, min(0, aimDn));
 
         TN  = select2(trig, T,  Tt);
         p0N = select2(trig, p0, gain);
@@ -357,8 +414,8 @@ testBlockscale = TestGroup(hslider("[2]blockscale", 1, 0.01, 10, 0.01));
 testFreq = TestGroup(hslider("[3]freq", 1, 0.001, 30, 0.001));
 testStep1 = TestGroup(hslider("[4]step1", 0.75, -1, 1, 0.001));
 testStep2 = TestGroup(hslider("[5]step2", 0.125, -1, 1, 0.001));
-testSelect = TestGroup(checkbox("[6]signal select"));
-testSignal = select2(testSelect, testSignal1, testSignal2);
+testSelect = TestGroup(hslider("[6]signal select", 0, 0, 2, 1));
+testSignal = select3(testSelect, testSignal1, testSignal2, testSignal3);
 testSignal1 = it.interpolate_linear(testNoiseLevel,
     (loop~_),
     no.lfnoise(testNoiseRate))
@@ -366,6 +423,18 @@ with {
     loop(prev) = no.lfnoise0(testBlockscale*(abs(prev*69)%9:pow(0.75)*5+1));
 };
 testSignal2 = os.lf_squarewave(testFreq)*0.5;
+// the torture signal through an instant-attack / one-pole-release
+// follower: raw GR as it looks when release is done upstream --
+// descents stay steps (the lookahead's job), every rise is a smooth
+// exponential, so attacks launch from a MOVING constraint. This is
+// the signal the v0.2 direction pickup is for.
+testRelMs = TestGroup(hslider("[7]upstream release [unit:ms]", 50, 1, 500, 1));
+testSignal3 = testSignal1 : relFollow
+with {
+    relCoef = exp(-1.0 / (testRelMs * 0.001 * ma.SR));
+    relFollow(x) = loop ~ _
+    with { loop(y) = min(x, x + (y - x) * relCoef); };
+};
 
 // --- Smoother parameters ---
 // compile-time maximum: 50 ms at maxSR. Lower maxSR if you never run
