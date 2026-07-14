@@ -1,5 +1,5 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "0.5";
+declare version "0.6";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -157,6 +157,37 @@ import("stdfaust.lib");
 //   follower costs the demo ~36 ns/sample (state loop, trigger and
 //   Hermite evaluation are per-instance). Library users instantiate
 //   once: single-instance cost is unchanged.
+// * (v0.6) Momentum-preserving release re-latch. Both re-latch
+//   paths used to CLAMP the launch velocity onto their caps: term 1
+//   onto the fresh-leg FC cap 3*(v1 - gain)/nRel -- any window-min
+//   creep past a flying leg's midpoint lands there, since for a
+//   whole leg re-latched at phase tau, cap/velocity =
+//   (1-tau)(1+2tau)/(2tau) < 1 for tau > 1/2 (measured x0.42 at
+//   tau = 0.75) -- and term 2 onto max(FC cap, rideMax) the sample
+//   a lift blip appears (nhV one noise-hair above v1 flips
+//   liftAhead while a leg is hot; measured x0.59). Both are a
+//   one-sample velocity corner: the "kink on the release" on noisy
+//   material. Fix: when dirPrev exceeds the fresh-leg cap
+//   (dirPrev*nRel > 3*(v1 - gain), cross-multiplied, no division on
+//   the compare), SHORTEN the leg instead of slowing the launch:
+//   T = ceil(3*(v1 - gain)/dirPrev) puts the FC bound exactly at
+//   dirPrev, so the launch keeps its velocity and decelerates
+//   smoothly into the target, landing early rather than braking
+//   instantly. The no-overshoot lemma holds at m0 = 3*delta with
+//   equality, so gain <= v1 survives unchanged. At the governor
+//   boundary Tshort == nRel: the select2 introduces no step of its
+//   own, the steady creep governor is untouched, and launches from
+//   rest (dirPrev ~ 0) plus whole-leg block S-curves stay
+//   bit-identical (capped false there). ceil keeps T integer -- a
+//   fractional T never reaches tau = 1, parking a landed leg
+//   epsilon shy of its target and deadlocking the v1 > p1 trigger
+//   -- and puts m0*T exactly ON 3*(p1 - p0), inside the
+//   flown-whole guard's 1e-8 margin, so term 3 stays quiet on
+//   these launches. Side effect: the ride's park-at-v1 velocity
+//   chop (recurring pin) becomes a flat landing, since the
+//   deceleration now starts when the cap first binds instead of at
+//   the wall. Cost: one audio-rate division + ceil on the trigger
+//   path (the plain follower gains its first division there).
 // * A release leg cannot overshoot its target: with m1 = 0,
 //   p - p1 = (1-tau)^2 * ((1+2*tau)*(p0-p1) + tau*T*m0)
 //          <= (1-tau)^2 * (p1-p0) * (tau-1) <= 0
@@ -195,7 +226,10 @@ import("stdfaust.lib");
 // sandbox), sizeof(dsp) unchanged.
 //
 // Release semantics: fixed DURATION, not fixed time constant -- any
-// rise, large or small, takes nRel samples. An isolated peak fully
+// rise, large or small, takes nRel samples from rest; a mid-flight
+// re-latch that arrives hot keeps its velocity and lands early
+// (T = ceil(3*gap/dirPrev) < nRel) instead of braking onto the
+// fresh-leg cap (v0.6). An isolated peak fully
 // recovers in exactly nRel; a staircase of k window-min steps takes
 // up to k*nRel. nRel = 1 gives instant rises to the window min (note:
 // v0.4 idle tracked ceilPlay, i.e. the playing sample -- same feel,
@@ -218,9 +252,9 @@ import("stdfaust.lib");
 //   velocity corner.
 // * A ride into a pin that RECURS (nhV read high in the dyadic
 //   blind spot, or the min value recurring past the largest
-//   excluding suffix) parks at v1 with a velocity chop instead of a
-//   lift -- bounded by rideMax, and rarer than the braking it
-//   replaces.
+//   excluding suffix) parks at v1 instead of lifting -- since v0.6
+//   as a flat landing (the shortened leg decelerates in) rather
+//   than a velocity chop.
 //========================================================================
 
 //========================================================================
@@ -553,7 +587,31 @@ with {
         trig    = attTrig | relTrig;
 
         // ---- new-segment values (only used when trig == 1) ----
-        Tt    = max(1, select2(relTrig, critDl, nRel));
+        // (v0.6) momentum-preserving re-latch: a release re-latch
+        // arriving with dirPrev above the fresh-leg FC cap
+        // 3*(v1 - gain)/nRel used to clamp the launch onto that cap
+        // (m0 = min(3*delta, dirPrev)) -- a one-sample velocity
+        // corner whenever a leg re-plans mid-flight (term 1 late in
+        // a leg; term 2 the sample a lift blip appears). Instead
+        // SHORTEN the leg: T = ceil(3*(v1 - gain)/dirPrev) raises
+        // the FC bound to meet dirPrev, so the launch keeps its
+        // velocity and decelerates smoothly into the target,
+        // landing early. Both select2 branches agree at the
+        // governor boundary (dirPrev == 3*gap/nRel gives
+        // Tshort == nRel), launches from rest are untouched
+        // (capped false at dirPrev ~ 0), and ceil keeps T integer
+        // so tau reaches exactly 1 (a fractional T parks a landed
+        // leg shy of its target and deadlocks the v1 > p1
+        // trigger). relGap can go <= 0 here (these values compute
+        // every sample; term 3 can fire at v1 == gain): the eps
+        // floor keeps the idle division finite and max(1, ...)
+        // catches the negative branch -- a T = 1 stop, identical
+        // in output to the old m0 = 0 clamp.
+        relGap = v1 - gain;
+        capped = (dirPrev * nRel) > (3 * relGap);
+        Tshort = ceil((3 * relGap) / max(ma.EPSILON, dirPrev));
+        relT   = select2(capped, nRel, max(1, min(nRel, Tshort)));
+        Tt     = max(1, select2(relTrig, critDl, relT));
         p1t   = select2(relTrig, critVal, v1);
         delta = (p1t - gain) / Tt;     // average slope, sign = direction
         // landing chord, ONE shared division: every attack landing
