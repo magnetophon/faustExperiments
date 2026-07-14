@@ -1,5 +1,5 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "0.6";
+declare version "0.8";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -188,13 +188,49 @@ import("stdfaust.lib");
 //   deceleration now starts when the cap first binds instead of at
 //   the wall. Cost: one audio-rate division + ceil on the trigger
 //   path (the plain follower gains its first division there).
+// * (v0.7) momentumOn: a compile-time 0/1 on the follower and the
+//   wiring, mirroring rideOn. 0 constant-folds the v0.6
+//   shortened-leg re-latch away (capped == 0 pins relT = nRel and
+//   Tshort to dead code) -- the exact v0.5 follower, verified
+//   bit-identical on the noise and block renders. The demo's third
+//   channel is now that (rideOn = 1, momentumOn = 0): the release
+//   kink on the scope next to its fix, replacing the rideOn = 0
+//   plain chase as the A/B reference.
+// * (v0.8) Release launch floor. The launch tangent was
+//   velocity-continuous in BOTH directions: m0 = min(3*delta,
+//   dirPrev), a negative dirPrev launching a "safe, downward dip"
+//   (brickwall-safe -- h10 >= 0 keeps the flight <= v1 regardless).
+//   But a release targets v1, BY DEFINITION the deepest point in
+//   the total lookahead: nothing below it exists to descend toward,
+//   so any dip is gratuitous over-reduction. And the dip is
+//   reachable: an attack re-latch chain lands ON its pin's play
+//   sample (deadline 0, no hold sample in between), the pin leaves
+//   the window on the NEXT sample, and term 1 fires with dirPrev =
+//   the final approach step -- or worse, a hump's deadline-0 clamp
+//   step. With T = nRel the Hermite integrates that tangent into a
+//   swoop of up to ~0.15*T*|dirPrev| below the bottom (measured on
+//   the noise workload: excursions to 0.85 below the window min,
+//   hundreds of samples long; which follower showed a given event
+//   was only the one-sample phase of its re-latch cadence). Fix:
+//   floor the launch at 0 -- m0 = min(3*delta, max(0, dirPrev)).
+//   Momentum re-latches (dirPrev > 0) and launches from a hold
+//   (dirPrev == 0) are untouched, so block S-curves and the v0.6
+//   machinery render bit-identical; the dip is replaced by a flat
+//   launch whose one-sample velocity corner is the approach step
+//   that was already there. The floor is its own compile-time
+//   flag (floorOn, on the follower and the wrapper) so either
+//   follower can A/B it; the demo's out3 disables it as the
+//   undershoot reference. Invariant with the floor on: the gain
+//   never DESCENDS below the current window min -- attack flights
+//   stay >= their target >= v1 (FC box, or all-nonnegative Hermite
+//   terms when m0 > 0), release flights now stay >= their launch
+//   point.
 // * A release leg cannot overshoot its target: with m1 = 0,
 //   p - p1 = (1-tau)^2 * ((1+2*tau)*(p0-p1) + tau*T*m0)
 //          <= (1-tau)^2 * (p1-p0) * (tau-1) <= 0
-//   for any m0 <= 3*delta -- including a (safe, downward) dip when
-//   dirPrev < 0 at launch. Hence m0 = min(3*delta, dirPrev): the same
-//   Fritsch-Carlson bound as the attack, mirrored -- a cap instead of
-//   a floor.
+//   for any m0 <= 3*delta. Hence m0 = min(3*delta, max(0, dirPrev)):
+//   the same Fritsch-Carlson bound as the attack, mirrored -- a cap
+//   instead of a floor -- plus the v0.8 launch floor at 0.
 // * Attacks that fire mid-rise pick up OUR release leg's velocity as
 //   dirPrev -- the attack-side v0.2/v0.3 pickup unchanged in form, now fed by the
 //   internal release instead of an upstream one-pole. testSignal3
@@ -441,7 +477,7 @@ with {
 // #### Usage
 //
 // ```
-// hermiteAttackReleaseFollower(nC, nRel, rideOn, cands) : _
+// hermiteAttackReleaseFollower(nC, nRel, rideOn, momentumOn, floorOn, cands) : _
 // ```
 //
 // Where:
@@ -453,6 +489,16 @@ with {
 //   0 constant-folds the ride machinery away entirely and compiles
 //   to the exact pre-mirror (v0.2) plain-chase follower -- renders
 //   bit-identical -- useful as an A/B reference.
+// * `momentumOn`: compile-time 0/1. 1 enables the v0.6
+//   momentum-preserving (shortened-leg) release re-latch; 0
+//   constant-folds it away and compiles the v0.5 re-latch
+//   (launch velocity clamped onto the fresh-leg FC cap: the
+//   release kink) -- useful as an A/B reference.
+// * `floorOn`: compile-time 0/1. 1 enables the v0.8 release launch
+//   floor (never descend toward the deepest point); 0 constant-folds
+//   the floor away and compiles the v0.7 two-sided launch, which can
+//   swoop below the window min -- useful as an A/B reference for
+//   exactly the undershoot the floor removes.
 // * `cands`: 4*nC + 2 signals: (value, deadline, next-deeper value,
 //   next-deeper deadline) per candidate as in v0.9, then the
 //   next-higher pair (nhV, nhD) from the release taps (v0.3). The
@@ -484,7 +530,7 @@ with {
 //   the window min through its own play sample, so peaks are held
 //   through the peak exactly as in v0.4.
 //----------------------------------------------------------------------
-hermiteAttackReleaseFollower(nC, nRel, rideOn, cands) =
+hermiteAttackReleaseFollower(nC, nRel, rideOn, momentumOn, floorOn, cands) =
     (loop ~ si.bus(7)) : (_, si.block(6))
 with {
     // release reads: candidate 0's value/deadline = the attack-window
@@ -608,7 +654,7 @@ with {
         // catches the negative branch -- a T = 1 stop, identical
         // in output to the old m0 = 0 clamp.
         relGap = v1 - gain;
-        capped = (dirPrev * nRel) > (3 * relGap);
+        capped = momentumOn & ((dirPrev * nRel) > (3 * relGap));
         Tshort = ceil((3 * relGap) / max(ma.EPSILON, dirPrev));
         relT   = select2(capped, nRel, max(1, min(nRel, Tshort)));
         Tt     = max(1, select2(relTrig, critDl, relT));
@@ -638,8 +684,15 @@ with {
         // gain <= v1 survives the whole leg; under per-sample
         // re-latch (a creeping v1) the same cap doubles as the
         // approach governor: velocity <= 3*(v1 - gain)/nRel, fast
-        // when far, gentle when near. The safe direction (a dip when
-        // dirPrev < 0) is left uncapped, as on the attack side.
+        // when far, gentle when near. (v0.8) The downward direction
+        // is NOT picked up on releases: the target v1 is the deepest
+        // point in the total lookahead, so a negative dirPrev (an
+        // attack chain landing ON its pin's play sample, or a hump's
+        // deadline-0 clamp step, with the release firing on the very
+        // next sample) would swoop the gain below the bottom --
+        // gratuitous over-reduction, ~0.15*T*|dirPrev| deep. The
+        // launch is floored at 0 instead; attacks keep the two-sided
+        // pickup (their targets legitimately lie below).
         //
         // (v0.4) the lift-aware ride. The v1-chase brakes as the gap
         // closes -- its drive term 3*(v1 - gain)/T^2 vanishes --
@@ -666,7 +719,10 @@ with {
         rideK   = 3.0 / (float(nRel) * float(nRel));
         rideMax = (v1 - gain) / (i1 + 1);
         ride    = min(dirPrev + (nhV - v1) * rideK, rideMax);
-        aB      = min(lo, dirPrev);
+        // (v0.8) launch floor (floorOn = 1): never descend toward the
+        // deepest point. floorOn = 0 keeps the v0.7 two-sided launch
+        // as an A/B reference: it can swoop below the window min.
+        aB      = min(lo, select2(floorOn, dirPrev, max(0, dirPrev)));
         m0t     = select2(relTrig,
                       max(lo, dirPrev),
                       select2(liftAhead, aB, max(aB, ride)));
@@ -709,17 +765,24 @@ with {
 // #### Usage
 //
 // ```
-// _ : lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rideOn) : _
+// _ : lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt,
+//                                    rideOn, momentumOn, floorOn) : _
 // ```
 //
 // rideOn: compile-time 0/1 -- 1 = the v0.4 lift-aware ride, 0 = the
 // exact pre-mirror (v0.2) plain chase, ride machinery folded away.
+// momentumOn: compile-time 0/1 -- 1 = the v0.6 momentum-preserving
+// release re-latch, 0 = the v0.5 velocity-clamping re-latch.
+// floorOn: compile-time 0/1 -- 1 = the v0.8 release launch floor,
+// 0 = the v0.7 two-sided launch (can undershoot the window min).
 //
 // Latency: nAtt - 1 samples; delay the raw GR (and the audio in a full
 // limiter) by the same amount to line up with the output.
 //----------------------------------------------------------------------
-lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rideOn, rawGR) =
-    hermiteAttackReleaseFollower(nB + 1, nRel, rideOn, cands)
+lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rideOn, momentumOn,
+                               floorOn, rawGR) =
+    hermiteAttackReleaseFollower(nB + 1, nRel, rideOn, momentumOn,
+                                 floorOn, cands)
 with {
     nB    = int(floor(log(maxAtt)/log(2)) + 1);
     // the bank output is the follower's candidate list: (value,
@@ -730,12 +793,14 @@ with {
 
 //-------------------------------- demo ---------------------------------
 // out1: delayed raw GR (the constraint the smoother must stay <= )
-// out2: smoother output (rideOn = 1, the v0.4 lift-aware ride)
-// out3: the old, non-mirrored-window smoother (rideOn = 0 compiles the
-//       exact v0.2 plain chase) for scope / listening A/B against
-//       out2. Same bank instance: Faust CSE shares the cascade, its
-//       delay lines, and the whole candidate scoring between the two
-//       followers.
+// out2: smoother output (rideOn = 1, momentumOn = 1, floorOn = 1:
+//       the v0.4 lift-aware ride, v0.6 kink fix, v0.8 launch floor)
+// out3: the v0.7 smoother (floorOn = 0 compiles the old two-sided
+//       release launch, which can swoop below the deepest lookahead
+//       point) for scope / listening A/B of the undershoot fix
+//       against out2 -- identical otherwise. Same bank
+//       instance: Faust CSE shares the cascade, its delay lines, and
+//       the whole candidate scoring between the two followers.
 //
 // Brickwall check: out2 <= out1 (and out3 <= out1) at every sample, up
 // to the v0.3 hump
@@ -792,12 +857,13 @@ nRel  = max(1, int(relMs * 0.001 * ma.SR));
 
 process = MainGroup(demo(testSignal))
 with {
-    demo(rawGR) = grPlay, smoothed, smoothedPlain
+    demo(rawGR) = grPlay, smoothed, smoothedV07
     with {
-        grPlay        = de.delay(maxAtt - 1, nAtt - 1, rawGR);
-        smoothed      = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, 1, rawGR);
-        // the old, pre-mirror smoother: rideOn = 0 compiles the exact
-        // v0.2 plain chase; the bank is shared with `smoothed` by CSE
-        smoothedPlain = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, 0, rawGR);
+        grPlay      = de.delay(maxAtt - 1, nAtt - 1, rawGR);
+        smoothed    = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, 1, 1, 1, rawGR);
+        // the v0.7 smoother: floorOn = 0 compiles the old two-sided
+        // release launch (the undershoot out2 fixes); differs from
+        // `smoothed` ONLY in the floor; the bank is shared by CSE
+        smoothedV07 = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, 1, 1, 0, rawGR);
     };
 };
