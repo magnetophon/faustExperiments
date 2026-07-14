@@ -1,5 +1,5 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "0.2";
+declare version "0.5";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -67,6 +67,96 @@ import("stdfaust.lib");
 //   (re-targeting down would clamp a fast rise onto the FC cap in
 //   one sample: a corner); if the gain crosses it, attNeed catches
 //   the crossing with a smooth arc, as before.
+// * (v0.3) Release taps, mirror-aligned: a second read of the SAME
+//   cascade, anchored at the opposite edge. The attack taps slide
+//   every stage into place to share the playing edge (delay
+//   nAtt - 2^i); the release taps are the raw stages themselves --
+//   suffix j = the last 2^j samples of the window, all sharing the
+//   window's newest sample -- zero delay lines, zero new stages.
+//   Nested suffixes sample the CEILING SCHEDULE C(s) = min over
+//   play [s, nAtt) at dyadic distances from the far edge: the shape
+//   of the raw release. The bank condenses them into ONE next-higher
+//   pair (nhV, nhD): the level the ceiling lifts to when the pinned
+//   min plays out (the largest suffix excluding i1; dyadic
+//   resolution can read HIGH -- the mirror of the
+//   shadowed-second-deepest gap; ties where the min value recurs
+//   later give nhV == v1, the flat sentinel), plus the play index
+//   of that level's own min.
+//   The two OBVIOUS follower uses both measured as REGRESSIONS on
+//   the noisy workload and ship NEUTRALIZED (release lands flat,
+//   T = nRel), with the chord endpoints still selected so the pair
+//   stays live in the hot path for experiments:
+//   - m1 = aim (land at v1 moving into the coming rise): under
+//     per-sample re-latch only the FIRST step of each curve is ever
+//     taken, and h11(1/T)*T ~= -1/T, so a positive landing slope
+//     subtracts aim/T from every step of the chase -- up to the
+//     entire early-step budget, since aim clamps at 3*delta. It
+//     shapes an ending that re-latching never reaches. Stall
+//     fraction 0.13 -> 0.20 at rel 50 ms, noise 0.5.
+//   - T = max(nRel, i1 + 1) (land ON the pin's play sample so the
+//     lift re-latch carries velocity): deliberately slows the
+//     governor whenever the pin sits far out; stall 0.007 -> 0.06
+//     at rel 10 ms, where it engages.
+//   Why more information cannot fix the remaining crawls: at an
+//   attack landing the gain is pinned AT v1 through its play sample
+//   (it must be), so C1 forces velocity ~0 into every such lift --
+//   the rebuild there is the constraint, not a knowledge gap. The
+//   promising schedule-aware use is the DECELERATION side: the
+//   governor brakes for v1 even when the pin plays out before the
+//   gain could reach it. Capping the per-step velocity at
+//   (v1 - gain)/(i1 + 1) -- inductively safe under per-sample
+//   re-latch -- and chasing nhV's governor otherwise would spend
+//   that wasted braking; it needs a re-latch guard for flown-whole
+//   legs (a latched m0 above 3*delta can overshoot v1 mid-flight
+//   when no re-latch corrects it). Built, guarded and measured in
+//   v0.4.
+// * (v0.4) The lift-aware ride. The v1-chase brakes as its gap
+//   closes (the drive term 3*(v1 - gain)/T^2 vanishes) -- wasted
+//   braking whenever the pin plays out before the gain could reach
+//   it anyway. While a strictly higher level is scheduled
+//   (liftAhead = nhV > v1), the launch may keep the boosted chase
+//   velocity -- dirPrev plus the farther level's drive,
+//   (nhV - v1) * 3/nRel^2 per sample, a control-rate constant --
+//   capped by the fastest rate that cannot cross v1 before the
+//   lift: rideMax = (v1 - gain)/(i1 + 1). Safety is per-sample
+//   INDUCTION, not a curve property: one step at v <= rideMax
+//   leaves gain <= v1, and the trigger re-plans every sample while
+//   liftAhead (term 2) or while a relaxed launch is latched
+//   (term 3, the flown-whole guard: m0*T > 3*(p1 - p0), computable
+//   from latched state alone, release legs only, with a 1e-8
+//   relative margin so FC-capped launches never trip it). Both new
+//   terms yield to attNeed -- unlike v1 > p1 they do not imply
+//   v1 > gain, and a missed attack is a brickwall leak. Isolated
+//   single-step rises never see liftAhead (the post-lift window is
+//   single-level, nhV == v1), so the calibrated exact-nRel block
+//   S-curve is preserved bit-identically; on multi-level material
+//   the ride deviates by design (measured: every differing blocks
+//   sample sat inside a multi-level-lookahead episode or its nRel
+//   tail; blocks brickwall stayed exactly 0). Measured on noise
+//   0.5: stall fraction 0.13 -> 0.07 at rel 50 ms (crawl median
+//   13.2 -> 8.7 ms, p95 20.7 -> 13.4 ms); deficit mean
+//   0.032 -> 0.020 and brickwall 1.6e-3 -> 6.7e-4 at rel 10 ms;
+//   brickwall unchanged at 3.5e-4 at rel 50 ms. Accepted corners,
+//   both bounded: a pin that RECURS at the wall (nhV read high in
+//   the dyadic blind spot, or the i1 = 0 rounding, leak
+//   <= 3*gap/T^2, orders below the hump class) parks the ride at
+//   v1 with a velocity chop instead of a lift; attacks that fire
+//   mid-ride pick up the hotter dirPrev, growing their hump within
+//   the documented class. The crawls that remain are the C1
+//   rebuild from zero after attack landings -- constraint-bound
+//   (see v0.3); only a launch-shape change could shrink those.
+// * (v0.5) rideOn: a compile-time 0/1 on the follower and the
+//   wiring. 0 constant-folds the two v0.4 trigger terms and the
+//   ride to dead code -- the compiled follower is the exact
+//   pre-mirror (v0.2) plain chase, verified bit-identical on all
+//   test renders (noise at rel 50 and 10 ms, blocks). The demo grew
+//   a third channel: the old, non-mirrored-window smoother next to
+//   the ride, for scope and listening A/B. Both followers read the
+//   SAME bank -- Faust CSE shares the cascade, its delay lines and
+//   the candidate scoring, so sizeof(dsp) stays 2.44 MB; the second
+//   follower costs the demo ~36 ns/sample (state loop, trigger and
+//   Hermite evaluation are per-instance). Library users instantiate
+//   once: single-instance cost is unchanged.
 // * A release leg cannot overshoot its target: with m1 = 0,
 //   p - p1 = (1-tau)^2 * ((1+2*tau)*(p0-p1) + tau*T*m0)
 //          <= (1-tau)^2 * (p1-p0) * (tau-1) <= 0
@@ -81,7 +171,8 @@ import("stdfaust.lib");
 //
 // Cost, against the v0.4 numbers (attack-only, isolated algorithm,
 // 115 ns/sample, sizeof(dsp) 2.4 MB): no new divisions (delta was
-// already on the trigger path and is shared; aimDn is untouched), no
+// already on the trigger path and is shared; the attack landing
+// chord is untouched), no
 // new state (same 7-wide loop), no new delay lines, cascade and bank
 // verbatim. The audio hot path gains one compare (v1 > gain), one
 // AND, one OR, four select2 and a min/max pair -- noise next to the
@@ -89,6 +180,19 @@ import("stdfaust.lib");
 // slider-derived, so its guard runs in the control block. The wiring
 // LOSES the ceilPlay tap (a maxAtt-long delay line). Latency
 // unchanged: nAtt - 1. (Reasoned, not yet measured -- bench it.)
+// v0.3 adds, all shared-cascade reads: two select2 chains of nB
+// links plus nB window-exclusion compares in the bank (one
+// next-higher pair total, not per candidate), and four select2 on
+// the follower's trigger path -- measured +3.2 ns/sample on the
+// full demo graph (191.4 -> 194.6, -double -O3 -march=native,
+// identical generator), sizeof(dsp) unchanged. Still zero new
+// divisions (the landing-chord division is shared between the
+// attack aim and the release endpoints by selecting them first),
+// zero new delay lines, zero new state. v0.4 adds one audio-rate
+// division (rideMax) and ~15 cheap ops on the trigger path;
+// interleaved best-of benches measure v0.4 at parity with v0.2
+// within machine noise (249.8 vs 249.4 ns/sample on a loaded
+// sandbox), sizeof(dsp) unchanged.
 //
 // Release semantics: fixed DURATION, not fixed time constant -- any
 // rise, large or small, takes nRel samples. An isolated peak fully
@@ -112,6 +216,11 @@ import("stdfaust.lib");
 //   class, per-play-time deadlines still enforced -- before attNeed
 //   reels it in. Re-targeting down would trade that arc for a
 //   velocity corner.
+// * A ride into a pin that RECURS (nhV read high in the dyadic
+//   blind spot, or the min value recurring past the largest
+//   excluding suffix) parks at v1 with a velocity chop instead of a
+//   lift -- bounded by rideMax, and rarer than the braking it
+//   replaces.
 //========================================================================
 
 //========================================================================
@@ -148,7 +257,7 @@ import("stdfaust.lib");
 // #### Usage
 //
 // ```
-// _ : slidingMinIdxBankAtt(nAtt,maxAtt) : si.bus(4*(nB+1))
+// _ : slidingMinIdxBankAtt(nAtt,maxAtt) : si.bus(4*(nB+1) + 2)
 // ```
 //
 // * input: the RAW GR signal
@@ -156,10 +265,15 @@ import("stdfaust.lib");
 // * `maxAtt`: compile-time maximum (int)
 // * out1..out4:            v1, i1, npFullV, npFullD (attack window)
 // * out(5+4i)..out(8+4i):  tap i value, play idx, npV, npD
+// * last two outs:         nhV, nhD -- the next-higher pair (v0.3):
+//   the ceiling level after the pinned min plays out, and the play
+//   index of that level's own min, read off the mirror-aligned
+//   release taps (see the header)
 //----------------------------------------------------------------------
 slidingMinIdxBankAtt(nAtt,maxAtt,x) =
     (v1, i1, npFullV, npFullD),
-    par(i, nB, (outV(i), outD(i), npTV(i), npTD(i)))
+    par(i, nB, (outV(i), outD(i), npTV(i), npTD(i))),
+    (nhV, nhD)
 with {
     nB     = maxNrBits(maxAtt);   // tap scales 2^0 .. 2^(nB-1)
     intMax = 2147483647;
@@ -224,6 +338,41 @@ with {
     npTV(i) = npKV(nB-1-i);
     npTD(i) = npKD(nB-1-i);
 
+    // --- release taps + next-higher chain --- (v0.3)
+    // The mirror alignment: suffix j = the LAST pow2(j) samples of
+    // the window (all suffixes share their leading edge with the
+    // window's newest sample), read straight off the shared cascade
+    // with NO delay: stage j at time t covers [t - 2^j + 1, t] =
+    // play [nAtt - 2^j, nAtt - 1]. The attack taps pay nAtt - 2^i of
+    // delay to slide every stage to the playing edge; the release
+    // taps are the undelayed stages. A suffix wider than the window
+    // would include samples that already played; exc() is
+    // automatically false there (nAtt - 2^j < 0 <= i1), so no
+    // separate active() gate is needed.
+    //
+    // Nested suffixes sample the ceiling schedule
+    // C(s) = min over play [s, nAtt) at dyadic distances from the
+    // far edge. nhV/nhD = the value of the LARGEST suffix that
+    // excludes the pin i1 (= the level the ceiling lifts to when the
+    // pinned min plays out, at dyadic resolution) and the play index
+    // of that suffix's min. exc(j) is monotone (false above some
+    // j*), so the chain -- later links override -- lands on j*.
+    // Dips between i1 and the suffix start are invisible (nhV can
+    // read HIGH: the mirror of the shadowed-second-deepest gap);
+    // safe here because nhV only shapes the landing slope m1, which
+    // keeps the flight <= v1 regardless (h11 <= 0), and post-lift
+    // re-latches re-target on true data. If no suffix excludes the
+    // pin (i1 = nAtt - 1), or the min value recurs later so a suffix
+    // still contains it, nhV = v1: the flat sentinel, aim 0 --
+    // mirroring npFull.
+    exc(j)  = (nAtt - pow2(j)) > i1;
+    nhKV(0) = select2(exc(0), v1, cV(0));
+    nhKT(0) = select2(exc(0), 0,  cT(0));
+    nhKV(j) = select2(exc(j), nhKV(j-1), cV(j));
+    nhKT(j) = select2(exc(j), nhKT(j-1), cT(j));
+    nhV = nhKV(nB-1);
+    nhD = select2(exc(0), i1 + 1, (nhKT(nB-1) : idxFromOldest));
+
     // shared helpers (op bound to minIdxOp; the pair fold is a balanced
     // tree -- min with leftmost tie-break is associative, so the result
     // is bit-identical to the sequential fold, just a shorter
@@ -258,7 +407,7 @@ with {
 // #### Usage
 //
 // ```
-// hermiteAttackReleaseFollower(nC, nRel, cands) : _
+// hermiteAttackReleaseFollower(nC, nRel, rideOn, cands) : _
 // ```
 //
 // Where:
@@ -266,12 +415,21 @@ with {
 // * `nC`: number of candidates (compile-time int)
 // * `nRel`: release leg length in samples (>= 1, may vary at control
 //   rate); 1 = instant rises to v1
-// * `cands`: 4*nC signals as in v0.9: (value, deadline, next-deeper
-//   value, next-deeper deadline) per candidate. The deadline is the
-//   exact play index; the next-deeper pair becomes the landing chord
-//   (own value as next-deeper value = land flat). Candidate 0 MUST be
-//   the full attack window: its value doubles as the release target
-//   v1. Disabled candidates read (ma.MAX, 1, _, _) and never win.
+// * `rideOn`: compile-time 0/1. 1 enables the v0.4 lift-aware ride;
+//   0 constant-folds the ride machinery away entirely and compiles
+//   to the exact pre-mirror (v0.2) plain-chase follower -- renders
+//   bit-identical -- useful as an A/B reference.
+// * `cands`: 4*nC + 2 signals: (value, deadline, next-deeper value,
+//   next-deeper deadline) per candidate as in v0.9, then the
+//   next-higher pair (nhV, nhD) from the release taps (v0.3). The
+//   deadline is the exact play index; the next-deeper pair becomes
+//   the attack landing chord (own value as next-deeper value = land
+//   flat); the next-higher pair is selected into the shared landing
+//   chord for release legs but currently NEUTRALIZED (release lands
+//   flat -- the naive uses measured as regressions; v0.3 header).
+//   Candidate 0 MUST be the full attack window: its value doubles as
+//   the release target v1 and its deadline as the pin's play index
+//   i1. Disabled candidates read (ma.MAX, 1, _, _) and never win.
 //
 // Per sample, every candidate gets (requiredSlope, value, deadline,
 // npVal, npDl) with requiredSlope = (value - gain)/deadline; the
@@ -280,21 +438,27 @@ with {
 //
 // Triggers:
 // * attack: verbatim v0.4, creep gate included.
-// * release: v1 > p1 -- latch from rest (gain == p1 there) and
-//   re-latch mid-release-leg whenever the window min rises above the
-//   running target; a target that drops back is flown past. Mutually
-//   exclusive with attNeed since every candidate >= v1, and inert
-//   mid-attack-leg since the latched target stays in the window
-//   until touchdown (v1 <= p1 there).
+// * release: three-term trigger. v1 > p1 latches from rest
+//   (gain == p1 there) and re-latches mid-leg whenever the window
+//   min rises above the running target; a target that drops back is
+//   flown past. Two v0.4 terms re-plan every sample -- while a lift
+//   is scheduled (liftAhead) and while a relaxed launch is latched
+//   (the flown-whole guard) -- both gated on attNeed == 0, so
+//   attacks always win. Inert mid-attack-leg (v1 <= p1 until
+//   touchdown).
 // * idle (arrived, v1 == gain) holds gain. The landed target stays
 //   the window min through its own play sample, so peaks are held
 //   through the peak exactly as in v0.4.
 //----------------------------------------------------------------------
-hermiteAttackReleaseFollower(nC, nRel, cands) =
+hermiteAttackReleaseFollower(nC, nRel, rideOn, cands) =
     (loop ~ si.bus(7)) : (_, si.block(6))
 with {
-    // the release target: candidate 0's value = the attack-window min
-    v1 = cands : ba.selector(0, 4*nC);
+    // release reads: candidate 0's value/deadline = the attack-window
+    // min and the pin's play index; the tail = the next-higher pair
+    v1  = cands : ba.selector(0, 4*nC + 2);
+    i1  = cands : ba.selector(1, 4*nC + 2);
+    nhV = cands : ba.selector(4*nC,     4*nC + 2);
+    nhD = cands : ba.selector(4*nC + 1, 4*nC + 2);
 
     // state: gain, p0, m0, p1, m1, k, T (previous-sample values inside loop)
     loop(gain, p0, m0, p1, m1, k, T) =
@@ -305,7 +469,7 @@ with {
         // ---- critical-constraint selection ----
         trip(val, dl, npv, npd) =
             (val - gain) / max(1, dl), val, dl, npv, npd;
-        scored  = cands : par(i, nC, trip);
+        scored  = cands : (si.bus(4*nC), si.block(2)) : par(i, nC, trip);
         crit    = scored : red5(nC);
         critVal = crit : (!, _, !, !, !);
         critDl  = crit : (!, !, _, !, !);
@@ -350,35 +514,59 @@ with {
         flyOn   = (steeper == 0) & (critDl >= rRem);
         attTrig = attNeed & (((critVal != p1) & (flyOn == 0))
                              | (critDl < rRem) | arrived);
-        // release: latch or re-latch whenever the window min rises
-        // above the running target. At rest gain == p1, so this
-        // reads v1 > gain: launch (no trigger at v1 == gain: hold,
-        // which still covers a landed attack target through its own
-        // play sample). Mid-release-leg it re-plans toward the new
-        // v1 from (gain, dirPrev) with the horizon reset to nRel --
-        // (v0.2) v0.1 latched only from rest, which turned noisy
-        // rises (revealed as window-min micro-steps) into chains of
-        // full-nRel micro-legs that held or crawled; see the header.
-        // Mid-attack-leg it can never fire (the latched target's
-        // sample stays in the window until the leg lands, so
-        // v1 <= p1 there), and v1 > p1 >= gain forces attNeed = 0,
-        // so the two triggers stay mutually exclusive and the
-        // segment selects below can key on relTrig alone. A v1 that
-        // drops back under a flying release target is flown past;
-        // if the gain crosses it, attNeed catches the crossing with
-        // a smooth arc.
-        relTrig = v1 > p1;
+        // release trigger, three terms:
+        // 1) v1 > p1: latch from rest AND re-latch mid-leg whenever
+        //    the window min rises above the running target (at rest
+        //    gain == p1, so this reads v1 > gain; no trigger at
+        //    v1 == gain: hold, which covers a landed attack target
+        //    through its own play sample). (v0.2 -- see the header
+        //    for the micro-leg staircase this fixed.) Implies
+        //    v1 > gain, hence attNeed = 0, and is inert
+        //    mid-attack-leg (v1 <= p1 until touchdown).
+        // 2) (v0.4) liftAhead & (v1 > gain): while a strictly
+        //    higher level is scheduled behind the pin, re-plan every
+        //    sample so the ride cap (see m0t) stays inductively safe
+        //    and its boost keeps feeding. Strict v1 > gain: a pinned
+        //    gain must not latch (a flat latch would dip, m0 <= 0,
+        //    below the pin).
+        // 3) (v0.4) the flown-whole guard: a curve latched with a
+        //    relaxed launch (m0 above the FC cap -- only the ride
+        //    does this) must never fly uncorrected, since per-sample
+        //    re-latch is what makes the ride safe. Detected from
+        //    latched state alone: m0*T > 3*(p1 - p0), release legs
+        //    only (p1 >= p0), with a 1e-8 relative margin so an
+        //    FC-capped launch (m0 == 3*delta up to rounding) never
+        //    trips it and block S-curves keep flying whole.
+        // Terms 2 and 3 yield to attNeed explicitly: unlike term 1
+        // they do not imply v1 > gain, and a missed attack is a
+        // brickwall leak. With rideOn = 0 both terms fold away at
+        // compile time: relTrig reduces to term 1 and the ride below
+        // is dead-code-eliminated -- the exact v0.2 follower. A v1
+        // that drops back under a flying release target is still
+        // flown past; if the gain crosses it, attNeed catches the
+        // crossing with a smooth arc.
+        liftAhead = rideOn & (nhV > v1);
+        relTrig = (v1 > p1)
+                | (rideOn & (attNeed == 0) &
+                   (  (liftAhead & (v1 > gain))
+                    | ((p1 >= p0) & ((m0 * T * 0.99999999) > (3 * (p1 - p0)))) ));
         trig    = attTrig | relTrig;
 
         // ---- new-segment values (only used when trig == 1) ----
         Tt    = max(1, select2(relTrig, critDl, nRel));
         p1t   = select2(relTrig, critVal, v1);
         delta = (p1t - gain) / Tt;     // average slope, sign = direction
-        // every attack landing aims at the nearest strictly-deeper
-        // point one scale out (the critical candidate's np pair); the
-        // chord is 0 when nothing deeper is in sight (sentinel:
-        // npVal = own value). Release legs land flat instead.
-        aimDn = (critNpV - critVal) / max(1, critNpD - critDl);
+        // landing chord, ONE shared division: every attack landing
+        // aims at the nearest strictly-deeper point one scale out
+        // (the critical candidate's np pair; own value as np value =
+        // land flat). The release endpoints select the next-higher
+        // pair, keeping the chord live for schedule-aware
+        // experiments, but the release LANDS FLAT (m1t below): the
+        // naive aim measured as a regression -- see the v0.3 header.
+        aimV2 = select2(relTrig, critNpV, nhV);
+        aimD1 = select2(relTrig, critDl,  i1);
+        aimD2 = select2(relTrig, critNpD, nhD);
+        aim   = (aimV2 - p1t) / max(1, aimD2 - aimD1);
         // Fritsch-Carlson bound: a launch floor on attacks
         // (delta < 0), a launch cap on releases (delta > 0)
         lo    = 3 * delta;
@@ -394,8 +582,37 @@ with {
         // approach governor: velocity <= 3*(v1 - gain)/nRel, fast
         // when far, gentle when near. The safe direction (a dip when
         // dirPrev < 0) is left uncapped, as on the attack side.
-        m0t   = select2(relTrig, max(lo, dirPrev), min(lo, dirPrev));
-        m1t   = select2(relTrig, max(lo, min(0, aimDn)), 0);
+        //
+        // (v0.4) the lift-aware ride. The v1-chase brakes as the gap
+        // closes -- its drive term 3*(v1 - gain)/T^2 vanishes --
+        // which is wasted braking when the pin plays out before the
+        // gain could reach it anyway. While a lift is scheduled
+        // (liftAhead), the launch may instead keep the boosted chase
+        // velocity: dirPrev plus the drive the farther level nhV
+        // would add, (nhV - v1) * 3/nRel^2 per sample (control-rate
+        // constant), capped by the fastest rate that cannot cross v1
+        // before the lift, rideMax = (v1 - gain)/(i1 + 1). One step
+        // at v <= rideMax leaves gain <= v1, and trigger term 2
+        // re-plans every sample with fresh (v1, i1, nhV), so the
+        // bound holds by induction; the flown-whole guard (term 3)
+        // covers the moment liftAhead vanishes under a still-hot
+        // launch. Two corners are accepted, both bounded: a pin that
+        // RECURS at the wall (nhV read high in the dyadic blind
+        // spot; or the i1 = 0 rounding, whose leak is <= 3*gap/T^2,
+        // orders below the hump class) parks the ride at v1 with a
+        // velocity chop instead of a lift; and attacks that fire
+        // mid-ride pick up the hotter dirPrev, growing their hump
+        // within the documented class. max(aB, ride) keeps the ride
+        // never slower than the plain chase (and discards a negative
+        // rideMax the same way).
+        rideK   = 3.0 / (float(nRel) * float(nRel));
+        rideMax = (v1 - gain) / (i1 + 1);
+        ride    = min(dirPrev + (nhV - v1) * rideK, rideMax);
+        aB      = min(lo, dirPrev);
+        m0t     = select2(relTrig,
+                      max(lo, dirPrev),
+                      select2(liftAhead, aB, max(aB, ride)));
+        m1t   = select2(relTrig, max(lo, min(0, aim)), 0);
 
         TN  = select2(trig, T,  Tt);
         p0N = select2(trig, p0, gain);
@@ -434,26 +651,36 @@ with {
 // #### Usage
 //
 // ```
-// _ : lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt) : _
+// _ : lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rideOn) : _
 // ```
+//
+// rideOn: compile-time 0/1 -- 1 = the v0.4 lift-aware ride, 0 = the
+// exact pre-mirror (v0.2) plain chase, ride machinery folded away.
 //
 // Latency: nAtt - 1 samples; delay the raw GR (and the audio in a full
 // limiter) by the same amount to line up with the output.
 //----------------------------------------------------------------------
-lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR) =
-    hermiteAttackReleaseFollower(nB + 1, nRel, cands)
+lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rideOn, rawGR) =
+    hermiteAttackReleaseFollower(nB + 1, nRel, rideOn, cands)
 with {
     nB    = int(floor(log(maxAtt)/log(2)) + 1);
     // the bank output is the follower's candidate list: (value,
-    // deadline, npV, npD) for the attack window, then for every tap
+    // deadline, npV, npD) for the attack window, then for every tap,
+    // then the next-higher pair (nhV, nhD) from the release taps
     cands = rawGR : slidingMinIdxBankAtt(nAtt, maxAtt);
 };
 
 //-------------------------------- demo ---------------------------------
 // out1: delayed raw GR (the constraint the smoother must stay <= )
-// out2: smoother output
+// out2: smoother output (rideOn = 1, the v0.4 lift-aware ride)
+// out3: the old, non-mirrored-window smoother (rideOn = 0 compiles the
+//       exact v0.2 plain chase) for scope / listening A/B against
+//       out2. Same bank instance: Faust CSE shares the cascade, its
+//       delay lines, and the whole candidate scoring between the two
+//       followers.
 //
-// Brickwall check: out2 <= out1 at every sample, up to the v0.3 hump
+// Brickwall check: out2 <= out1 (and out3 <= out1) at every sample, up
+// to the v0.3 hump
 // class (no hard clamp, so any violation measures that residual plus
 // the shadowed-peak gap). Rises are S-curves toward the window min:
 // gain holds through each peak's play sample, then recovers in nRel.
@@ -507,9 +734,12 @@ nRel  = max(1, int(relMs * 0.001 * ma.SR));
 
 process = MainGroup(demo(testSignal))
 with {
-    demo(rawGR) = grPlay, smoothed
+    demo(rawGR) = grPlay, smoothed, smoothedPlain
     with {
-        grPlay   = de.delay(maxAtt - 1, nAtt - 1, rawGR);
-        smoothed = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR);
+        grPlay        = de.delay(maxAtt - 1, nAtt - 1, rawGR);
+        smoothed      = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, 1, rawGR);
+        // the old, pre-mirror smoother: rideOn = 0 compiles the exact
+        // v0.2 plain chase; the bank is shared with `smoothed` by CSE
+        smoothedPlain = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, 0, rawGR);
     };
 };
