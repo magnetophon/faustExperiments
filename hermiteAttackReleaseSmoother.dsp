@@ -1,5 +1,5 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "0.8";
+declare version "0.9";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -225,6 +225,46 @@ import("stdfaust.lib");
 //   stay >= their target >= v1 (FC box, or all-nonnegative Hermite
 //   terms when m0 > 0), release flights now stay >= their launch
 //   point.
+// * (v0.9) flatK: flat landing at a pinned bottom (prototype).
+//   The follower hugs the window-min curve on the way down --
+//   dyadic legs each landing at the local chord slope, the creep
+//   endgame clamping the last pins -- so it ARRIVES at the bottom
+//   at the descent's terminal slope (<= 2.4e-4/sample across the 38
+//   noise-render events). v0.8 zeroes that direction at the release
+//   launch: a first-order corner of that size. flatK zeroes it
+//   BEFORE arrival: within flatK samples of a FIXED pin (deadline
+//   shrinking, i1 < i1') that the gain is still descending toward,
+//   the critical candidate is overridden with candidate 0 itself --
+//   whose landing chord is flat by construction -- and the ordinary
+//   attack law flies ONE leg to (v1, i1) with m0 = dirPrev, m1 = 0:
+//   direction zero AT the deepest point. The measured window-min
+//   descent is CONVEX (it decelerates into its bottom; the mean
+//   chord to the bottom ran 0.85-0.99x the critical requirement all
+//   the way in on the deep noise events), so a flat-landing leg
+//   necessarily flies BELOW the remaining constraint path -- it
+//   sheds the same altitude with zero terminal speed. That is the
+//   price: bounded extra reduction during the last flatK samples of
+//   a descent. It is also why the first cut of this feature (fire
+//   on 'the bottom chord TIES the critical requirement', correct
+//   for straight ramps) never fired on the real material and
+//   rendered nearly unchanged. Below the constraint no pin binds,
+//   so the leg glides whole; a deeper min appearing mid-flight
+//   re-fires onto the new bottom like any attack. The entry is the
+//   condition's own rising edge, forced into attTrig: it fires
+//   mid-flight where dirPrev IS the flight velocity, keeping the
+//   entry C1 -- NOT gated on dirPrev < 0, because triggers fire at
+//   rest and rest reads dirPrev = 0 (the landing hold sample and
+//   the creep zipper's hold phase both blocked the first cut of
+//   this feature on exactly the samples its trigger could fire).
+//   Hold entries launch flat; if the constraint locally outruns
+//   the S-curve, the backstop clamps once and the next `arrived`
+//   re-latches with the clamp's velocity -- every latched leg
+//   targets (v1, i1, m1 = 0), so the landing is flat on all paths. The wrapper
+//   derives flatK = nAtt/4 from its flatLandOn flag; 0
+//   constant-folds the whole block away -- out2 and out3 render
+//   bit-identical with it off, blocks render bit-identical even
+//   with it on (a step's approach leg already targets the bottom).
+//   No division and no tolerance constant on the trigger path.
 // * A release leg cannot overshoot its target: with m1 = 0,
 //   p - p1 = (1-tau)^2 * ((1+2*tau)*(p0-p1) + tau*T*m0)
 //          <= (1-tau)^2 * (p1-p0) * (tau-1) <= 0
@@ -477,7 +517,7 @@ with {
 // #### Usage
 //
 // ```
-// hermiteAttackReleaseFollower(nC, nRel, rideOn, momentumOn, floorOn, cands) : _
+// hermiteAttackReleaseFollower(nC, nRel, rideOn, momentumOn, floorOn, flatK, cands) : _
 // ```
 //
 // Where:
@@ -499,6 +539,15 @@ with {
 //   the floor away and compiles the v0.7 two-sided launch, which can
 //   swoop below the window min -- useful as an A/B reference for
 //   exactly the undershoot the floor removes.
+// * `flatK`: the flat-landing horizon in samples. Literal 0
+//   disables and constant-folds the block away. > 0: within flatK
+//   samples of a fixed pin the follower commits to one leg that
+//   lands there with m1 = 0 instead of hugging the decelerating
+//   window-min all the way in and arriving with its terminal slope
+//   -- see the v0.9 header. May be a control-rate expression:
+//   flatK = nAtt is the v1.0 full-lookahead flat landing (the
+//   deepest GR in the window is landed on flat from the moment it
+//   is pinned); nAtt/4 is the v0.9 late-commit prototype.
 // * `cands`: 4*nC + 2 signals: (value, deadline, next-deeper value,
 //   next-deeper deadline) per candidate as in v0.9, then the
 //   next-higher pair (nhV, nhD) from the release taps (v0.3). The
@@ -530,7 +579,7 @@ with {
 //   the window min through its own play sample, so peaks are held
 //   through the peak exactly as in v0.4.
 //----------------------------------------------------------------------
-hermiteAttackReleaseFollower(nC, nRel, rideOn, momentumOn, floorOn, cands) =
+hermiteAttackReleaseFollower(nC, nRel, rideOn, momentumOn, floorOn, flatK, cands) =
     (loop ~ si.bus(7)) : (_, si.block(6))
 with {
     // release reads: candidate 0's value/deadline = the attack-window
@@ -569,9 +618,46 @@ with {
         red5(N) = (red5(half), red5(N - half)) : amin5
         with { half = int(N/2); };
 
+        // ---- (v0.9) flat landing at a pinned bottom ----
+        // Within flatK samples of a FIXED pin (deadline shrinking,
+        // i1 < i1') that the gain is still descending toward,
+        // override the critical candidate with candidate 0 itself:
+        // its landing chord is flat (own value as next-deeper), so
+        // the ordinary attack law below flies one leg to (v1, i1)
+        // with m0 = dirPrev, m1 = 0 -- direction zero AT the deepest
+        // point, no launch corner left for the release to floor.
+        // The real window-min descent DECELERATES into its bottom
+        // (it is convex, not a ramp), so this leg deliberately flies
+        // BELOW the remaining constraint path: it sheds the same
+        // altitude with zero terminal speed, front-loading the
+        // descent. Below the constraint no pin binds (attNeed reads
+        // false), so the leg glides whole; a deeper min appearing
+        // mid-flight re-fires onto the new bottom like any attack.
+        // The entry is the condition's own rising edge, forced into
+        // attTrig: it fires mid-flight, where dirPrev IS the flight
+        // velocity, so m0 = dirPrev keeps the entry C1. There is
+        // deliberately NO velocity gate here: `arrived` fires
+        // triggers one sample after a landing, on a HOLD sample
+        // where dirPrev reads 0 (measured -- the first cut gated on
+        // dirPrev < 0 and was blocked on exactly the samples the
+        // trigger fires). A hold entry launches m0 = 0; if the
+        // constraint locally outruns that S-curve the per-sample
+        // backstop clamps once and the next `arrived` re-latches the
+        // flat leg with the clamp's velocity -- every latched leg
+        // targets (v1, i1, m1 = 0), so the LANDING is flat on all
+        // paths. No division on the trigger path.
+        pinned    = i1 < i1';
+        flatFire  = (flatK > 0) & pinned
+                  & (v1 < gain) & (i1 > 0) & (i1 <= flatK);
+        flatEnter = flatFire & (1 - flatFire');
+        critVal2 = select2(flatFire, critVal, v1);
+        critDl2  = select2(flatFire, critDl,  i1);
+        critNpV2 = select2(flatFire, critNpV, v1);
+        critNpD2 = select2(flatFire, critNpD, i1);
+
         // ---- triggers ----
         arrived = k > T;               // previous leg done, at rest
-        attNeed = critVal < gain;
+        attNeed = critVal2 < gain;
         // re-latch when the critical value changes, when its (exact)
         // deadline undercuts the running leg's remaining time
         // (equal-depth peak that plays sooner: plateaus), or when at
@@ -590,10 +676,10 @@ with {
         // critVal - gain < 0, so steeper is true and the creep gate
         // can never swallow an attack that fires mid-rise.
         rRem    = max(0, T - k);       // remaining steps of the leg
-        steeper = ((critVal - gain) * rRem) < ((p1 - gain) * critDl);
-        flyOn   = (steeper == 0) & (critDl >= rRem);
-        attTrig = attNeed & (((critVal != p1) & (flyOn == 0))
-                             | (critDl < rRem) | arrived);
+        steeper = ((critVal2 - gain) * rRem) < ((p1 - gain) * critDl2);
+        flyOn   = (steeper == 0) & (critDl2 >= rRem);
+        attTrig = attNeed & (((critVal2 != p1) & (flyOn == 0))
+                             | (critDl2 < rRem) | arrived | flatEnter);
         // release trigger, three terms:
         // 1) v1 > p1: latch from rest AND re-latch mid-leg whenever
         //    the window min rises above the running target (at rest
@@ -657,8 +743,8 @@ with {
         capped = momentumOn & ((dirPrev * nRel) > (3 * relGap));
         Tshort = ceil((3 * relGap) / max(ma.EPSILON, dirPrev));
         relT   = select2(capped, nRel, max(1, min(nRel, Tshort)));
-        Tt     = max(1, select2(relTrig, critDl, relT));
-        p1t   = select2(relTrig, critVal, v1);
+        Tt     = max(1, select2(relTrig, critDl2, relT));
+        p1t   = select2(relTrig, critVal2, v1);
         delta = (p1t - gain) / Tt;     // average slope, sign = direction
         // landing chord, ONE shared division: every attack landing
         // aims at the nearest strictly-deeper point one scale out
@@ -667,9 +753,9 @@ with {
         // pair, keeping the chord live for schedule-aware
         // experiments, but the release LANDS FLAT (m1t below): the
         // naive aim measured as a regression -- see the v0.3 header.
-        aimV2 = select2(relTrig, critNpV, nhV);
-        aimD1 = select2(relTrig, critDl,  i1);
-        aimD2 = select2(relTrig, critNpD, nhD);
+        aimV2 = select2(relTrig, critNpV2, nhV);
+        aimD1 = select2(relTrig, critDl2,  i1);
+        aimD2 = select2(relTrig, critNpD2, nhD);
         aim   = (aimV2 - p1t) / max(1, aimD2 - aimD1);
         // Fritsch-Carlson bound: a launch floor on attacks
         // (delta < 0), a launch cap on releases (delta > 0)
@@ -766,7 +852,7 @@ with {
 //
 // ```
 // _ : lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt,
-//                                    rideOn, momentumOn, floorOn) : _
+//                    rideOn, momentumOn, floorOn, flatLandOn) : _
 // ```
 //
 // rideOn: compile-time 0/1 -- 1 = the v0.4 lift-aware ride, 0 = the
@@ -775,14 +861,20 @@ with {
 // release re-latch, 0 = the v0.5 velocity-clamping re-latch.
 // floorOn: compile-time 0/1 -- 1 = the v0.8 release launch floor,
 // 0 = the v0.7 two-sided launch (can undershoot the window min).
+// flatK: compile-time flat-landing horizon in samples -- within
+// flatK samples of a pinned bottom the follower commits to one leg
+// landing there with direction 0. 0 = disabled (hugging arrival at
+// the window-min's terminal slope), constant-folded away. nAtt =
+// the v1.0 full-lookahead flat landing: the deepest GR anywhere in
+// the lookahead is landed on flat, from the moment it is pinned.
 //
 // Latency: nAtt - 1 samples; delay the raw GR (and the audio in a full
 // limiter) by the same amount to line up with the output.
 //----------------------------------------------------------------------
 lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rideOn, momentumOn,
-                               floorOn, rawGR) =
+                               floorOn, flatK, rawGR) =
     hermiteAttackReleaseFollower(nB + 1, nRel, rideOn, momentumOn,
-                                 floorOn, cands)
+                                 floorOn, flatK, cands)
 with {
     nB    = int(floor(log(maxAtt)/log(2)) + 1);
     // the bank output is the follower's candidate list: (value,
@@ -795,15 +887,21 @@ with {
 // out1: delayed raw GR (the constraint the smoother must stay <= )
 // out2: smoother output (rideOn = 1, momentumOn = 1, floorOn = 1:
 //       the v0.4 lift-aware ride, v0.6 kink fix, v0.8 launch floor)
-// out3: the v0.7 smoother (floorOn = 0 compiles the old two-sided
-//       release launch, which can swoop below the deepest lookahead
-//       point) for scope / listening A/B of the undershoot fix
-//       against out2 -- identical otherwise. Same bank
+// out3: the v1.0 full-lookahead flat landing (flatK = nAtt on top
+//       of out2's flags): the deepest GR in the whole lookahead
+//       window is detected as soon as it is pinned, and the target
+//       velocity there is 0 -- one leg to (v1, i1) with m1 = 0,
+//       re-planned onto any deeper min that appears. Replaces the
+//       old v0.7 A/B channel.
+// out4: the v0.9 prototype (flatK = nAtt/4): the same flat landing
+//       but only committed within the last quarter of the window,
+//       hugging the window-min curve before that -- the A/B for how
+//       much of the descent the flat landing should own. Same bank
 //       instance: Faust CSE shares the cascade, its delay lines, and
-//       the whole candidate scoring between the two followers.
+//       the whole candidate scoring between all followers.
 //
-// Brickwall check: out2 <= out1 (and out3 <= out1) at every sample, up
-// to the v0.3 hump
+// Brickwall check: out2 <= out1 (likewise out3, out4) at every
+// sample, up to the v0.3 hump
 // class (no hard clamp, so any violation measures that residual plus
 // the shadowed-peak gap). Rises are S-curves toward the window min:
 // gain holds through each peak's play sample, then recovers in nRel.
@@ -857,13 +955,20 @@ nRel  = max(1, int(relMs * 0.001 * ma.SR));
 
 process = MainGroup(demo(testSignal))
 with {
-    demo(rawGR) = grPlay, smoothed, smoothedV07
+    demo(rawGR) = grPlay, smoothed, smoothedFlatFull, smoothedFlat
     with {
-        grPlay      = de.delay(maxAtt - 1, nAtt - 1, rawGR);
-        smoothed    = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, 1, 1, 1, rawGR);
-        // the v0.7 smoother: floorOn = 0 compiles the old two-sided
-        // release launch (the undershoot out2 fixes); differs from
-        // `smoothed` ONLY in the floor; the bank is shared by CSE
-        smoothedV07 = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, 1, 1, 0, rawGR);
+        grPlay   = de.delay(maxAtt - 1, nAtt - 1, rawGR);
+        smoothed = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, 1, 1, 1, 0, rawGR);
+        // (v1.0) full-lookahead flat landing: flatK = nAtt, so the
+        // deepest GR anywhere in the lookahead is the target from
+        // the moment its deadline starts shrinking, and the leg
+        // lands on it with direction 0; differs from `smoothed`
+        // ONLY in flatK. The bank is shared by CSE
+        smoothedFlatFull =
+            lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, 1, 1, 1, nAtt, rawGR);
+        // the v0.9 prototype: the same flat landing committed only
+        // within the last nAtt/4 samples of the descent
+        smoothedFlat =
+            lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, 1, 1, 1, nAtt / 4, rawGR);
     };
 };
