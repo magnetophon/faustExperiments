@@ -1,5 +1,5 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "1.1";
+declare version "1.2";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -81,9 +81,11 @@ import("stdfaust.lib");
 // obvious schedule-aware landing shapes (aim the landing slope
 // into the coming rise; stretch T to land ON the pin's play
 // sample so the lift re-latch carries velocity) both measured as
-// regressions on the noisy workload, so they ship NEUTRALIZED
-// with the chord endpoints still selected, keeping the pair live
-// in the hot path for experiments. Why more landing information
+// regressions on the noisy workload, so they ship NEUTRALIZED.
+// v1.2 retires the experiment hook that kept the release chord
+// (nhV - p1t)/(nhD - i1) live in the hot path: the chord division
+// is now branch-shared with the ride cap (see the latch block for
+// the one-line restore). Why more landing information
 // cannot fix the remaining crawls: at an attack landing the gain
 // is pinned AT v1 through its play sample (it must be), so C1
 // forces velocity ~0 into every such lift -- the rebuild there is
@@ -143,8 +145,9 @@ import("stdfaust.lib");
 // tau = 1, parking a landed leg epsilon shy of its target and
 // deadlocking the v1 > p1 trigger -- and puts m0*T exactly ON
 // 3*(p1 - p0), inside the flown-whole guard's 1e-8 margin, so
-// term 3 stays quiet on these launches. Cost: one audio-rate
-// division + ceil on the trigger path.
+// term 3 stays quiet on these launches. Cost: shares the
+// shortened-leg division + ceil with attTs (branch-exclusive by
+// relTrig), so the pair costs ONE audio-rate division + ceil.
 //
 // Release launch floor. The launch tangent is velocity-continuous
 // upward only: m0 = min(3*delta, max(0, dirPrev)). A negative
@@ -197,8 +200,9 @@ import("stdfaust.lib");
 // is blinded. Bottoms the creep clamp chain still owns (the pin
 // never becomes critical before the endgame) land at the launch
 // floor's terminal step: a residual corner class orders below the
-// two removed here. Cost: one division on the latch path (attTs),
-// the exact mirror of Tshort.
+// two removed here. Cost: shares the shortened-leg division +
+// ceil with Tshort (branch-exclusive by relTrig) -- the exact
+// mirror, on the same divider.
 //
 // The ceiling zipper, and the two terms that kill it. On smooth
 // descents (raw ramping down, a deep pin far out) the law
@@ -300,14 +304,16 @@ import("stdfaust.lib");
 // Cost: the audio hot path is dominated by the argmin tree and
 // the clearance check; per-candidate scoring is DIVISION-FREE
 // (slopes ride the tree as cross-multiplied (num, den) pairs,
-// dens >= 1). The landing chord costs ONE shared division (the
-// attack aim and the release endpoints are selected first); the
-// ride adds one audio-rate division (rideMax); the shortened legs
-// add one division + ceil (Tshort), its mirror (attTs), and one
-// division + sqrt + ceil (Tclr), all on the latch path; the
-// clearance check adds ~5 multiplies and two compares per
-// candidate per sample (the cubic in Horner form, coefficients
-// shared per sample) plus its two trees. No
+// dens >= 1). The landing chord and the ride cap share ONE
+// division (the numerator/denominator pairs are selected first,
+// branch-exclusive by relTrig); the shortened legs share ONE
+// division + ceil (Tshort and attTs, same exclusivity); Tclr adds
+// one division + sqrt + ceil; with delta and tau that is FIVE
+// audio-rate divisions total. The clearance check adds ~5
+// multiplies and two compares per candidate per sample (the cubic
+// in Horner form, coefficients shared per sample) plus its two
+// trees -- the all-pass AND tree is folded into the Tpos min tree
+// (all-pass reads back as exactly 1e30). No
 // state beyond the 7-wide loop, no delay lines beyond the bank's.
 // nRel is slider-derived, so its guard runs in the control block.
 // Latency: nAtt - 1.
@@ -609,14 +615,6 @@ hermiteAttackReleaseFollower(nC, nRel, cands) = (loop~si.bus(7)):(_, si.block(6)
                     with {
                         half = int(N/2);
                     };
-                // balanced AND fold for the clearance check (0/1
-                // booleans; & is associative, tree shortens the chain)
-                clrTree(1) = _;
-                clrTree(2) = &;
-                clrTree(N) = (clrTree(half), clrTree(N-half)):&
-                    with {
-                        half = int(N/2);
-                    };
                 // balanced min fold (the chop-class Tclr -- the
                 // smallest failed deadline)
                 minTree(1) = _;
@@ -640,8 +638,6 @@ hermiteAttackReleaseFollower(nC, nRel, cands) = (loop~si.bus(7)):(_, si.block(6)
                     };
 
                 // ---- triggers ----
-                arrived = k>T;
-                // previous leg done, at rest
                 attNeed = critVal<gain;
                 // re-latch when the critical value changes, when its (exact)
                 // deadline undercuts the running leg's remaining time
@@ -680,8 +676,10 @@ hermiteAttackReleaseFollower(nC, nRel, cands) = (loop~si.bus(7)):(_, si.block(6)
                 // critVal == gain, so peak holds (and every release hold)
                 // are untouched. Descending through a shallower pin's play
                 // sample is safe: gain <= its value throughout.
-                landed = k==T;
-                attTrig = attNeed&(((critVal!=p1)&(flyOn==0))|(critDl<rRem)|arrived|landed);
+                // arrived (k > T, previous leg done, at rest) and landed
+                // (k == T, first post-landing sample) enter attTrig only
+                // as their union: k >= T, one compare
+                attTrig = attNeed&(((critVal!=p1)&(flyOn==0))|(critDl<rRem)|(k>=T));
                 // release trigger, three terms:
                 // 1) v1 > p1: latch from rest AND re-latch mid-leg whenever
                 //    the window min rises above the running target (at rest
@@ -738,8 +736,18 @@ hermiteAttackReleaseFollower(nC, nRel, cands) = (loop~si.bus(7)):(_, si.block(6)
                 // in output to an m0 = 0 clamp.
                 relGap = v1-gain;
                 capped = (dirPrev*nRel)>(3*relGap);
-                Tshort = ceil((3*relGap)/max(ma.EPSILON, dirPrev));
-                relT = select2(capped, nRel, max(1, min(nRel, Tshort)));
+                // ONE shared division + ceil serves BOTH shortened legs:
+                // Tshort (release, the max(eps, ...) branch) and attTs
+                // (attack, the min(-eps, ...) branch) are consumed on
+                // opposite sides of relTrig -- relT only through T0's
+                // release branch, attT only through its attack branch --
+                // so the shared quotient reproduces whichever one is
+                // read, bit-exactly, and the discarded branch's value
+                // (always finite: |den| >= eps) is never consumed.
+                shGap = select2(relTrig, attGap, relGap);
+                shDir = select2(relTrig, min(0-ma.EPSILON, dirPrev), max(ma.EPSILON, dirPrev));
+                Tsh = ceil((3*shGap)/shDir);
+                relT = select2(capped, nRel, max(1, min(nRel, Tsh)));
                 // the same medicine, mirrored onto flat-chord attacks: a
                 // leg whose landing chord is flat (the critical candidate
                 // IS the window-deepest -- its next-deeper sentinel copies
@@ -767,23 +775,30 @@ hermiteAttackReleaseFollower(nC, nRel, cands) = (loop~si.bus(7)):(_, si.block(6)
                 attGap = critVal-gain;
                 flatChord = critNpV==critVal;
                 attHot = flatChord&((dirPrev*critDl)<(3*attGap));
-                attTs = ceil((3*attGap)/min(0-ma.EPSILON, dirPrev));
-                attT = select2(attHot, critDl, max(1, min(critDl, attTs)));
+                attT = select2(attHot, critDl, max(1, min(critDl, Tsh)));
                 T0 = max(1, select2(relTrig, attT, relT));
                 p1t = select2(relTrig, critVal, v1);
                 delta = (p1t-gain)/Tt;
                 // average slope, sign = direction
-                // landing chord, ONE shared division: every attack landing
-                // aims at the nearest strictly-deeper point one scale out
-                // (the critical candidate's np pair; own value as np value =
-                // land flat). The release endpoints select the next-higher
-                // pair, keeping the chord live for schedule-aware
-                // experiments, but the release LANDS FLAT (m1t below): the
-                // naive aim measured as a regression -- see the header.
-                aimV2 = select2(relTrig, critNpV, nhV);
-                aimD1 = select2(relTrig, critDl, i1);
-                aimD2 = select2(relTrig, critNpD, nhD);
-                aim = (aimV2-p1t)/max(1, aimD2-aimD1);
+                // landing chord / rideMax, ONE shared division: every
+                // attack landing aims at the nearest strictly-deeper point
+                // one scale out (the critical candidate's np pair; own
+                // value as np value = land flat); the release side reads
+                // this same quotient as rideMax = (v1 - gain)/(i1 + 1)
+                // (the m0t path below). The two are consumed on opposite
+                // sides of relTrig -- aim only in m1t/m1tT's attack
+                // branches, rideMax only in m0t's release branch -- so
+                // one division serves both, bit-exactly (dens >= 1 on
+                // both branches, so the discarded value is always
+                // finite). This RETIRES the v1.1 experiment hook that
+                // kept the release chord (nhV - v1)/(nhD - i1) computed
+                // for schedule-aware landing experiments (both measured
+                // as regressions -- see the header); to restore it, give
+                // rideMax its own division again and rebind aim over
+                // select2(relTrig, ...) endpoints as in v1.1. nhD is
+                // dead without the hook, so its bank chain compiles out.
+                aim = (select2(relTrig, critNpV-p1t, v1-gain))
+                    /(select2(relTrig, max(1, critNpD-critDl), i1+1));
                 // Fritsch-Carlson bound: a launch floor on attacks
                 // (delta < 0), a launch cap on releases (delta > 0)
                 lo = 3*delta;
@@ -830,8 +845,9 @@ hermiteAttackReleaseFollower(nC, nRel, cands) = (loop~si.bus(7)):(_, si.block(6)
                 // never slower than the plain chase (and discards a negative
                 // rideMax the same way).
                 rideK = 3.0/(float(nRel)*float(nRel));
-                rideMax = (v1-gain)/(i1+1);
-                ride = min(dirPrev+(nhV-v1)*rideK, rideMax);
+                // aim IS rideMax = (v1 - gain)/(i1 + 1) on this branch:
+                // the shared quotient above, release side
+                ride = min(dirPrev+(nhV-v1)*rideK, aim);
                 // launch floor: never descend toward the deepest point (a
                 // two-sided launch can swoop below the window min -- see
                 // the header).
@@ -923,7 +939,7 @@ hermiteAttackReleaseFollower(nC, nRel, cands) = (loop~si.bus(7)):(_, si.block(6)
                 ckB = m0aT*ckT2;
                 ckC = ckT*(3*(p1t-gain)-2*m0aT-m1tT);
                 ckD = 2*(gain-p1t)+m0aT+m1tT;
-                clearOne(val, dl, npv, npd) = pass, num, den, dlP
+                clearOne(val, dl, npv, npd) = num, den, dlP
                     with {
                         df = 1.0*dl;
                         df2 = df*df;
@@ -935,12 +951,15 @@ hermiteAttackReleaseFollower(nC, nRel, cands) = (loop~si.bus(7)):(_, si.block(6)
                         dlP = select2(pass, df, 1e30);
                     };
                 checks = cands:(si.bus(4*nC), si.block(2)):par(i, nC, clearOne);
-                clear = checks:par(i, nC, (_, !, !, !)):clrTree(nC);
-                clrPair = checks:par(i, nC, (!, _, _, !)):mpTree(nC);
+                clrPair = checks:par(i, nC, (_, _, !)):mpTree(nC);
                 Tneg = ceil(sqrt(max(0.0, (gain-p1t)*(clrPair:(_, !))/(clrPair:(!, _)))));
-                Tpos = checks:par(i, nC, (!, !, !, _)):minTree(nC);
+                Tpos = checks:par(i, nC, (!, !, _)):minTree(nC);
                 Tclr = select2(dirPrev>0, Tneg, Tpos);
-                Tt = select2((relTrig==0)&(clear==0), T0, max(1, min(T0, Tclr)));
+                // Tpos doubles as the clear flag: every failed candidate
+                // contributes dlP = df < ckT <= 1e30 and every passing one
+                // the 1e30 sentinel, so "some check failed" == Tpos < 1e30,
+                // exactly -- the separate pass AND-tree was redundant.
+                Tt = select2((relTrig==0)&(Tpos<1e30), T0, max(1, min(T0, Tclr)));
                 m0t = select2(relTrig,
                     m0a,
                     select2(liftAhead, aB, max(aB, ride)));
