@@ -1,5 +1,5 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "1.0";
+declare version "1.1";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -229,7 +229,7 @@ import("stdfaust.lib");
 // > 1e-3 gone entirely, the brickwall leak to exactly 0, at a
 // small mean extra reduction inside the episode -- the leg dives
 // below the hugging path, the safe direction. Cost: one compare
-// (handoff) plus ~10 multiplies and two compares per candidate
+// (handoff) plus ~5 multiplies and two compares per candidate
 // per sample (check), no divisions, no state, no delay lines.
 //
 // C1 clearance: on a failed check the leg is SHORTENED, velocity
@@ -297,14 +297,17 @@ import("stdfaust.lib");
 // release. testSignal3 (upstream one-pole release) is kept only
 // as an A/B reference against the upstream-release architecture.
 //
-// Cost: the audio hot path is dominated by the per-candidate
-// scoring divisions and the argmin tree. The landing chord costs
-// ONE shared division (the attack aim and the release endpoints
-// are selected first); the ride adds one audio-rate division
-// (rideMax); the shortened legs add one division + ceil (Tshort),
-// its mirror (attTs), and one division + sqrt + ceil (Tclr), all
-// on the latch path; the clearance check adds ~10 multiplies and
-// two compares per candidate per sample plus its two trees. No
+// Cost: the audio hot path is dominated by the argmin tree and
+// the clearance check; per-candidate scoring is DIVISION-FREE
+// (slopes ride the tree as cross-multiplied (num, den) pairs,
+// dens >= 1). The landing chord costs ONE shared division (the
+// attack aim and the release endpoints are selected first); the
+// ride adds one audio-rate division (rideMax); the shortened legs
+// add one division + ceil (Tshort), its mirror (attTs), and one
+// division + sqrt + ceil (Tclr), all on the latch path; the
+// clearance check adds ~5 multiplies and two compares per
+// candidate per sample (the cubic in Horner form, coefficients
+// shared per sample) plus its two trees. No
 // state beyond the 7-wide loop, no delay lines beyond the bank's.
 // nRel is slider-derived, so its guard runs in the control block.
 // Latency: nAtt - 1.
@@ -536,10 +539,13 @@ slidingMinIdxBankAtt(nAtt, maxAtt, x) = (v1, i1, npFullV, npFullD), par(i, nB, (
 //   release target v1 and its deadline as the pin's play index i1.
 //   Disabled candidates read (ma.MAX, 1, _, _) and never win.
 //
-// Per sample, every candidate gets (requiredSlope, value, deadline,
-// npVal, npDl) with requiredSlope = (value - gain)/deadline; the
-// critical candidate is the argmin (steepest descent required), and
-// its chord (npVal - value)/(npDl - deadline) is the landing slope.
+// Per sample, every candidate gets (num, den, value, deadline,
+// npVal, npDl) with num/den = (value - gain)/max(1, deadline), the
+// required slope carried UNDIVIDED; the critical candidate is the
+// argmin (steepest descent required), compared cross-multiplied
+// (dens >= 1 > 0 preserve direction and the leftmost tie-break),
+// and its chord (npVal - value)/(npDl - deadline) is the landing
+// slope.
 //
 // Triggers:
 // * attack: critical-constraint re-latch with the creep gate, the
@@ -573,25 +579,33 @@ hermiteAttackReleaseFollower(nC, nRel, cands) = (loop~si.bus(7)):(_, si.block(6)
                 // current slope, units/sample
 
                 // ---- critical-constraint selection ----
-                trip(val, dl, npv, npd) = (val-gain)/max(1, dl), val, dl, npv, npd;
+                // score = (val - gain)/max(1, dl), carried as a (num, den)
+                // pair and compared cross-multiplied inside the tree: dens
+                // are >= 1 > 0, so the direction is preserved, ties still
+                // keep the left (sooner) candidate, and NO division runs
+                // per candidate -- the nC up-front divides were the hot
+                // path's single biggest cost. The disabled-tap sentinel
+                // (ma.MAX) stays correctly ordered even where a cross
+                // product saturates (inf compares on the right side).
+                trip(val, dl, npv, npd) = val-gain, max(1, dl), val, dl, npv, npd;
                 scored = cands:(si.bus(4*nC), si.block(2)):par(i, nC, trip);
-                crit = scored:red5(nC);
-                critVal = crit:(!, _, !, !, !);
-                critDl = crit:(!, !, _, !, !);
-                critNpV = crit:(!, !, !, _, !);
-                critNpD = crit:(!, !, !, !, _);
-                amin5(sa, va, da, ua, wa, sb, vb, db, ub, wb) = select2(pk, sa, sb), select2(pk, va, vb), select2(pk, da, db), select2(pk, ua, ub), select2(pk, wa, wb)
+                crit = scored:red6(nC);
+                critVal = crit:(!, !, _, !, !, !);
+                critDl = crit:(!, !, !, _, !, !);
+                critNpV = crit:(!, !, !, !, _, !);
+                critNpD = crit:(!, !, !, !, !, _);
+                amin6(na, da, va, ta, ua, wa, nb, db, vb, tb, ub, wb) = select2(pk, na, nb), select2(pk, da, db), select2(pk, va, vb), select2(pk, ta, tb), select2(pk, ua, ub), select2(pk, wa, wb)
                     with {
-                        pk = sb<sa;
+                        pk = (nb*da)<(na*db);
                     };
                 // balanced tree: leftmost-min selection is associative, so the
                 // winner matches the sequential fold, with a dependency chain
                 // of ceil(log2(nC)) instead of nC-1 selects -- and this chain
-                // sits on the feedback loop's critical path (the divisions all
-                // run in parallel ahead of it).
-                red5(1) = si.bus(5);
-                red5(2) = amin5;
-                red5(N) = (red5(half), red5(N-half)):amin5
+                // sits on the feedback loop's critical path (two multiplies
+                // per node replace the old per-candidate divisions).
+                red6(1) = si.bus(6);
+                red6(2) = amin6;
+                red6(N) = (red6(half), red6(N-half)):amin6
                     with {
                         half = int(N/2);
                     };
@@ -884,20 +898,37 @@ hermiteAttackReleaseFollower(nC, nRel, cands) = (loop~si.bus(7)):(_, si.block(6)
                 //   branch by the same floor -- the chop class owns it.
                 // Per-sample re-latching and the deadline clamp remain
                 // the backstop for what the dyadic argmins shadow. Cost:
-                // ~10 multiplies and two compares per candidate plus ~3
+                // ~5 multiplies and two compares per candidate (Horner,
+                // shared coefficients) plus ~3
                 // more for the two trees, one division, one sqrt, one
                 // ceil; no state.
                 ckT = 1.0*T0;
-                ckT3 = ckT*ckT*ckT;
+                ckT2 = ckT*ckT;
+                ckT3 = ckT2*ckT;
                 m0aT = max(3*(p1t-gain), dirPrev*ckT);
                 m1tT = select2(relTrig, max(3*(p1t-gain), min(0, aim)*ckT), 0);
+                // the check cubic in Horner form. pl below ==
+                //   gain*(2*df3-3*df2*ckT+ckT3) + m0aT*(df*(ckT-df)^2)
+                //   + p1t*(df2*(3*ckT-2*df)) + m1tT*(df2*(df-ckT))
+                // regrouped by powers of df. The coefficients depend only
+                // on the latch, not the candidate, so they are computed
+                // ONCE per sample and each candidate pays 3 multiplies for
+                // the cubic (plus df2 for the zipper num and the shared
+                // valC*ckT3 bound) instead of ~14. Re-association moves the
+                // rounding at the pass boundary only: a flip there shortens
+                // or relaxes T by rounding noise, inside the check's own
+                // slack, and the deadline clamp + per-sample re-latch
+                // backstop both directions as always.
+                ckA = gain*ckT3;
+                ckB = m0aT*ckT2;
+                ckC = ckT*(3*(p1t-gain)-2*m0aT-m1tT);
+                ckD = 2*(gain-p1t)+m0aT+m1tT;
                 clearOne(val, dl, npv, npd) = pass, num, den, dlP
                     with {
                         df = 1.0*dl;
                         df2 = df*df;
-                        df3 = df2*df;
                         valC = min(val, 2.0);
-                        pl = gain*(2*df3-3*df2*ckT+ckT3)+m0aT*(df*(ckT-df)*(ckT-df))+p1t*(df2*(3*ckT-2*df))+m1tT*(df2*(df-ckT));
+                        pl = ckA+df*(ckB+df*(ckC+df*ckD));
                         pass = (dl<=0)|(df>=ckT)|(pl<=(valC*ckT3));
                         num = select2(pass, df2, 1e30);
                         den = select2(pass, max(1e-30, gain-valC), 1.0);
