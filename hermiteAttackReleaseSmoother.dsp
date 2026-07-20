@@ -1,5 +1,5 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "1.2";
+declare version "1.3";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -401,9 +401,12 @@ slidingMinIdxBankAtt(nAtt, maxAtt, x) = (v1, i1, npFullV, npFullD), par(i, nB, (
     with {
         nB = maxNrBits(maxAtt);
         // tap scales 2^0 .. 2^(nB-1)
-        intMax = 2147483647;
-        // play idx 0 = the sample playing now = the attack window's oldest
-        idxFromOldest(tMin) = (nAtt-1)-(ba.time-tMin);
+        // play idx 0 = the sample playing now = the attack window's oldest.
+        // (nAtt-1)-(ba.time-tMin) regrouped so the ba.time part is shared
+        // across every call site; int add is associative, so bit-identical
+        // even at wraparound.
+        idxBase = (nAtt-1)-ba.time;
+        idxFromOldest(tMin) = idxBase+tMin;
         minIdxOp(va, ta, vb, tb) = select2(pickSecond, va, vb), select2(pickSecond, ta, tb)
             with {
                 pickSecond = (vb<va)|((vb==va)&((tb-ta)<0));
@@ -415,15 +418,25 @@ slidingMinIdxBankAtt(nAtt, maxAtt, x) = (v1, i1, npFullV, npFullD), par(i, nB, (
         cV(i) = casc:ba.selector(2*i, 2*nB);
         cT(i) = casc:ba.selector(2*i+1, 2*nB);
 
-        // a sliding min+idx over the last m samples of x, read off the
-        // shared stages: block i = stage i delayed into place, disabled
-        // blocks read the identity pair; the fold is a balanced tree
-        window(m, mMax, nBl) = par(i, nBl, ((cV(i), cT(i)):par(j, 2, _@sumPrevBlocks(m, mMax, i)):useVal(m, mMax, i))):combineTree(nBl);
-        useVal(m, mMax, i) = select2(isUsed(m, mMax, i), ma.MAX, _), select2(isUsed(m, mMax, i), intMax, _);
-
         // attack window: the last nAtt samples of x (oldest = the sample
-        // playing now)
-        fullA = window(nAtt, maxAtt, nB);
+        // playing now), read sparse-table style: min is idempotent, so
+        // TWO overlapping dyadic blocks that COVER the window give the
+        // same (min, oldest-timestamp) pair as an exact partition --
+        // minIdxOp on equal values passes the older timestamp, and the
+        // oldest occurrence of the window min lies inside at least one
+        // block, where it is also that block's oldest occurrence.
+        //   suffix block: stage jW undelayed,      covers [t-2^jW+1, t]
+        //   prefix block: stage jW delayed by dW,  covers [t-nAtt+1, t-nAtt+2^jW]
+        // with jW = the largest j s.t. 2^jW <= nAtt, dW = nAtt-2^jW
+        // (so dW < 2^jW and both blocks sit inside the window; nAtt = 1
+        // makes the blocks coincide and the tie-break passes them
+        // through). jW/dW depend only on nAtt: control-rate, and the sum
+        // of comparator flags is integer-exact where a float log2 is not.
+        jW = (par(i, nB, (pow2(i)<=nAtt)):>_)-1;
+        dW = nAtt-(1<<jW);
+        wV = par(i, nB, cV(i)):ba.selectn(nB, jW);
+        wT = par(i, nB, cT(i)):ba.selectn(nB, jW);
+        fullA = (wV, wT, (wV:de.delay(pow2(nB-1)-1, dW)), (wT:de.delay(pow2(nB-1)-1, dW))):minIdxOp;
         v1 = fullA:(_, !);
         i1 = fullA:(!, _):idxFromOldest;
 
@@ -490,25 +503,11 @@ slidingMinIdxBankAtt(nAtt, maxAtt, x) = (v1, i1, npFullV, npFullD), par(i, nB, (
         nhV = nhKV(nB-1);
         nhD = select2(exc(0), i1+1, (nhKT(nB-1):idxFromOldest));
 
-        // shared helpers (op bound to minIdxOp; the pair fold is a balanced
-        // tree -- min with leftmost tie-break is associative, so the result
-        // is bit-identical to the sequential fold, just a shorter
-        // dependency chain):
+        // shared helpers (op bound to minIdxOp):
         sequentialOperatorParOut(N) = seq(i, N, operator(i));
         operator(i) = si.bus(2*i), (si.bus(2)<:(si.bus(2), ((si.bus(2), par(j, 2, _@pow2(i))):minIdxOp)));
-        combineTree(1) = si.bus(2);
-        combineTree(2) = minIdxOp;
-        combineTree(N) = (combineTree(half), combineTree(N-half)):minIdxOp
-            with {
-                half = int(N/2);
-            };
-        isUsed(m, mMax, i) = ba.take(i+1, (int2bin(m, (mMax-1)*2+1)));
-        sumPrevBlocks(m, mMax, 0) = 0;
-        sumPrevBlocks(m, mMax, i) = (ba.subseq((allBlockSizes(m, mMax)), 0, i):>_);
-        allBlockSizes(m, mMax) = par(j, maxNrBits(mMax-1), (pow2(j))*isUsed(m, mMax, j));
         maxNrBits(m) = int2nrOfBits(m);
         pow2(i) = 1<<i;
-        int2bin(v, m) = par(j, maxNrBits(m-1), int(floor((v)/(pow2(j))))%2);
         int2nrOfBits(v) = int(floor(log(v)/log(2))+1);
     };
 
@@ -797,8 +796,7 @@ hermiteAttackReleaseFollower(nC, nRel, cands) = (loop~si.bus(7)):(_, si.block(6)
                 // rideMax its own division again and rebind aim over
                 // select2(relTrig, ...) endpoints as in v1.1. nhD is
                 // dead without the hook, so its bank chain compiles out.
-                aim = (select2(relTrig, critNpV-p1t, v1-gain))
-                    /(select2(relTrig, max(1, critNpD-critDl), i1+1));
+                aim = (select2(relTrig, critNpV-p1t, v1-gain))/(select2(relTrig, max(1, critNpD-critDl), i1+1));
                 // Fritsch-Carlson bound: a launch floor on attacks
                 // (delta < 0), a launch cap on releases (delta > 0)
                 lo = 3*delta;
