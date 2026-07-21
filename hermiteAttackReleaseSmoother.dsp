@@ -1564,12 +1564,13 @@ testSignal3 = testSignal1:relFollow
 maxSR = 192000;
 maxAtt = int(0.05*maxSR);
 
-attMs = SmootherGroup(hslider("[0]attack lookahead [unit:ms]", 25, 0, 50, 0.1));
-attShapeSl = SmootherGroup(hslider("[1]attack shape", 0, -1, 1, 0.001));
-attAucComp = SmootherGroup(checkbox("[2]att auc comp"));
-relMs = SmootherGroup(hslider("[3]release [unit:ms]", 50, 0, 500, 0.1));
-relShapeSl = SmootherGroup(hslider("[4]release shape", 0, -1, 1, 0.001));
-relAucComp = SmootherGroup(checkbox("[5]rel auc comp"));
+relHoldMs = SmootherGroup(hslider("[0]rel hold[unit:ms]", 50, 0, maxRelHold*1000, 1));
+attMs = SmootherGroup(hslider("[1]attack lookahead [unit:ms]", 25, 0, 50, 0.1));
+attShapeSl = SmootherGroup(hslider("[2]attack shape", 0, -1, 1, 0.001));
+attAucComp = SmootherGroup(checkbox("[3]att auc comp"));
+relMs = SmootherGroup(hslider("[4]release [unit:ms]", 50, 0, 500, 0.1));
+relShapeSl = SmootherGroup(hslider("[5]release shape", 0, -1, 1, 0.001));
+relAucComp = SmootherGroup(checkbox("[6]rel auc comp"));
 // AUC (loudness) compensation -- OPTIONAL, off by default, one box each.
 // See THE AUC COMPENSATION in the header. The factor scales the DURATION
 // (fold BEFORE the int()/clamp), derived from THIS smoother's warped-Hermite
@@ -1619,41 +1620,64 @@ gRel = pow(4.0, 0-relShapeSl);
 // series arm is selected. gSafe forces g out of the neutral band before it
 // reaches the closed denominator -- harmless, since the closed arm is only
 // ever SELECTED when |g-1| >= 0.1, so the remapped neutral values are dead.
-aucAreaClosed(g) = (2.0*gs*gs*gs - 6.0*gs*gs*log(gs) + 3.0*gs*gs - 6.0*gs + 1.0)
-    / ((gs-1.0)*(gs-1.0)*(gs-1.0)*(gs-1.0))
+aucAreaClosed(g) = (2.0*gs*gs*gs-6.0*gs*gs*log(gs)+3.0*gs*gs-6.0*gs+1.0)/((gs-1.0)*(gs-1.0)*(gs-1.0)*(gs-1.0))
     with {
-        gs = select2(abs(1.0-g) < 0.1, g, 1.1);
+        gs = select2(abs(1.0-g)<0.1, g, 1.1);
     };
-aucAreaSeries(g) = 0.5 + d*(c1 + d*(c2 + d*(c3 + d*(c4 + d*(c5 + d*(c6 + d*c7))))))
+aucAreaSeries(g) = 0.5+d*(c1+d*(c2+d*(c3+d*(c4+d*(c5+d*(c6+d*c7))))))
     with {
-        d  = g - 1.0;
+        d = g-1.0;
         c1 = -1.0/5.0;
-        c2 =  1.0/10.0;
+        c2 = 1.0/10.0;
         c3 = -2.0/35.0;
-        c4 =  1.0/28.0;
+        c4 = 1.0/28.0;
         c5 = -1.0/42.0;
-        c6 =  1.0/60.0;
+        c6 = 1.0/60.0;
         c7 = -2.0/165.0;
     };
-aucArea(g) = select2(abs(1.0-g) < 0.1, aucAreaClosed(g), aucAreaSeries(g));
+aucArea(g) = select2(abs(1.0-g)<0.1, aucAreaClosed(g), aucAreaSeries(g));
 // Normalize so the SHARPEST shape the slider reaches (g = 4, the minimum
 // area) maps to 1 -- the factor is then <= 1 for every g in [1/4, 4], so
 // compensation only ever SHORTENS a duration (the maxAtt budget can only
 // get colder, never grows an allocation). Both attack and release slider
 // ends reach g = 4 or g = 1/4; I is monotone in g and I(4) is the min.
 aucAreaSharp = aucAreaClosed(4.0);
-aucLevelMult(g) = aucAreaSharp / aucArea(g);
+aucLevelMult(g) = aucAreaSharp/aucArea(g);
 // Branchless switched blend, exactly as shapedSmoother: on in {0,1} so the
 // off path is bit-exact 1.0 (durations revert bit-identically, preserving
 // the g = 1 neutral guarantee); factor clamped to [0,1] so on*(m-1) can't
 // blow up. Slider-rate: Faust hoists it out of the audio path.
-aucLevelMultSwitched(on, g) = 1.0 + on*(max(0.0, min(1.0, aucLevelMult(g))) - 1.0);
+aucLevelMultSwitched(on, g) = 1.0+on*(max(0.0, min(1.0, aucLevelMult(g)))-1.0);
+
+// ============================================================================
+//  RELEASE HOLD (from lamb)
+// ============================================================================
+maxRelHold = 0.05;
+maxRelHoldSamples = maxRelHold*maxSR;
+
+// Clamped into the budget per the SR-budget note. Adds rel_hold_samples of
+// latency on top of the input; at rel hold = 0 the stage is the identity
+// (held == x, both delays are @0).
+rel_hold_samples = int(relHoldMs*0.001*ma.SR:max(0):min(maxRelHoldSamples));
+
+// - min(prevGain, x @ rel_hold_samples) keeps the output monotonically
+//   non-rising: once we've gone down, we can't release.
+// - slidingMin(rel_hold_samples+1, ...) is the future-min within the hold
+//   window: we may go as low as that, but no lower is required.
+// - max() of those two yields the held value.
+// Falls always emerge from the x@rel_hold_samples arm, so held is presented
+// exactly rel_hold_samples late.
+releaseHold(x) = loop~_
+    with {
+        loop(prevGain) = max(min(prevGain, x@rel_hold_samples),
+            x:ba.slidingMin(rel_hold_samples+1, 1+maxRelHoldSamples));
+    };
 
 process = MainGroup(demo(testSignal))
     with {
         demo(rawGR) = grPlay, smoothed
             with {
-                grPlay = de.delay(maxAtt-1, nAtt-1, rawGR);
-                smoothed = lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, maxAtt, rawGR);
+                grPlay = de.delay(maxAtt-1+maxRelHoldSamples, nAtt-1+rel_hold_samples, rawGR);
+                smoothed = lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, maxAtt, (rawGR:releaseHold));
             };
     };
