@@ -1,5 +1,5 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "1.5.0";
+declare version "1.6.0";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -14,7 +14,11 @@ import("stdfaust.lib");
 // HOLDS the gain rather than tracking the playing sample. Both leg
 // families take a per-direction SHAPE parameter -- a time warp on
 // the leg clock, neutral at g = 1 bit-identically -- see THE SHAPE
-// WARP below.
+// WARP below. The requested g is a per-leg CEILING, not a
+// constant: entries too hot for it, and clearance engagements, fly
+// the FULL duration at the largest feasible g (down to neutral)
+// before any duration is given up -- see THE FEASIBLE SHAPE
+// (v1.6.0) below.
 //
 // The release in one sentence: when the follower is at rest and the
 // window min v1 has risen above the held gain, latch a Hermite leg
@@ -137,7 +141,10 @@ import("stdfaust.lib");
 // the compare), SHORTEN the leg: T = ceil(3*(v1 - gain)/dirPrev)
 // puts the FC bound exactly at dirPrev, so the launch keeps its
 // velocity and decelerates smoothly into the target, landing
-// early rather than braking instantly. The no-overshoot lemma
+// early rather than braking instantly. (Since v1.6.0 a
+// back-loaded release relaxes its warp first -- see THE FEASIBLE
+// SHAPE -- so this shorten fires only past the NEUTRAL cap.) The
+// no-overshoot lemma
 // (below) holds at m0 = 3*delta with equality, so gain <= v1
 // survives unchanged. At the governor boundary Tshort == nRel:
 // the select2 introduces no step of its own, the steady creep
@@ -187,7 +194,9 @@ import("stdfaust.lib");
 // FC floor (dirPrev * critDl < 3 * (critVal - gain),
 // cross-multiplied, both sides negative there) would CLAMP onto
 // m0 = 3*delta -- a kink planted right at the entry. Same
-// medicine as the release re-latch, mirrored: SHORTEN,
+// medicine as the release re-latch, mirrored -- and like it,
+// since v1.6.0 the leg's warp relaxes toward neutral FIRST (THE
+// FEASIBLE SHAPE); only past the neutral floor does it SHORTEN,
 // attT = ceil(3*(critVal - gain)/dirPrev), putting the floor
 // exactly ON dirPrev -- the entry keeps its velocity, decelerates
 // smoothly, lands at v1 EARLY and holds flat through the pin's
@@ -340,7 +349,9 @@ import("stdfaust.lib");
 // (m0T/T) * w'(0) = m0T/(g*T) and its landing velocity
 // m1T * g / T, so every latch arm that carries a PHYSICAL slope
 // is folded -- launches by * g (dT, rideT, ckM0's velocity arm,
-// shDir, the capped test's nRel*g), landings by / g (aim's m1
+// the capped test's nRel*g; shDir by the SHORTEN's flight g,
+// min(g, 1) since v1.6.0, the ride's kept raw), landings by / g
+// (aim's m1
 // arm, ckM1) -- while the FC bounds themselves stay in u-space,
 // untouched: min/max against g3 exactly as before. Scaling by a
 // positive control-rate constant commutes bitwise with
@@ -359,6 +370,45 @@ import("stdfaust.lib");
 // is still the physical velocity (p(w(1/T)) ~= p0 + m0T/(g*T)),
 // so the induction reads exactly as before.
 //
+// THE FEASIBLE SHAPE (v1.6.0). A back-loaded leg and a hot entry
+// are incompatible over a long leg: the u-space launch tangent
+// costs dirPrev*g*T, so at g > 1 the FC bound tolerates only 1/g
+// of the physical entry velocity a neutral leg carries -- the
+// hot-entry shortens fired g times more easily and cut g times
+// deeper, and the zipper bound carried a further global
+// zClr = 1/g. At high shape the safety machinery thus turned the
+// requested LATE dive into an EARLY landing: legs slammed to the
+// bottom in a fraction of the deadline and sat flat -- less
+// smooth than the neutral smoother, the opposite of the knob's
+// intent. v1.6.0 degrades the SHAPE per leg instead of the
+// DURATION: the requested g is a ceiling, and each hot latch
+// flies the largest feasible clock,
+//   gEff = clamp(3*gap/(dirPrev*T), 1, gReq)   (T the full
+//   deadline: critDl for attacks, nRel for releases),
+// full-length whenever gEff >= 1 -- at gEff the FC bound sits
+// exactly ON the entry velocity, so m0T lands exactly ON g3, and
+// the raw-g fold arms sit past the bound BY THE HOT GATE, so
+// every max()/min() saturates to g3 with no adapted-g arithmetic
+// at all. Only entries too hot even for the NEUTRAL clock
+// shorten, with the unwarped formula -- bit-identical to the
+// g = 1 smoother's own medicine. gEff never needs a division of
+// its own: it rides as the latched pair (Tq, T) with
+// Tq = g3/dirPrev, the same quotient the shorten already pays,
+// absorbed by the evaluator's and the check's own divisions (the
+// ninth loop state is the pair's denominator). Front-loaded
+// requests (g <= 1) are untouched: the clamp is the identity
+// there, bit-for-bit. On clearance engagement of a flying g > 1
+// the leg relaxes to NEUTRAL outright (pair (1, 1)): the zipper
+// pull-back needs no wInv scale at g = 1 (zClr is GONE -- its
+// 1/g was the single biggest over-shorten at high shape), the
+// failed set of the taller plan covers the neutral flight
+// (H(w_g(t)) >= H(w_1(t)) pointwise under FC monotonicity), and
+// the shorten-monotonicity lemma is exact again on the flight
+// actually flown. The ride keeps the raw g (its safety lives in
+// rideMax + the per-sample induction, and a mid-ride relax would
+// mis-scale the stored boosted launch), so relAdapt gates on
+// liftAhead == 0.
+//
 // The clearance check keeps its exact play-time meaning by
 // evaluating the WARPED plan: at deadline df the leg clock reads
 // u = df/DD with DD = df + g*(ckT - df) -- linear in df, positive
@@ -368,11 +418,12 @@ import("stdfaust.lib");
 // multiplies per candidate; checkEvery halves it as always. The
 // zipper-class closed form pulls back through the warp: the
 // sufficient condition u >= sqrt(s) becomes
-// tau >= wInv(sqrt(s)), wInv(x) = x*g/(1 - x*(1-g)), and the
-// one-constant bound wInv(x) <= max(1, g)*x keeps the pair tree
-// and the single sqrt: Tclr scales by min(1, 1/gAtt) --
-// over-shortening bounded by the same factor, the safe direction
-// as always (g <= 1 needs no scale at all: wInv(x) <= x there).
+// tau >= wInv(sqrt(s)), wInv(x) = x*g/(1 - x*(1-g)). For g <= 1
+// no scale is needed (wInv(x) <= x there); for g > 1 the engaged
+// leg relaxes to NEUTRAL (THE FEASIBLE SHAPE), where wInv is the
+// identity -- the unwarped pull-back is exact for the flight
+// actually flown, and the old global zClr = min(1, 1/gAtt)
+// factor (an up-to-g over-shorten) is gone.
 //
 // The accepted class: SHORTEN-MONOTONICITY. "A shorter leg only
 // ever lowers the path" -- the lemma behind "passing candidates
@@ -382,16 +433,21 @@ import("stdfaust.lib");
 //                       - 6*(p1-p0)*u*tau*w' )
 // with the kernel u - tau*w'(tau) = u*tau*(1-g)/(tau + g*(1-tau))
 // -- sign(1-g), cleanly. At g = 1 this collapses to the shipped
-// 2u^2(1-u)*(m0T - g3) >= 0. For g >= 1 it still holds for rest
-// and DESCENDING entries (the worst case m0T = g3 reduces exactly
-// to the kernel's sign); it can fail in a small-u corner for hot
-// RISING entries at g > 1, and for FC-floor descending entries at
-// g < 1. Consequence when it does: after a clearance shorten, a
-// candidate that passed at T0 can read failed at Tclr -- the
-// flown leg pokes above it and the deadline clamp catches the
-// crossing with a corner, exactly the pre-check behavior, in
-// exactly those entry classes. Both residues shrink with |g - 1|,
-// both sit on the standing backstops (deadline clamp + per-sample
+// 2u^2(1-u)*(m0T - g3) >= 0. Since v1.6.0 every clearance-
+// shortened flight whose g exceeded 1 flies NEUTRAL (THE
+// FEASIBLE SHAPE): the zipper bound is then self-contained (the
+// m0 <= 0 majorant and its sqrt(s) condition are u-space facts,
+// pulled back at the flight's own clock with no wInv scale), and
+// the hot-RISING small-u residue of the warped shorten is gone
+// with it. The relax opens one small class of its own: a PASSING
+// candidate was cleared against the g-warped plan, and the
+// neutral flight launches shallower than that plan by at most
+// |dirPrev|*(g - 1)*Tclr*max(h10) in u-space -- a near-rest
+// quantity (the zipper class has dirPrev ~ 0) that can poke
+// above a barely-passing candidate. What remains besides it is
+// the g < 1 FC-floor descending corner (a front-loaded request,
+// untouched by the relax). Every residue shrinks with |g - 1|,
+// sits on the standing backstops (deadline clamp + per-sample
 // re-latch), and the brickwall never depended on the check at any
 // setting (measured exactly 0 violation with the check removed --
 // see checkEvery at the wiring).
@@ -402,20 +458,24 @@ import("stdfaust.lib");
 // dens >= 1). The landing chord and the ride cap share ONE
 // division (the numerator/denominator pairs are selected first,
 // branch-exclusive by relTrig); the shortened legs share ONE
-// division + ceil (Tshort and attTs, same exclusivity); Tclr adds
+// division + ceil (Tshort and attTs, same exclusivity; its
+// un-ceiled quotient Tq doubles as the feasible-shape pair's
+// numerator, so gEff costs NO division of its own); Tclr adds
 // one division + sqrt + ceil; with the warped clock u -- whose
 // division REPLACES tau's, the g reciprocals being control rate
 // -- that is still FOUR audio-rate divisions total. The tangent
 // states are carried pre-multiplied
 // by the leg length (m0T, m1T), keeping the per-latch delta
 // division off the feedback critical path and two Hermite
-// multiplies out of the evaluator. The clearance check adds ~11
+// multiplies out of the evaluator. The clearance check adds ~12
 // multiplies and two compares per candidate per sample (the cubic
-// contracted homogeneously in (df, DD), Horner form, per-sample
-// shared coefficients; ~5 before the warp) plus its two
+// contracted homogeneously in (dfs, DDs) -- the latched pair's
+// denominator folds in as one extra multiply -- Horner form,
+// per-sample shared coefficients; ~5 unwarped) plus its two
 // trees -- the all-pass AND tree is folded into the Tpos min tree
 // (all-pass reads back as exactly 1e30). No
-// state beyond the 8-wide loop (the latched g is the eighth), no
+// state beyond the 9-wide loop (the latched warp rides as a
+// (num, den) pair in the last two), no
 // delay lines beyond the bank's.
 // nRel is slider-derived, so its guard runs in the control block.
 // Latency: nAtt - 1.
@@ -641,7 +701,10 @@ slidingMinIdxBankAtt(nAtt, maxAtt, x) = (v1, i1, npFullV, npFullD), par(i, nB, (
 // * `gAtt`, `gRel`: per-direction shape (> 0, may vary at control
 //   rate; latched per leg like T). 1 = the unshaped smoother,
 //   BIT-identical; < 1 front-loads a leg, > 1 back-loads it -- see
-//   THE SHAPE WARP in the header. Floored at ma.EPSILON.
+//   THE SHAPE WARP in the header. A g > 1 is a per-leg CEILING:
+//   hot entries and clearance engagements fly the full duration
+//   at the largest feasible g down to neutral before any duration
+//   is given up (THE FEASIBLE SHAPE). Floored at ma.EPSILON.
 // * `cands`: 4*nC + 2 signals: (value, deadline, next-deeper value,
 //   next-deeper deadline) per candidate, then the next-higher pair
 //   (nhV, nhD) from the release taps. The deadline is the exact play
@@ -678,7 +741,7 @@ slidingMinIdxBankAtt(nAtt, maxAtt, x) = (v1, i1, npFullV, npFullD), par(i, nB, (
 //   the window min through its own play sample, so peaks are held
 //   through the peak's play sample.
 //----------------------------------------------------------------------
-hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si.bus(8)):(_, si.block(7))
+hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si.bus(9)):(_, si.block(8))
     with {
         // release reads: candidate 0's value/deadline = the attack-window
         // min and the pin's play index; the tail = the next-higher pair
@@ -695,8 +758,17 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
         invGA = 1.0/gA;
         invGR = 1.0/gR;
         nRelG = nRel*gR;
+        // the shorten/feasible-shape divisor factors: min(g, 1) is
+        // the flight g of a past-neutral shorten (the requested g
+        // for front-loads, neutral for back-loads), so Tq/Tsh come
+        // out unwarped exactly where the relax applies and exactly
+        // as before where it does not.
+        gShA = min(gA, 1.0);
+        gShR = min(gR, 1.0);
+        nRelF = 1.0*nRel;
 
-        // state: gain, p0, m0T, p1, m1T, k, T, gL (previous-sample values
+        // state: gain, p0, m0T, p1, m1T, k, T, gNL, gDL
+        // (previous-sample values
         // inside loop). The tangent states are carried PRE-MULTIPLIED by
         // the leg length (m0T = m0*T, m1T = m1*T): the Hermite evaluator
         // only ever reads the products (h10*T*m0, h11*T*m1), so latching
@@ -708,9 +780,13 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
         // launch stores its bound exactly rather than a divide-then-
         // remultiply ulp off it -- see g3 below. With the warp the
         // products are u-space (m0T = g * physical launch velocity * T,
-        // m1T = physical landing velocity * T / g); gL is the leg's
-        // latched warp g.
-        loop(gain, p0, m0T, p1, m1T, k, T, gL) = gainN, p0N, m0TN, p1N, m1TN, kN, TN, gLN
+        // m1T = physical landing velocity * T / g); the leg's latched
+        // warp g rides as the PAIR (gNL, gDL) -- g = gNL/gDL, never
+        // divided: the evaluator's and the check's own divisions
+        // absorb the denominator (THE FEASIBLE SHAPE), and plain
+        // latches store (g, 1.0) so the neutral and front-loaded
+        // paths stay bit-identical.
+        loop(gain, p0, m0T, p1, m1T, k, T, gNL, gDL) = gainN, p0N, m0TN, p1N, m1TN, kN, TN, gNN, gDN
             with {
                 dirPrev = gain-gain';
                 // current slope, units/sample
@@ -851,52 +927,103 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 relTrig = (v1>p1)|((attNeed==0)&((liftAhead&(v1>gain))|((p1>=p0)&((m0T*0.99999999)>(3*(p1-p0))))));
                 trig = attTrig|relTrig;
 
-                // the NEW leg's warp g and its reciprocal, branch-shared:
-                // every consumer below is branch-exclusive by relTrig, so
-                // one select2 pair serves all the folds -- and at g = 1
-                // both read exactly 1.0, so every fold is the identity.
+                // the NEW leg's warp, three layers:
+                // * gCk/invGCk -- the RAW per-direction g, branch-shared
+                //   by relTrig. These drive the physical-slope FOLDS
+                //   (dT, rideT, ckM0/ckM1, TtG/TtIG): on the adapt
+                //   branches the raw-g arm always sits past the FC
+                //   bound (that is what the hot gate MEANS), so every
+                //   max()/min() saturates to g3 exactly -- the folds
+                //   never need the adapted g. At g = 1 both read
+                //   exactly 1.0 and every fold is the identity.
+                // * (gN1, gD1) -- the pre-engage flight g as a pair
+                //   (g = num/den, never divided): the requested g on
+                //   cool branches, (Tq, T) on adapt (min-clamped to the
+                //   requested g against eps-distorted Tq on vanishing
+                //   gaps), min(g, 1) on a past-neutral shorten, the raw
+                //   g on the ride's. The check's DD and the evaluator's
+                //   clock absorb the denominator.
+                // * (gNt, gDt) -- post-engage: a clearance engagement
+                //   of a flying g > 1 relaxes the leg to NEUTRAL (1, 1)
+                //   -- THE FEASIBLE SHAPE in the header -- and gF/invGF
+                //   swing the folds to 1.0 with it, so the engaged
+                //   leg's velocity-kept launch is honest at its actual
+                //   clock. relaxCk reads the pair's own compare
+                //   (gN1 > gD1 <=> g > 1, cross-multiplication-free
+                //   since gD1 > 0).
                 gCk = select2(relTrig, gA, gR);
                 invGCk = select2(relTrig, invGA, invGR);
+                gAttN = select2(attHot, gA, select2(attAdapt, gShA, min(Tq, gA*dlF)));
+                gAttD = select2(attAdapt, 1.0, dlF);
+                gRelN = select2(relAdapt, select2(capped&(liftAhead==0), gR, gShR), min(Tq, gR*nRelF));
+                gRelD = select2(relAdapt, 1.0, nRelF);
+                gN1 = select2(relTrig, gAttN, gRelN);
+                gD1 = select2(relTrig, gAttD, gRelD);
+                relaxCk = engaged&(gN1>gD1);
+                gNt = select2(relaxCk, gN1, 1.0);
+                gDt = select2(relaxCk, gD1, 1.0);
+                gF = select2(relaxCk, gCk, 1.0);
+                invGF = select2(relaxCk, invGCk, 1.0);
 
                 // ---- new-segment values (only used when trig == 1) ----
-                // momentum-preserving re-latch: a release re-latch
-                // arriving with dirPrev above the fresh-leg FC cap
-                // 3*(v1 - gain)/(gRel*nRel) would clamp the launch onto
-                // that cap
-                // (m0 = min(3*delta, dirPrev)) -- a one-sample velocity
-                // corner whenever a leg re-plans mid-flight (term 1 late in
-                // a leg; term 2 the sample a lift blip appears). Instead
-                // SHORTEN the leg: T = ceil(3*(v1 - gain)/(dirPrev*gRel))
-                // raises
-                // the FC bound to meet dirPrev, so the launch keeps its
-                // velocity and decelerates smoothly into the target,
-                // landing early. Both select2 branches agree at the
-                // governor boundary (dirPrev == 3*gap/(gRel*nRel) gives
-                // Tshort == nRel), launches from rest are untouched
-                // (capped false at dirPrev ~ 0), and ceil keeps T integer
-                // so the leg clock reaches exactly 1 (a fractional T parks
-                // a landed leg shy of its target and deadlocks the v1 > p1
-                // trigger). relGap can go <= 0 here (these values compute
-                // every sample; term 3 can fire at v1 == gain): the eps
-                // floor keeps the idle division finite and max(1, ...)
-                // catches the negative branch -- a T = 1 stop, identical
-                // in output to an m0 = 0 clamp.
+                // momentum-preserving re-latch, feasible-shape first: a
+                // release re-latch arriving with dirPrev above the
+                // fresh-leg FC cap 3*(v1 - gain)/(gRel*nRel) would clamp
+                // the launch onto that cap (m0 = min(3*delta, dirPrev))
+                // -- a one-sample velocity corner whenever a leg re-plans
+                // mid-flight (term 1 late in a leg; term 2 the sample a
+                // lift blip appears). Instead the WARP relaxes first
+                // (relAdapt): while the entry fits the NEUTRAL cap
+                // (dirPrev*nRel <= 3*gap), fly the whole nRel at the
+                // feasible g = 3*gap/(dirPrev*nRel) in [1, gRel) -- the
+                // pair (Tq, nRel) below -- where the cap sits exactly ON
+                // dirPrev. Only past neutral SHORTEN:
+                // T = ceil(3*(v1 - gain)/(dirPrev*gShR)) raises the FC
+                // bound to meet dirPrev at the shorten's own flight g
+                // (gRel for front-loads, neutral for back-loads), so the
+                // launch keeps its velocity and decelerates smoothly
+                // into the target, landing early. The ride keeps the RAW
+                // g (relAdapt gates on liftAhead == 0, and the divisor
+                // arm keeps gRel there): a mid-ride relax would
+                // mis-scale the stored boosted launch, whose safety
+                // lives in rideMax + the per-sample induction, not in
+                // the cap. All branches agree at their boundaries
+                // (dirPrev == 3*gap/(gRel*nRel) is capped's edge with
+                // relT == nRel on both sides; dirPrev*nRel == 3*gap
+                // gives Tsh == nRel == the adapt branch -- adapt is only
+                // reachable at gRel > 1, where the divisor's gShR = 1),
+                // launches from rest are untouched (capped false at
+                // dirPrev ~ 0), and ceil keeps T integer so the leg
+                // clock reaches exactly 1 (a fractional T parks a landed
+                // leg shy of its target and deadlocks the v1 > p1
+                // trigger). relGap can go <= 0 here (these values
+                // compute every sample; term 3 can fire at v1 == gain):
+                // the eps floor keeps the idle division finite and
+                // max(1, ...) catches the negative branch -- a T = 1
+                // stop, identical in output to an m0 = 0 clamp.
                 relGap = v1-gain;
                 capped = (dirPrev*nRelG)>(3*relGap);
-                // ONE shared division + ceil serves BOTH shortened legs:
-                // Tshort (release, the max(eps, ...) branch) and attTs
-                // (attack, the min(-eps, ...) branch) are consumed on
-                // opposite sides of relTrig -- relT only through T0's
-                // release branch, attT only through its attack branch --
-                // so the shared quotient reproduces whichever one is
-                // read, bit-exactly, and the discarded branch's value
-                // (always finite: |den| >= eps) is never consumed. The
-                // warp folds each branch's g into the direction -- the
-                // u-space entry velocity*T is dirPrev*g*T, so the T that
-                // puts it ON the FC bound is ceil(g3/(dirPrev*g)) --
-                // inside the eps clamp, keeping the floor at eps itself.
+                // ONE shared division (+ its ceil) serves BOTH shortened
+                // legs AND both feasible-shape pairs: Tshort (release,
+                // the max(eps, ...) branch) and attTs (attack, the
+                // min(-eps, ...) branch) are consumed on opposite sides
+                // of relTrig -- relT only through T0's release branch,
+                // attT only through its attack branch -- so the shared
+                // quotient reproduces whichever one is read, bit-exactly,
+                // and the discarded branch's value (always finite:
+                // |den| >= eps) is never consumed. The un-ceiled
+                // quotient Tq doubles as the adapt pair's numerator: on
+                // the adapt branches the divisor's g factor is exactly 1
+                // (adapt is only reachable at g > 1, where min(g, 1)
+                // = 1), so Tq = 3*gap/dirPrev and gEff = Tq/T --
+                // carried as the pair, never divided. The shorten
+                // divisor keeps min(g, 1) -- the flight g of a
+                // past-neutral shorten -- inside the eps clamp, keeping
+                // the floor at eps itself; the release arm keeps the
+                // RAW gRel while liftAhead (the ride's shorten is
+                // untouched).
                 shGap = select2(relTrig, attGap, relGap);
-                shDir = select2(relTrig, min(0-ma.EPSILON, dirPrev*gA), max(ma.EPSILON, dirPrev*gR));
+                shDir = select2(relTrig, min(0-ma.EPSILON, dirPrev*gShA), max(ma.EPSILON, dirPrev*select2(liftAhead, gShR, gR)));
                 // g3 == 3*(p1t - gain), bitwise: subtracting gain commutes
                 // through select2 (shGap IS p1t - gain branch by branch),
                 // and it feeds Tsh, the FC latch caps and the clearance
@@ -907,36 +1034,56 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 // exactly ON 3*(p1 - p0) and the flown-whole margin
                 // guards only the ride entries.
                 g3 = 3*shGap;
-                Tsh = ceil(g3/shDir);
-                relT = select2(capped, nRel, max(1, min(nRel, Tsh)));
+                Tq = g3/shDir;
+                Tsh = ceil(Tq);
+                relAdapt = capped&(liftAhead==0)&((dirPrev*nRel)<=(3*relGap));
+                relT = select2(capped, nRel, select2(relAdapt, max(1, min(nRel, Tsh)), nRel));
                 // the same medicine, mirrored onto flat-chord attacks: a
                 // leg whose landing chord is flat (the critical candidate
                 // IS the window-deepest -- its next-deeper sentinel copies
                 // its own value, an exact compare, no tolerance) and whose
                 // entry arrives hotter than the full-deadline FC floor
                 // (dirPrev * gAtt * critDl < 3 * (critVal - gain),
-                // cross-multiplied, both sides negative there) is
-                // SHORTENED instead of clamped onto m0 = 3*delta:
-                // attT = ceil(3*gap/dirPrev) puts the floor exactly ON
-                // dirPrev, so the entry keeps its velocity, decelerates
-                // smoothly, lands at v1 EARLY and holds flat through the
-                // pin's play sample. Early landing at the window-deepest
-                // is safe by construction (every candidate value is >= v1:
-                // nothing binds until the pin plays out), and the mirrored
-                // no-undershoot lemma holds at the FC boundary with equality,
-                // so gain >= v1 survives -- m0Tt lands exactly ON
-                // 3*(p1 - p0), like Tshort. Cool entries and sloped chords
-                // fly T = critDl untouched (both select2 branches agree at
-                // the boundary), so block S-curves are unaffected; the
+                // cross-multiplied, both sides negative there) first
+                // RELAXES its warp (attAdapt): while the entry fits the
+                // NEUTRAL floor (dirPrev*critDl >= 3*gap, i.e. the
+                // feasible g = 3*gap/(dirPrev*critDl) >= 1, reachable
+                // only at gAtt > 1), fly the whole deadline at that g --
+                // the pair (Tq, critDl) below -- where the floor sits
+                // exactly ON dirPrev: the leg lands ON TIME instead of
+                // early, which is the point (v1.5.0 turned high attack
+                // shapes into early bottoms and long flats exactly
+                // here). Only past neutral SHORTEN:
+                // attT = ceil(3*gap/(dirPrev*gShA)) puts the floor
+                // exactly ON dirPrev at the shorten's flight g, so the
+                // entry keeps its velocity, decelerates smoothly, lands
+                // at v1 EARLY and holds flat through the pin's play
+                // sample. Early landing at the window-deepest is safe by
+                // construction (every candidate value is >= v1: nothing
+                // binds until the pin plays out), and the mirrored
+                // no-undershoot lemma holds at the FC boundary with
+                // equality, so gain >= v1 survives -- m0Tt lands exactly
+                // ON 3*(p1 - p0) on both branches: on adapt the raw-g
+                // launch arm dirPrev*gAtt*Tt sits past the floor BY THE
+                // attHot GATE (Tt = critDl there), so max(g3, .)
+                // saturates to g3 with no pair arithmetic at all. Cool
+                // entries and sloped chords fly T = critDl untouched
+                // (all branches agree at their edges: the attHot edge
+                // lands on the adapt branch at gAtt > 1 and on
+                // Tsh == critDl at gAtt <= 1; the adapt/shorten edge on
+                // Tsh == critDl), so block S-curves are unaffected; the
                 // trigger algebra stays live throughout, so nothing is
-                // blinded -- see the header. The eps floor keeps the idle
-                // division finite when dirPrev reads >= 0 (that branch is
-                // discarded by the attHot gate, which is false for any
-                // dirPrev >= 0: hold and rising entries launch as before).
+                // blinded -- see the header. The eps floor keeps the
+                // idle division finite when dirPrev reads >= 0 (that
+                // branch is discarded by the attHot gate, which is false
+                // for any dirPrev >= 0: hold and rising entries launch
+                // as before).
                 attGap = critNum;
+                dlF = 1.0*critDl;
                 flatChord = critNpV==critVal;
                 attHot = flatChord&(((dirPrev*gA)*critDl)<(3*attGap));
-                attT = select2(attHot, critDl, max(1, min(critDl, Tsh)));
+                attAdapt = attHot&((dirPrev*critDl)>=(3*attGap));
+                attT = select2(attHot, critDl, select2(attAdapt, max(1, min(critDl, Tsh)), critDl));
                 T0 = max(1, select2(relTrig, attT, relT));
                 p1t = select2(relTrig, critVal, v1);
                 // landing chord / rideMax, ONE shared division: every
@@ -1017,10 +1164,10 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 // (n*T)/d, splitting the shared division in two. The warp
                 // rides the same scale: physical launch slopes latch as
                 // slope*T*g (TtG), physical landing slopes as slope*T/g
-                // (TtIG), both branch-shared through gCk like the
-                // quotient itself.
-                TtG = Tt*gCk;
-                TtIG = Tt*invGCk;
+                // (TtIG), both branch-shared through gF (= gCk, swung to
+                // 1.0 on an engaged relax) like the quotient itself.
+                TtG = Tt*gF;
+                TtIG = Tt*invGF;
                 dT = dirPrev*TtG;
                 rideT = min(dirPrev+(nhV-v1)*rideK, aim)*TtG;
                 // launch floor: never descend toward the deepest point (a
@@ -1086,12 +1233,13 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 //   Tclr^2 = (gain - p1t) * minFailed(dl^2/(gain - val)),
                 //   the min run cross-multiplied as a (num, den) pair
                 //   tree: ONE division + ONE sqrt total, ceil'd integer
-                //   like Tshort. The warp pulls the condition back
-                //   through wInv (see the header): Tclr additionally
-                //   scales by zClr = min(1, 1/gAtt) -- exact for
-                //   g <= 1, a further over-shorten factor <= gAtt at
-                //   g > 1. Overshortens by at most sqrt(3) in the
-                //   small-gap limit (times that factor) -- the safe
+                //   like Tshort. The condition is a u-space fact pulled
+                //   back at the flight's own clock: g <= 1 needs no
+                //   scale (wInv(x) <= x), and an engaged g > 1 leg flies
+                //   NEUTRAL (relaxCk -- see the header), where wInv is
+                //   the identity -- exact, no zClr factor since v1.6.0.
+                //   Overshortens by at most sqrt(3) in the
+                //   small-gap limit -- the safe
                 //   direction. A failed
                 //   candidate always has gain > val > p1t here (val > p1t
                 //   by the argmin, val < gain since p(dl) <= gain for
@@ -1113,18 +1261,23 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 ckM1 = select2(relTrig, max(g3, min(0, aim)*ckTIG), 0);
                 // the check cubic under the warp, contracted
                 // homogeneously. At deadline df the leg clock reads
-                // u = df/DD with DD = df + g*(ckT - df) (see the
-                // header); clearing DD^3 keeps the test division-free:
+                // u = df/DD with DD = df + g*(ckT - df), g = gN1/gD1
+                // the pre-engage flight pair (see the header); clearing
+                // DD^3 -- carried as DDs = DD*gD1, dfs = df*gD1, valid
+                // by the same homogeneity, gD1 > 0 -- keeps the test
+                // division-free:
                 //   pl = gain*DD^3 + ckM0*(df*DD^2)
                 //        + (g3 - 2*ckM0 - ckM1)*(df^2*DD)
                 //        + (2*(gain - p1t) + ckM0 + ckM1)*df^3
-                // in Horner form over df, tested against valC*DD^3 --
+                // in Horner form over dfs, tested against valC*DDs^3 --
                 // the warped p(u(df)) <= val exactly, play-time meaning
                 // intact. The df-free factors depend only on the latch,
                 // not the candidate, so they are computed ONCE per
-                // sample; each candidate pays DD, its powers and the
-                // Horner (~11 multiplies; ~5 unwarped). At g = 1,
-                // DD = df + (ckT - df) = ckT EXACTLY -- deadlines and
+                // sample; each candidate pays dfs, DDs, its powers and
+                // the Horner (~12 multiplies; ~5 unwarped). Plain
+                // latches carry gD1 = 1.0, so dfs = df exactly and DDs
+                // reproduces the scalar DD bit-for-bit; at g = 1,
+                // DDs = df + (ckT - df) = ckT EXACTLY -- deadlines and
                 // T0 are integer-valued doubles, every partial sum is
                 // integer -- so each product's operands, hence the whole
                 // Horner and the bound, reproduce the unwarped check
@@ -1140,10 +1293,11 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                         df = 1.0*dl;
                         df2 = df*df;
                         valC = min(val, 2.0);
-                        DD = df+gCk*(ckT-df);
-                        D2 = DD*DD;
-                        D3 = D2*DD;
-                        pl = gain*D3+df*(ckM0*D2+df*(ckC0*DD+df*ckD0));
+                        dfs = df*gD1;
+                        DDs = dfs+gN1*(ckT-df);
+                        D2 = DDs*DDs;
+                        D3 = D2*DDs;
+                        pl = gain*D3+dfs*(ckM0*D2+dfs*(ckC0*DDs+dfs*ckD0));
                         pass = (dl<=0)|(df>=ckT)|(pl<=(valC*D3));
                         num = select2(pass, df2, 1e30);
                         den = select2(pass, max(1e-30, gain-valC), 1.0);
@@ -1165,15 +1319,18 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                     };
                 checks = cands:(si.bus(4*nC), si.block(2)):par(i, nC, chk(i));
                 clrPair = checks:par(i, nC, (_, _, !)):mpTree(nC);
-                zClr = min(1.0, invGA);
-                Tneg = ceil(sqrt(max(0.0, (gain-p1t)*(clrPair:(_, !))/(clrPair:(!, _))))*zClr);
+                // no zClr: an engaged flight at g > 1 has been relaxed
+                // to neutral, where the wInv pull-back is the identity;
+                // g <= 1 never needed a scale (see the header).
+                Tneg = ceil(sqrt(max(0.0, (gain-p1t)*(clrPair:(_, !))/(clrPair:(!, _)))));
                 Tpos = checks:par(i, nC, (!, !, _)):minTree(nC);
                 Tclr = select2(dirPrev>0, Tneg, Tpos);
                 // Tpos doubles as the clear flag: every failed candidate
                 // contributes dlP = df < ckT <= 1e30 and every passing one
                 // the 1e30 sentinel, so "some check failed" == Tpos < 1e30,
                 // exactly -- no separate pass AND-tree is needed.
-                Tt = select2((relTrig==0)&(Tpos<1e30), T0, max(1, min(T0, Tclr)));
+                engaged = (relTrig==0)&(Tpos<1e30);
+                Tt = select2(engaged, T0, max(1, min(T0, Tclr)));
                 m0Tt = select2(relTrig,
                     max(g3, dT),
                     select2(liftAhead, aBT, max(aBT, rideT)));
@@ -1184,10 +1341,11 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 m0TN = select2(trig, m0T, m0Tt);
                 p1N = select2(trig, p1, p1t);
                 m1TN = select2(trig, m1T, m1Tt);
-                // the leg's warp g, latched at the trigger like T (its
-                // pre-first-trigger 0 is never consumed: gliding is
-                // false until a leg is latched)
-                gLN = select2(trig, gL, gCk);
+                // the leg's warp pair, latched at the trigger like T
+                // (the pre-first-trigger (0, 0) is never consumed:
+                // gliding is false until a leg is latched)
+                gNN = select2(trig, gNL, gNt);
+                gDN = select2(trig, gDL, gDt);
                 // segments start at k = 1: first step on the trigger sample, so
                 // per-sample re-triggers re-plan instead of stalling, and the
                 // trigger sample keeps the previous PHYSICAL velocity
@@ -1195,17 +1353,23 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 kN = select2(trig, min(k+1, TN+1), 1);
 
                 // Hermite basis at the warped clock u = w(k/T),
-                // w(t) = t/(t + g*(1-t)) folded into the division:
-                // u = k/(k + g*(T-k)) -- one division, replacing tau's.
-                // The denominator is >= k >= 1 on the live range
-                // (k <= T, g > 0); the max(1, ...) guards the parked
-                // k = T+1 read like tau's did (its value is discarded by
-                // gliding). u reaches EXACTLY 1 at k = T: k + g*(T-k)
-                // = k + g*0 = k, integer-valued, so lands (u = 1) one
-                // sample before the target plays, then holds it through
-                // the play sample -- the integer-T landing argument,
+                // w(t) = t/(t + g*(1-t)) folded into the division with
+                // g = gNL/gDL as the latched pair:
+                // u = k*gD/(k*gD + gN*(T-k)) -- one division, replacing
+                // tau's, absorbing the pair's denominator (gD > 0). On
+                // plain latches gD = 1.0, so k*gD = k exactly and the
+                // scalar clock is reproduced bit-for-bit. The
+                // denominator is >= k*gD >= 1 on the live range
+                // (k <= T, gN > 0, gD >= 1); the max(1, ...) guards the
+                // parked k = T+1 read like tau's did (its value can go
+                // small or negative there, is clamped finite, and is
+                // discarded by gliding). u reaches EXACTLY 1 at k = T:
+                // k*gD + gN*(T-k) = k*gD + gN*0 = k*gD, numerator ==
+                // denominator bitwise, so lands (u = 1) one sample
+                // before the target plays, then holds it through the
+                // play sample -- the integer-T landing argument,
                 // unchanged. mixed int/float division is float in Faust.
-                u = kN/max(1, kN+gLN*(TN-kN));
+                u = (kN*gDN)/max(1, kN*gDN+gNN*(TN-kN));
                 t2 = u*u;
                 t3 = t2*u;
                 h00 = 2*t3-3*t2+1;
@@ -1348,7 +1512,10 @@ relShapeSl = SmootherGroup(hslider("[3]release shape", 0, -1, 1, 0.001));
 // gives a 16:1 endpoint-velocity skew (w'(1)/w'(0) = g^2). The map
 // is the demo's choice, not the core's: the API takes raw g, and a
 // perceptual match to the shapedSmoother family (velocity-peak
-// position) can be layered on top later.
+// position) can be layered on top later. (Since v1.6.0 the
+// requested g is a per-leg ceiling: hot entries and engaged legs
+// degrade toward neutral in SHAPE, not duration -- see THE
+// FEASIBLE SHAPE in the core's header.)
 gAtt = pow(4.0, attShapeSl);
 gRel = pow(4.0, 0-relShapeSl);
 
