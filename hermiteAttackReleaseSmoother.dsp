@@ -1,5 +1,5 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "1.6.0";
+declare version "1.7.0";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -513,6 +513,72 @@ import("stdfaust.lib");
 //   excluding suffix) parks at v1 instead of lifting -- as a
 //   flat landing (the shortened leg decelerates in) rather than
 //   a velocity chop.
+//
+// THE AUC COMPENSATION (v1.7.0). Shaping a leg changes its area
+// under the curve (AUC), hence its perceived loudness: a
+// back-loaded release (g > 1) spends longer near full reduction
+// than a neutral one of the same nRel, so it sounds louder in
+// reduction; a front-loaded one (g < 1) sounds quieter. OPTIONAL,
+// off by default, one checkbox each (attAucComp / relAucComp), a
+// DEMO/GUI feature -- the CORE is untouched, taking raw g and raw
+// durations exactly as before. When a box is on, the leg's
+// DURATION is rescaled by a shape-derived area factor so the
+// loudness tracks the neutral leg's; the single leg stays a pure
+// scaled curve (the fold lands on the demo nAtt/nRel, before the
+// int()/clamp, so lookahead sizing and the leg clock use the same
+// compensated count -- grPlay's alignment delay reads that same
+// nAtt and tracks for free).
+//
+// The factor is derived from THIS smoother's OWN warped-Hermite
+// leg, NOT reused from shapedSmoother's auc_poly.lib: the shape
+// here lives in the Moebius time-warp w(t) = t/(t + g*(1-t)) on a
+// cubic Hermite, a different curve family from shapedSmoother's
+// cheapCurveBase, so its polynomial would compensate the wrong
+// area. The from-rest leg is value(tau) = h01(w(tau)),
+// h01(u) = 3u^2 - 2u^3, whose area over [0,1] has the closed form
+//   I(g) = (2g^3 - 6 g^2 ln g + 3 g^2 - 6 g + 1) / (g-1)^4,
+// computed inline (no bake step, no .lib) -- verified to machine
+// precision against a 4e5-point midpoint integral at
+// g in {1/4, 1/2, 2, 4}. It is 0/0 -> 1/2 at g = 1 and loses
+// float conditioning as |g-1| -> 0 (the (g-1)^4 amplifies), so
+// the neutral band |g-1| < 0.1 uses the exact Taylor series about
+// g = 1 (accurate < 1e-10 there, matching the closed form at the
+// switch to ~1e-10: smooth, no step). The closed arm's g is
+// forced out of the band before its denominator, since select2
+// evaluates both arms and 0/0 would poison the blend.
+//
+// The factor NORMALIZES to <= 1 (sharpest shape maps to 1):
+// aucLevelMult(g) = I(g_sharp)/I(g), g_sharp = 4 (the minimum
+// area the slider reaches), so it only ever SHORTENS -- the
+// maxAtt budget can only get colder, no allocation grows, and the
+// reported latency (nAtt - 1) varies with shape exactly as in
+// shapedSmoother, intended. Per-direction and independent: gAtt
+// and gRel can warp opposite ways at once, each gets its own
+// factor.
+//
+// The two directions accumulate reduction differently, so they
+// feed the factor differently. An ATTACK DIVES into reduction:
+// the reduction-area it racks up over the leg IS the leg area
+// I(gAtt), so the attack feeds gAtt directly. A RELEASE RECOVERS
+// out of reduction: the leg rises 0 -> 1 toward the (quiet) target,
+// so its reduction-area is 1 - I(gRel), and by the exact identity
+// 1 - I(g) = I(1/g) the release simply feeds 1/gRel into the SAME
+// aucLevelMult -- reflecting front-load <-> back-load. This holds
+// duration * (time spent deep in reduction) constant, the correct
+// way round: a back-loaded release that lingers deep is shortened,
+// a fast front-loaded recovery is not. Feeding gRel raw (the first
+// cut) compensated the recovery-area instead and ran REVERSED --
+// shortening the quiet front-loaded leg hardest.
+//
+// The g fed in is the REQUESTED (ceiling) g from the slider map, a
+// slider-rate GUI concern -- NOT the per-leg feasible gEff (THE
+// FEASIBLE SHAPE), which is a hot-entry runtime property and must
+// not feed back into duration sizing. Folded via the branchless
+// switched blend, exactly as shapedSmoother:
+// aucLevelMultSwitched(on, g)
+//   = 1 + on*(clamp01(aucLevelMult(g)) - 1); on in {0,1} so OFF
+// is bit-exact 1.0 and nAtt/nRel revert bit-identically -- the
+// g = 1 neutral guarantee the whole file rests on is undisturbed.
 //========================================================================
 
 //========================================================================
@@ -1499,11 +1565,23 @@ maxSR = 192000;
 maxAtt = int(0.05*maxSR);
 
 attMs = SmootherGroup(hslider("[0]attack lookahead [unit:ms]", 25, 0, 50, 0.1));
-nAtt = max(2, min(maxAtt, int(attMs*0.001*ma.SR)));
 attShapeSl = SmootherGroup(hslider("[1]attack shape", 0, -1, 1, 0.001));
-relMs = SmootherGroup(hslider("[2]release [unit:ms]", 50, 0, 500, 0.1));
-nRel = max(1, int(relMs*0.001*ma.SR));
-relShapeSl = SmootherGroup(hslider("[3]release shape", 0, -1, 1, 0.001));
+attAucComp = SmootherGroup(checkbox("[2]att auc comp"));
+relMs = SmootherGroup(hslider("[3]release [unit:ms]", 50, 0, 500, 0.1));
+relShapeSl = SmootherGroup(hslider("[4]release shape", 0, -1, 1, 0.001));
+relAucComp = SmootherGroup(checkbox("[5]rel auc comp"));
+// AUC (loudness) compensation -- OPTIONAL, off by default, one box each.
+// See THE AUC COMPENSATION in the header. The factor scales the DURATION
+// (fold BEFORE the int()/clamp), derived from THIS smoother's warped-Hermite
+// leg area, normalized so the sharpest shape = 1 (only ever shortens). When
+// a box is off its factor is exactly 1.0, so nAtt/nRel revert bit-identically.
+// The attack DIVES into reduction, so its accumulated reduction-area IS the
+// leg area I(g) -- feed gAtt directly. The release RECOVERS out of reduction,
+// so its reduction-area is 1 - I(g) = I(1/g) (an exact identity) -- feed
+// 1/gRel, which reflects front-load <-> back-load and holds duration * (deep
+// time) constant the correct way round.
+nAtt = max(2, min(maxAtt, int(attMs*0.001*ma.SR*aucLevelMultSwitched(attAucComp, gAtt))));
+nRel = max(1, int(relMs*0.001*ma.SR*aucLevelMultSwitched(relAucComp, 1.0/gRel)));
 // demo mapping onto the warp g (see THE SHAPE WARP in the header):
 // 0 is the unshaped smoother, bit-identically (pow(4, 0) == 1.0
 // exactly). POSITIVE is the shapedSmoother-flavored direction for
@@ -1518,6 +1596,58 @@ relShapeSl = SmootherGroup(hslider("[3]release shape", 0, -1, 1, 0.001));
 // FEASIBLE SHAPE in the core's header.)
 gAtt = pow(4.0, attShapeSl);
 gRel = pow(4.0, 0-relShapeSl);
+
+// --- AUC (loudness) area factor ---------------------------------------
+// The shape here is a Moebius time-warp w(t) = t/(t + g*(1-t)) on a cubic
+// Hermite leg -- a DIFFERENT curve family from shapedSmoother's
+// cheapCurveBase, so shapedSmoother's aucLevelMult / auc_poly.lib do NOT
+// transfer (they would cancel the wrong area). The factor is derived from
+// THIS smoother's own from-rest leg value(tau) = h01(w(tau)),
+// h01(u) = 3u^2 - 2u^3, whose area over [0,1] is, in closed form,
+//   I(g) = (2g^3 - 6 g^2 ln g + 3 g^2 - 6 g + 1) / (g-1)^4
+// (verified to machine precision against a 4e5-point midpoint integral at
+// g in {1/4, 1/2, 2, 4}). At g = 1 the (g-1)^4 denominator is 0/0 -> 1/2;
+// near g = 1 the closed form loses conditioning (the (g-1)^4 amplifies), so
+// the neutral band |g-1| < 0.1 uses the exact Taylor series about g = 1
+//   1/2 - d/5 + d^2/10 - 2 d^3/35 + d^4/28 - d^5/42 + d^6/60 - 2 d^7/165,
+//   d = g - 1
+// which is accurate to < 1e-10 there and matches the closed form at the
+// switch to ~1e-10 (smooth, no step). aucArea(g) picks the branch.
+//
+// select2 evaluates BOTH arms and blends arithmetically, so the closed
+// form's 0/0 at g = 1 would poison the result (nan*0 = nan) even when the
+// series arm is selected. gSafe forces g out of the neutral band before it
+// reaches the closed denominator -- harmless, since the closed arm is only
+// ever SELECTED when |g-1| >= 0.1, so the remapped neutral values are dead.
+aucAreaClosed(g) = (2.0*gs*gs*gs - 6.0*gs*gs*log(gs) + 3.0*gs*gs - 6.0*gs + 1.0)
+    / ((gs-1.0)*(gs-1.0)*(gs-1.0)*(gs-1.0))
+    with {
+        gs = select2(abs(1.0-g) < 0.1, g, 1.1);
+    };
+aucAreaSeries(g) = 0.5 + d*(c1 + d*(c2 + d*(c3 + d*(c4 + d*(c5 + d*(c6 + d*c7))))))
+    with {
+        d  = g - 1.0;
+        c1 = -1.0/5.0;
+        c2 =  1.0/10.0;
+        c3 = -2.0/35.0;
+        c4 =  1.0/28.0;
+        c5 = -1.0/42.0;
+        c6 =  1.0/60.0;
+        c7 = -2.0/165.0;
+    };
+aucArea(g) = select2(abs(1.0-g) < 0.1, aucAreaClosed(g), aucAreaSeries(g));
+// Normalize so the SHARPEST shape the slider reaches (g = 4, the minimum
+// area) maps to 1 -- the factor is then <= 1 for every g in [1/4, 4], so
+// compensation only ever SHORTENS a duration (the maxAtt budget can only
+// get colder, never grows an allocation). Both attack and release slider
+// ends reach g = 4 or g = 1/4; I is monotone in g and I(4) is the min.
+aucAreaSharp = aucAreaClosed(4.0);
+aucLevelMult(g) = aucAreaSharp / aucArea(g);
+// Branchless switched blend, exactly as shapedSmoother: on in {0,1} so the
+// off path is bit-exact 1.0 (durations revert bit-identically, preserving
+// the g = 1 neutral guarantee); factor clamped to [0,1] so on*(m-1) can't
+// blow up. Slider-rate: Faust hoists it out of the audio path.
+aucLevelMultSwitched(on, g) = 1.0 + on*(max(0.0, min(1.0, aucLevelMult(g))) - 1.0);
 
 process = MainGroup(demo(testSignal))
     with {
