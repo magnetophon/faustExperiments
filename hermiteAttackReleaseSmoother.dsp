@@ -1,5 +1,5 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "1.7.0";
+declare version "1.8.0";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -495,13 +495,17 @@ import("stdfaust.lib");
 //   nearest strictly-deeper point one scale out, not necessarily
 //   the true one. nhV mirrors the same blind spot on the release
 //   side.
-// * The hump class: an attack launched off a rising tangent can
-//   poke briefly above a flat-playing constraint before the
-//   deadline-0 candidate clamps it. Rising tangents come from the
-//   internal release legs, so that is where the humps come from.
-//   Escape hatch if out <= grPlay must be bit-exact: min the
-//   output with the delayed raw GR, at the price of a C1 corner
-//   at the touch point.
+// * The hump class (shrunk in v1.8.0): an attack launched off a
+//   rising tangent used to poke above a flat-playing constraint
+//   until the deadline-0 candidate clamped it -- a velocity chop.
+//   The rising-entry feasible shape (see the header) now caps the
+//   launch crest against the sample playing at the latch, C1
+//   kept, so the flat-ceiling case is gone. What remains: a
+//   ceiling that FALLS between candidate deadlines mid-flight can
+//   still be poked briefly before the check / re-latch / deadline
+//   clamp catch it. Escape hatch if out <= grPlay must be
+//   bit-exact: min the output with the delayed raw GR, at the
+//   price of a C1 corner at the touch point.
 // * A v1 that drops back to just above the gain mid-rise is
 //   flown past rather than re-targeted (see relTrig): the
 //   transient can arc above the momentary window min -- inside
@@ -513,6 +517,63 @@ import("stdfaust.lib");
 //   excluding suffix) parks at v1 instead of lifting -- as a
 //   flat landing (the shortened leg decelerates in) rather than
 //   a velocity chop.
+//
+// THE RISING-ENTRY FEASIBLE SHAPE (v1.8.0). The hump class had a
+// worst case the clearance check is structurally blind to: on a
+// FLAT playing stretch every dyadic candidate's min first occurs
+// at the sample playing now, so every candidate carries deadline
+// 0 and hits the dl <= 0 auto-pass -- the check has nothing to
+// test a rising launch against, and a back-loaded attack picked
+// up hot off an interrupted release leg drifts above the playing
+// level until the deadline-0 candidate wins the argmin and clamps
+// in T = 1: a velocity chop, the kink. The fix is the feasible-
+// shape medicine, third direction: bound the CREST at the latch.
+// For a leg with launch product a = m0T >= 0, drop
+// D = p0 - p1 > 0 and landing m1T <= 0, the crest height above
+// the launch point is, exactly at m1T = 0 (an upper bound for
+// m1T < 0, h11 <= 0),
+//   E(a) = a^2 (4a + 9D) / (27 (a + 2D)^2)
+// -- a u-space fact, so by the value-set lemma ONE condition
+// covers every warp g. With (4a + 9D) <= 4.5 (a + 2D) the
+// sufficient condition E(a) <= H inverts in closed form:
+//   aMax = 3H + sqrt(H (9H + 12D)),
+// H = max(0, val0 - gain) the headroom against the sample playing
+// NOW (tap 0's value: exactly the constraint the check cannot
+// see), overestimating E by <= 12.5% -- the safe direction. The
+// fold is two min()s: m0Tt's attack arm and ckM0 become
+// max(g3, min(., aMax)) -- bit-exact no-ops for descending and
+// rest entries (the arm is <= 0 <= aMax there) and for every
+// rising entry whose requested crest already fits. When the gate
+// binds (dirPrev*gAtt*critDl > aMax, the raw-g arm past the bound
+// BY THE GATE, so the min saturates to aMax with no adapted
+// arithmetic), the leg flies the full deadline at the feasible
+// clock as the latched pair (aMax, dirPrev*critDl) -- gEff =
+// aMax/(dirPrev*critDl), never divided, the evaluator's ratio is
+// scale-free -- so the physical launch velocity is exactly
+// dirPrev: C1 across the joint, the crest lands under the playing
+// level, and the deadline-0 clamp goes quiet. Floored at the
+// neutral-or-requested clock (min(gAtt, 1), sharing gShA): a
+// front-load is never imposed on a back-load request -- the
+// v1.5.0 early-bottom disease -- so past the floor the min caps
+// m0T at aMax with a latch corner of dirPrev - aMax/(gFloor*T),
+// orders below the clamp step it replaces and only reachable at
+// near-zero headroom. Residuals, all backstopped as before: a
+// ceiling that FALLS between candidate deadlines mid-flight
+// (existing check + per-sample re-latch + deadline clamp own it);
+// an engaged (clearance-shortened) attRise leg relaxes to
+// NEUTRAL outright at ANY gEff -- its pair denominator carries
+// the full deadline while the engaged flight flies Tclr, so
+// keeping the pair would launch hotter than dirPrev -- and the
+// aMax cap rides the min through the relax, so the crest bound
+// survives engagement. The gate self-guards its degenerate corners:
+// critDl = 0 and vanishing dirPrev both read the gate false
+// (aMax >= 0), so the pair's denominator never goes 0 on a taken
+// branch. Cost: one sqrt and a few multiplies on the latch path,
+// per sample, shared; no division, no state. At gAtt = 1 the
+// shaped and unshaped entry points still agree bit-identically
+// (both carry the cap); v1.8.0 does change the unshaped
+// smoother's own rising launches -- their humps are now capped
+// too, which is the point.
 //
 // THE AUC COMPENSATION (v1.7.0). Shaping a leg changes its area
 // under the curve (AUC), hence its perceived loudness: a
@@ -813,6 +874,11 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
         // min and the pin's play index; the tail = the next-higher pair
         v1 = cands:ba.selector(0, 4*nC+2);
         i1 = cands:ba.selector(1, 4*nC+2);
+        // tap 0's value = min over the next 1 sample = the sample
+        // playing NOW: the ceiling the rising-entry feasible shape
+        // caps the launch crest against (see the header). Always
+        // active (2^0 <= nAtt), so never the ma.MAX sentinel.
+        val0 = cands:ba.selector(4, 4*nC+2);
         nhV = cands:ba.selector(4*nC, 4*nC+2);
         nhD = cands:ba.selector(4*nC+1, 4*nC+2);
 
@@ -1019,13 +1085,31 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 //   since gD1 > 0).
                 gCk = select2(relTrig, gA, gR);
                 invGCk = select2(relTrig, invGA, invGR);
-                gAttN = select2(attHot, gA, select2(attAdapt, gShA, min(Tq, gA*dlF)));
-                gAttD = select2(attAdapt, 1.0, dlF);
+                // attRise overrides the descending-entry branches
+                // (mutually exclusive with attHot by the sign of
+                // dirPrev): the leg flies the full deadline at
+                // gEff = aMax/dpT as the pair (aMax, dpT) -- launch
+                // velocity exactly dirPrev, C1 -- floored at the
+                // neutral-or-requested clock (gShA*dpT: never
+                // front-load a back-load request; past the floor
+                // the m0Tt min caps at aMax, the accepted latch
+                // corner). The evaluator's ratio is scale-free, so
+                // the pair needs no normalization.
+                gAttN = select2(attRise, select2(attHot, gA, select2(attAdapt, gShA, min(Tq, gA*dlF))), max(aMax, gShA*dpT));
+                gAttD = select2(attRise, select2(attAdapt, 1.0, dlF), dpT);
                 gRelN = select2(relAdapt, select2(capped&(liftAhead==0), gR, gShR), min(Tq, gR*nRelF));
                 gRelD = select2(relAdapt, 1.0, nRelF);
                 gN1 = select2(relTrig, gAttN, gRelN);
                 gD1 = select2(relTrig, gAttD, gRelD);
-                relaxCk = engaged&(gN1>gD1);
+                // an engaged attRise leg relaxes to neutral even at
+                // gEff <= 1: its pair denominator carries the FULL
+                // deadline (dpT = dirPrev*critDl) while the engaged
+                // flight flies Tclr < critDl, so keeping the pair
+                // would launch hotter than dirPrev by up to gAtt --
+                // at neutral the min(., aMax) keeps the crest bound
+                // and the launch velocity lands at dirPrev (or
+                // capped below it, the safe direction).
+                relaxCk = engaged&((gN1>gD1)|attRise);
                 gNt = select2(relaxCk, gN1, 1.0);
                 gDt = select2(relaxCk, gD1, 1.0);
                 gF = select2(relaxCk, gCk, 1.0);
@@ -1149,6 +1233,30 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 flatChord = critNpV==critVal;
                 attHot = flatChord&(((dirPrev*gA)*critDl)<(3*attGap));
                 attAdapt = attHot&((dirPrev*critDl)>=(3*attGap));
+                // THE RISING-ENTRY FEASIBLE SHAPE (v1.8.0, see the
+                // header). Crest bound for a rising launch: with
+                // a = m0T, D = gain - critVal (= -critNum, free off
+                // the tree, > 0 on any attack), the crest above the
+                // launch point is E(a) = a^2(4a+9D)/(27(a+2D)^2)
+                // (exact at m1T = 0, an upper bound for m1T <= 0),
+                // and E(a) <= H is implied by a <= aMax below --
+                // one sqrt, no division. H = headroom against the
+                // sample playing NOW (tap 0), floored at 0; the
+                // sqrt argument is guarded per the porting rules
+                // (D < 0 on discarded release-branch evaluations).
+                // aMax >= 0 always, so min(., aMax) is a bit-exact
+                // no-op on every arm that is <= 0 (rest and
+                // descending entries) and on every rising entry
+                // whose requested crest already fits.
+                attHeadroom = max(0.0, val0-gain);
+                aMax = 3.0*attHeadroom+sqrt(max(0.0, attHeadroom*(9.0*attHeadroom+(0.0-12.0*critNum))));
+                // the gate: the requested plan's crest exceeds the
+                // headroom. dpT = dirPrev*critDl > 0 on any taken
+                // branch: critDl = 0 or dirPrev <= 0 read the gate
+                // false (aMax >= 0, strict >), so the pair's
+                // denominator never goes 0 where it is consumed.
+                dpT = dirPrev*dlF;
+                attRise = (dirPrev>0)&((gA*dpT)>aMax);
                 attT = select2(attHot, critDl, select2(attAdapt, max(1, min(critDl, Tsh)), critDl));
                 T0 = max(1, select2(relTrig, attT, relT));
                 p1t = select2(relTrig, critVal, v1);
@@ -1323,7 +1431,14 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 ckT = 1.0*T0;
                 ckTG = ckT*gCk;
                 ckTIG = ckT*invGCk;
-                ckM0 = max(g3, dirPrev*ckTG);
+                // the crest cap rides both the plan and the check:
+                // on attRise the raw-g arm sits past aMax BY THE
+                // GATE, so the min saturates to aMax exactly; on
+                // rest and descending entries the arm is <= 0 <=
+                // aMax, a bit-exact no-op. The release branch of
+                // ckM0 is never consumed (engagement gates on
+                // relTrig == 0), so the min rides unconditionally.
+                ckM0 = max(g3, min(dirPrev*ckTG, aMax));
                 ckM1 = select2(relTrig, max(g3, min(0, aim)*ckTIG), 0);
                 // the check cubic under the warp, contracted
                 // homogeneously. At deadline df the leg clock reads
@@ -1398,7 +1513,7 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 engaged = (relTrig==0)&(Tpos<1e30);
                 Tt = select2(engaged, T0, max(1, min(T0, Tclr)));
                 m0Tt = select2(relTrig,
-                    max(g3, dT),
+                    max(g3, min(dT, aMax)),
                     select2(liftAhead, aBT, max(aBT, rideT)));
                 m1Tt = select2(relTrig, max(g3, min(0, aim)*TtIG), 0);
 
@@ -1598,8 +1713,8 @@ nRel = max(1, int(relMs*0.001*ma.SR*aucLevelMultSwitched(relAucComp, 1.0/gRel)))
 
 // Shape slider base: g = shapeBase^s, so |s| = 1 gives a
 // shapeBase^2 : 1 endpoint-velocity skew. Must stay > 1.
-// shapeBase = 4;
-shapeBase = SmootherGroup(hslider("[2a]shape base", 8, 4, 16, 1));
+shapeBase = 4;
+// shapeBase = SmootherGroup(hslider("[2a]shape base", 8, 4, 16, 1));
 
 gAtt = pow(shapeBase, attShapeSl);
 gRel = pow(shapeBase, 0-relShapeSl);
