@@ -1564,11 +1564,11 @@ testSignal3 = testSignal1:relFollow
 maxSR = 192000;
 maxAtt = int(0.05*maxSR);
 
-relHoldMs = SmootherGroup(hslider("[0]rel hold[unit:ms]", 50, 0, maxRelHold*1000, 1));
-attMs = SmootherGroup(hslider("[1]attack lookahead [unit:ms]", 25, 0, 50, 0.1));
+relHoldMs = SmootherGroup(hslider("[0]rel hold[unit:ms][scale:log]", 50, 0.1, maxRelHold*1000, 0.1));
+attMs = SmootherGroup(hslider("[1]attack lookahead [unit:ms][scale:log]", 25, 0.1, 50, 0.1));
 attShapeSl = SmootherGroup(hslider("[2]attack shape", 0, -1, 1, 0.001));
 attAucComp = SmootherGroup(checkbox("[3]att auc comp"));
-relMs = SmootherGroup(hslider("[4]release [unit:ms]", 50, 0, 500, 0.1));
+relMs = SmootherGroup(hslider("[4]release [unit:ms][scale:log]", 50, 0.1, 2000, 0.1));
 relShapeSl = SmootherGroup(hslider("[5]release shape", 0, -1, 1, 0.001));
 relAucComp = SmootherGroup(checkbox("[6]rel auc comp"));
 // AUC (loudness) compensation -- OPTIONAL, off by default, one box each.
@@ -1595,8 +1595,14 @@ nRel = max(1, int(relMs*0.001*ma.SR*aucLevelMultSwitched(relAucComp, 1.0/gRel)))
 // requested g is a per-leg ceiling: hot entries and engaged legs
 // degrade toward neutral in SHAPE, not duration -- see THE
 // FEASIBLE SHAPE in the core's header.)
-gAtt = pow(4.0, attShapeSl);
-gRel = pow(4.0, 0-relShapeSl);
+
+// Shape slider base: g = shapeBase^s, so |s| = 1 gives a
+// shapeBase^2 : 1 endpoint-velocity skew. Must stay > 1.
+// shapeBase = 4;
+shapeBase = SmootherGroup(hslider("[2a]shape base", 8, 4, 16, 1));
+
+gAtt = pow(shapeBase, attShapeSl);
+gRel = pow(shapeBase, 0-relShapeSl);
 
 // --- AUC (loudness) area factor ---------------------------------------
 // The shape here is a Moebius time-warp w(t) = t/(t + g*(1-t)) on a cubic
@@ -1641,7 +1647,10 @@ aucArea(g) = select2(abs(1.0-g)<0.1, aucAreaClosed(g), aucAreaSeries(g));
 // compensation only ever SHORTENS a duration (the maxAtt budget can only
 // get colder, never grows an allocation). Both attack and release slider
 // ends reach g = 4 or g = 1/4; I is monotone in g and I(4) is the min.
-aucAreaSharp = aucAreaClosed(4.0);
+
+// Sharpest shape the slider reaches is g = shapeBase (min area);
+// g ranges over [1/shapeBase, shapeBase] and I is monotone in g.
+aucAreaSharp = aucAreaClosed(shapeBase);
 aucLevelMult(g) = aucAreaSharp/aucArea(g);
 // Branchless switched blend, exactly as shapedSmoother: on in {0,1} so the
 // off path is bit-exact 1.0 (durations revert bit-identically, preserving
