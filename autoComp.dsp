@@ -46,10 +46,10 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                 gain = gain_computer(1, thresh, knee, level)*strength:si.onePoleSwitching(fastTime, 0):hbargraph("[0]gain[unit:dB]", -24, 0);
 
                 // used for both the release of gain and the attack of ref
-                fastTime = interpolate_logarithmic(1-dv, 1/6000, mediumTime);
+                fastTime = interpolate_logarithmic(dv, mediumTime, 1/6000);
 
                 mediumTime = hslider("mediumTime[scale:log]", 0.42, 0.1, 5, 0.001);
-                longRel = hslider("longRel[scale:log]", 5, 1, 1000, 1);
+                longRel = hslider("longRel[scale:log]", 13, 5, 1000, 0.1);
 
                 ref = (prevGain-transitionRange):min(0)*strength:si.onePoleSwitching(refRel, fastTime):hbargraph("[1]ref[unit:dB]", -24, 0);
                 // :ba.db2linear// : smootherOrder(maxOrder,refOrder,refRel,0)
@@ -57,19 +57,19 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                 refRel = interpolate_logarithmic(dv,
                     mediumTime,
                     longRel);
-                dv = (fastGR:min(0)/transitionRange):min(1):hbargraph("dv", 0, 1);
+                dv = (fastGR/transitionRange):max(0):min(1):hbargraph("dv", 0, 1);
                 // dv = (fastGR:min(0)/transitionRange):min(1):hbargraph("dv", 0, 1);
-                fastGR = (prevGain-prevRef):min(0);
+                fastGR = (prevGain-prevRef);
                 // :hbargraph("fast GR[unit:dB]", -24, 0);
             };
     };
 
 interpolate_logarithmic(dv, v0, v1) = v0*pow(v1/v0, dv);
-transitionRange = hslider("transitionRange", -9, -30, 0.1, 0.1);
+transitionRange = hslider("transitionRange", -6, -30, 0.1, 0.1);
 
 compressor(l, r) = l*gain, r*gain, gain
     with {
-        gain = compression_gain_mono_db_auto(1, thres, 0, (abs(l)+abs(r)):ba.linear2db):ba.db2linear;
+        gain = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db):ba.db2linear;
     };
 
 thres = hslider("thres[unit:dB]", -1, -30, 0, 0.1);
