@@ -5,6 +5,9 @@ declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
 import("stdfaust.lib");
 
+// TODO: DJ gain release gets a ceiling target that it releases towards
+// DJ gain attack gets a interpolator that goes to 0 when the raw GR is "overshoot" dB under the DJ GR.
+
 //========================================================================
 // Attack + release lookahead smoother. ONE Hermite-leg follower shapes
 // both directions of a gain-reduction signal: descents chase the
@@ -1674,6 +1677,16 @@ testSignal3 = testSignal1:relFollow
             };
     };
 
+grMeter = DJcompGroup(hbargraph("[0]gain reduction[unit:dB]", -24, 0));
+refMeter = DJcompGroup(hbargraph("[1]ref[unit:dB]", -24, 0));
+dvMeter = DJcompGroup(hbargraph("[2]dv", 0, 1));
+
+thres = DJcompGroup(hslider("[3]thres[unit:dB]", -1, -30, 0, 0.1));
+startRelease = DJcompGroup(hslider("[4]startRelease[unit:ms][scale:log]", 13, 1, 3000, 1)*0.001);
+endRelease = DJcompGroup(hslider("[5]endRelease[unit:ms][scale:log]", 69, 1, 3000, 1)*0.001);
+transitionTime = DJcompGroup(hslider("[6]transitionTime[unit:ms][scale:log]", 420, 1, 3000, 1)*0.001);
+transitionRange = DJcompGroup(hslider("[7]transitionRange[unit:dB]", -9, -30, -0.1, 0.1));
+
 // --- Smoother parameters ---
 // compile-time maximum: 50 ms at maxSR. Lower maxSR if you never run
 // above 48/96k, to save memory and a few reduce stages.
@@ -1681,11 +1694,11 @@ maxSR = 192000;
 maxAtt = int(0.05*maxSR);
 
 relHoldMs = SmootherGroup(hslider("[0]rel hold[unit:ms][scale:log]", 50, 0.1, maxRelHold*1000, 0.1));
-attMs = SmootherGroup(hslider("[1]attack lookahead [unit:ms][scale:log]", 25, 0.1, 50, 0.1));
-attShapeSl = SmootherGroup(hslider("[2]attack shape", 0, -1, 1, 0.001));
+attMs = SmootherGroup(hslider("[1]attack lookahead [unit:ms][scale:log]", 42, 0.1, 50, 0.1));
+attShapeSl = SmootherGroup(hslider("[2]attack shape", 0.69, 0, 1, 0.001));
 attAucComp = SmootherGroup(checkbox("[3]att auc comp"));
-relMs = SmootherGroup(hslider("[4]release [unit:ms][scale:log]", 50, 1, 1000, 1));
-relShapeSl = SmootherGroup(hslider("[5]release shape", 0, -1, 1, 0.001));
+relMs = SmootherGroup(hslider("[4]release [unit:ms][scale:log]", 42, 1, 1000, 1));
+relShapeSl = SmootherGroup(hslider("[5]release shape", 0.69, 0, 1, 0.001));
 relAucComp = SmootherGroup(checkbox("[6]rel auc comp"));
 // AUC (loudness) compensation -- OPTIONAL, off by default, one box each.
 // See THE AUC COMPENSATION in the header. The factor scales the DURATION
@@ -1807,11 +1820,6 @@ gain_computer(strength, thresh, knee, level) = select3((level>(thresh-(knee/2)))
     ((level-thresh+(knee/2)):pow(2)/(2*max(ma.EPSILON, knee))),
     (level-thresh)):max(0)*-strength;
 
-// autoAttRel(x) = loop~(_, _)
-// with {
-// loop(prevgain,prevRef)
-// gain_computer(strength, thresh, knee, level)};
-
 // TODO: put smoothing after channel-link in N-chan version
 compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !)
     with {
@@ -1819,34 +1827,28 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
             with {
                 rawGain = gain_computer(1, thresh, knee, level)*strength;
                 holdGain = rawGain:releaseHold;
-                gain = holdGain:si.onePoleSwitching(fastTime, 0);
-                //:DJcompGroup(hbargraph("[0]gain[unit:dB]", -24, 0));
 
-                // used for both the release of gain and the attack of ref
-                fastTime = interpolate_logarithmic(dv, mediumTime, 1/6000);
+                gain = holdGain:si.onePoleSwitching(gainRel, 0);
+                gainRel = interpolate_logarithmic(dv, endRelease, startRelease);
 
-                mediumTime = DJcompGroup(hslider("[3]mediumTime[unit:ms][scale:log]", 42, 1, 1000, 1)*0.001);
-                longRel = DJcompGroup(hslider("[4]longRel[unit:S][scale:log]", 13, 1, 100000000, 0.1));
+                refAttackTime = 0;
+                singleprecisionMAX = 3.402823466e+38;
 
-                ref = (prevGain-transitionDiff):min(0)*strength:si.onePoleSwitching(refRel, fastTime):DJcompGroup(hbargraph("[1]ref[unit:dB]", -24, 0));
-                refRel = interpolate_logarithmic(dv,
-                    mediumTime,
-                    longRel);
-                dv = (fastGR/transitionDiv):max(0):min(1):DJcompGroup(hbargraph("[1]dv", 0, 1));
+                ref = (prevGain-transitionRange):min(0)*strength:si.onePoleSwitching(refRel, refAttackTime):refMeter;
+                refRel = it.interpolate_linear(dv,
+                    transitionTime,
+                    singleprecisionMAX/128);
                 fastGR = (prevGain-prevRef);
+                dv = (fastGR/transitionRange):max(0):min(1):dvMeter;
             };
     };
 
-thres = DJcompGroup(hslider("[2]thres[unit:dB]", -1, -30, 0, 0.1));
 interpolate_logarithmic(dv, v0, v1) = v0*pow(v1/v0, dv);
 
-// transitionRange = DJcompGroup(hslider("[5]transitionRange[unit:dB]", -9, -30, 0.1, 0.1));
-transitionDiff = DJcompGroup(hslider("[5]transitionDiff[unit:dB]", -9, -30, 0.1, 0.1));
-transitionDiv = DJcompGroup(hslider("[6]transitionDiv[unit:dB]", -9, -30, 0.1, 0.1));
-
-compressor(l, r) = l@latency*gain, r@latency*gain, gain
+compressor(l, r) = l@latency*gain, r@latency*gain, (preGain:ba.db2linear)@(nAtt-1), gain
     with {
-        gain = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db):lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, maxAtt):DJcompGroup(hbargraph("[0]gain[unit:dB]", -24, 0)):ba.db2linear;
+        preGain = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db);
+        gain = preGain:lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, maxAtt):grMeter:ba.db2linear;
         latency = nAtt-1+rel_hold_samples;
     };
 
