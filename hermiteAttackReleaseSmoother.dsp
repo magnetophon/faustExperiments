@@ -1,12 +1,14 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "1.8.0";
+declare version "1.9.0";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
 import("stdfaust.lib");
 
 // TODO: DJ gain release gets a ceiling target that it releases towards
-// DJ gain attack gets a interpolator that goes to 0 when the raw GR is "overshoot" dB under the DJ GR.
+// DJ gain attack: DONE in v1.9.0 -- the adaptive interpolator is superseded
+// by the overshoot cap in the smoother (lookaheadAttackReleaseSmootherShapedOs
+// + attMode 2); the old law is kept as attMode 0/1 for A/B.
 
 //========================================================================
 // Attack + release lookahead smoother. ONE Hermite-leg follower shapes
@@ -1630,6 +1632,54 @@ lookaheadAttackReleaseSmootherShapedCk(nAtt, nRel, gAtt, gRel, maxAtt, checkEver
         cands = rawGR:slidingMinIdxBankAtt(nAtt, maxAtt);
     };
 
+//----------------`lookaheadAttackReleaseSmootherOs`---------------------
+// The smoother with a TRANSIENT overshoot allowance in dB. Two
+// constraint arms are combined by min() and fed to the plain smoother:
+//
+//   min(slowGR, min(0, rawGR + os)) : lookaheadAttackReleaseSmoother...
+//
+// * the CAP arm rawGR + os (clamped <= 0): the output may sit at most
+//   `os` dB above the raw GR at any play time -- a HARD bound, by the
+//   smoother's own brickwall induction (output <= its input's window
+//   min at play times, unchanged).
+// * the SLOW arm slowGR: the musical descent the gain settles along
+//   once inside the band -- and the reason the parameter lives OUT
+//   here: the follower's idle state HOLDS (there is no downward
+//   drift), so a transient-only overshoot needs a settle RATE, and
+//   that rate should stay a caller-owned signal (rawGR through a
+//   fixed slow one-pole attack, say), not a constant hidden in the
+//   core.
+//
+// Feeding the min() upstream loses nothing vs. relaxing candidates
+// inside the follower: pointwise min factors through the sliding-min
+// bank exactly -- every dyadic tap of the combined signal is the min
+// of the two signals' taps, timestamps riding with the winners -- so
+// the follower sees precisely the union constraint schedule, and
+// every core lemma applies verbatim. The min() corner at the arm
+// crossover is deliberately left in the INPUT: planning C1 legs
+// through a cornered constraint schedule is exactly what the
+// follower does.
+//
+// Neutral: os = 0 with slowGR = rawGR is the plain smoother for any
+// GR <= 0 (min(x, min(0, x)) == x there); an os past the working
+// depth reads the cap arm >= 0 >= slowGR, so the input is slowGR
+// exactly (pure slow path). Releases and latency are untouched.
+//
+// #### Usage
+//
+// ```
+// slowGR, rawGR : lookaheadAttackReleaseSmootherOs(nAtt, nRel, maxAtt, os) : _
+// slowGR, rawGR : lookaheadAttackReleaseSmootherShapedOs(nAtt, nRel, gAtt, gRel, maxAtt, os) : _
+// ```
+//
+// * `os`: overshoot allowance in dB (>= 0, control rate)
+// * `slowGR`: the slow/settle gain path (<= 0 dB)
+// * `rawGR`: the raw (full-depth) GR signal the cap is measured from
+//----------------------------------------------------------------------
+lookaheadAttackReleaseSmootherOs(nAtt, nRel, maxAtt, os, slowGR, rawGR) = lookaheadAttackReleaseSmootherShapedOs(nAtt, nRel, 1, 1, maxAtt, os, slowGR, rawGR);
+
+lookaheadAttackReleaseSmootherShapedOs(nAtt, nRel, gAtt, gRel, maxAtt, os, slowGR, rawGR) = min(slowGR, min(0.0, rawGR+os)):lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, maxAtt);
+
 //-------------------------------- demo ---------------------------------
 // out1: delayed raw GR (the constraint the smoother must stay <= )
 // out2: smoother output
@@ -1683,15 +1733,18 @@ dvMeter = DJcompGroup(hbargraph("[02]dv", 0, 1));
 
 thres = DJcompGroup(hslider("[03]thres[unit:dB]", -1, -30, 0, 0.1));
 
-attOvershoot = DJcompGroup(hslider("[04]attOvershoot[unit:dB]", 4.2, 0, 18, 0.1)):max(ma.EPSILON);
-gainAttDVmeter = DJcompGroup(_<:(_, ((_):hbargraph("[05]attDV", 0, 1))):attach);
-maxAttDJ = DJcompGroup(hslider("[06]maxAtt[unit:ms][scale:log]", 42, 1, 420, 1)*0.001);
-attShape = DJcompGroup(hslider("[07]attShape", -0.42, -1, 1, 0.01));
+// attack mode -- see the modes comment in compression_gain_mono_db_auto:
+// 0 = v1.8.0 adaptive, 1 = adaptive + cap, 2 = fixed slow + cap (default)
+attMode = DJcompGroup(hslider("[04]att mode", 2, 0, 2, 1));
+attOvershoot = DJcompGroup(hslider("[05]attOvershoot[unit:dB]", 4.2, 0, 18, 0.1)):max(ma.EPSILON);
+gainAttDVmeter = DJcompGroup(_<:(_, ((_):hbargraph("[06]attDV", 0, 1))):attach);
+maxAttDJ = DJcompGroup(hslider("[07]maxAtt[unit:ms][scale:log]", 42, 1, 420, 1)*0.001);
+attShape = DJcompGroup(hslider("[08]attShape", -0.42, -1, 1, 0.01));
 
-startRelease = DJcompGroup(hslider("[08]startRelease[unit:ms][scale:log]", 13, 1, 3000, 1)*0.001);
-endRelease = DJcompGroup(hslider("[09]endRelease[unit:ms][scale:log]", 69, 1, 3000, 1)*0.001);
-transitionTime = DJcompGroup(hslider("[10]transitionTime[unit:ms][scale:log]", 420, 1, 3000, 1)*0.001);
-transitionRange = DJcompGroup(hslider("[11]transitionRange[unit:dB]", -9, -18, -0.1, 0.1));
+startRelease = DJcompGroup(hslider("[09]startRelease[unit:ms][scale:log]", 13, 1, 3000, 1)*0.001);
+endRelease = DJcompGroup(hslider("[10]endRelease[unit:ms][scale:log]", 69, 1, 3000, 1)*0.001);
+transitionTime = DJcompGroup(hslider("[11]transitionTime[unit:ms][scale:log]", 420, 1, 3000, 1)*0.001);
+transitionRange = DJcompGroup(hslider("[12]transitionRange[unit:dB]", -9, -18, -0.1, 0.1));
 
 // --- Smoother parameters ---
 // compile-time maximum: 50 ms at maxSR. Lower maxSR if you never run
@@ -1827,20 +1880,46 @@ gain_computer(strength, thresh, knee, level) = select3((level>(thresh-(knee/2)))
     (level-thresh)):max(0)*-strength;
 
 // TODO: put smoothing after channel-link in N-chan version
-compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !)
+// Outputs (gain, holdGain): the DJ gain and the hold-processed raw GR
+// it chases -- the compressor feeds BOTH into the smoother's overshoot
+// cap (lookaheadAttackReleaseSmootherShapedOs).
+compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !, _)
     with {
-        loop(prevGain, prevRef) = gain, ref
+        loop(prevGain, prevRef) = gain, ref, holdGain
             with {
                 // rawGain = gain_computer(1, thresh-attOvershoot, knee, level)*strength;
                 rawGain = gain_computer(1, thresh, knee, level)*strength;
                 holdGain = rawGain:releaseHold;
 
+                // --- attack modes (attMode, A/B) ---
+                // 0: the v1.8.0 adaptive attack -- attCurve warps the
+                //    pole from maxAttDJ down to 0 as the lag
+                //    prevGain - holdGain approaches attOvershoot. The
+                //    overshoot bound is only EMERGENT here (a reactive
+                //    coefficient-modulated pole: the actual excess
+                //    depends on the rise rate, and the fast end
+                //    degenerates to an instant clamp).
+                // 1: mode 0's pole plus the hard cap at
+                //    holdGain + attOvershoot (the historic gain1
+                //    experiment, live).
+                // 2 (default): FIXED slow pole + the hard cap. The cap
+                //    corner is deliberate: the smoother downstream
+                //    plans C1 legs through it with lookahead (the
+                //    compressor re-applies the same cap in the Os
+                //    wrapper -- idempotent here), so the pair
+                //    (maxAttDJ, attOvershoot) fully determines the
+                //    attack: musical pace outside the band, exact
+                //    capped protection inside it, settle to full depth
+                //    at maxAttDJ. attShape and the attDV meter only
+                //    drive modes 0/1.
                 coeff = select2(holdGain>prevGain, ba.tau2pole(gainAtt), ba.tau2pole(gainRel));
                 smoothed = holdGain+(prevGain-holdGain)*coeff;
-                gainSEL = select3(DJcompGroup(hslider("OS", 0, 0, 2, 1)), smoothed, gain1, gain2);
+                gain0 = holdGain:si.onePoleSwitching(gainRel, gainAtt);
                 gain1 = min(smoothed, holdGain+attOvershoot);
+                gainSlow = holdGain:si.onePoleSwitching(gainRel, maxAttDJ);
+                gain2 = min(gainSlow, min(0.0, holdGain+attOvershoot));
+                gain = select3(attMode, gain0, gain1, gain2);
 
-                gain = holdGain:si.onePoleSwitching(gainRel, gainAtt);
                 gainRel = interpolate_logarithmic(dv, endRelease, startRelease);
                 gainAttDV = (prevGain-holdGain)/attOvershoot:max(0):min(1):gainAttDVmeter;
 
@@ -1873,8 +1952,10 @@ interpolate_logarithmic(dv, v0, v1) = v0*pow(v1/v0, dv);
 
 compressor(l, r) = l@latency*gain, r@latency*gain, (preGain:ba.db2linear)@(nAtt-1), gain
     with {
-        preGain = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db);
-        gain = preGain:lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, maxAtt):grMeter:ba.db2linear;
+        preBoth = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db);
+        preGain = preBoth:(_, !);
+        preHold = preBoth:(!, _);
+        gain = lookaheadAttackReleaseSmootherShapedOs(nAtt, nRel, gAtt, gRel, maxAtt, attOvershoot, preGain, preHold):grMeter:ba.db2linear;
         latency = nAtt-1+rel_hold_samples;
     };
 
