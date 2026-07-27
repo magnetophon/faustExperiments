@@ -6,9 +6,6 @@ declare copyright "2026, Bart Brouns";
 import("stdfaust.lib");
 
 // TODO: DJ gain release gets a ceiling target that it releases towards
-// DJ gain attack: DONE in v1.9.0 -- the adaptive interpolator is superseded
-// by the overshoot cap in the smoother (lookaheadAttackReleaseSmootherShapedOs
-// + attMode 2); the old law is kept as attMode 0/1 for A/B.
 
 //========================================================================
 // Attack + release lookahead smoother. ONE Hermite-leg follower shapes
@@ -1733,18 +1730,13 @@ dvMeter = DJcompGroup(hbargraph("[02]dv", 0, 1));
 
 thres = DJcompGroup(hslider("[03]thres[unit:dB]", -1, -30, 0, 0.1));
 
-// attack mode -- see the modes comment in compression_gain_mono_db_auto:
-// 0 = v1.8.0 adaptive, 1 = adaptive + cap, 2 = fixed slow + cap (default)
-attMode = DJcompGroup(hslider("[04]att mode", 2, 0, 2, 1));
-attOvershoot = DJcompGroup(hslider("[05]attOvershoot[unit:dB]", 4.2, 0, 18, 0.1)):max(ma.EPSILON);
-gainAttDVmeter = DJcompGroup(_<:(_, ((_):hbargraph("[06]attDV", 0, 1))):attach);
-maxAttDJ = DJcompGroup(hslider("[07]maxAtt[unit:ms][scale:log]", 42, 1, 420, 1)*0.001);
-attShape = DJcompGroup(hslider("[08]attShape", -0.42, -1, 1, 0.01));
+attOvershoot = DJcompGroup(hslider("[04]attOvershoot[unit:dB]", 4.2, 0, 18, 0.1));
+maxAttDJ = DJcompGroup(hslider("[05]maxAtt[unit:ms][scale:log]", 42, 1, 420, 1)*0.001);
 
-startRelease = DJcompGroup(hslider("[09]startRelease[unit:ms][scale:log]", 13, 1, 3000, 1)*0.001);
-endRelease = DJcompGroup(hslider("[10]endRelease[unit:ms][scale:log]", 69, 1, 3000, 1)*0.001);
-transitionTime = DJcompGroup(hslider("[11]transitionTime[unit:ms][scale:log]", 420, 1, 3000, 1)*0.001);
-transitionRange = DJcompGroup(hslider("[12]transitionRange[unit:dB]", -9, -18, -0.1, 0.1));
+startRelease = DJcompGroup(hslider("[06]startRelease[unit:ms][scale:log]", 13, 1, 3000, 1)*0.001);
+endRelease = DJcompGroup(hslider("[07]endRelease[unit:ms][scale:log]", 69, 1, 3000, 1)*0.001);
+transitionTime = DJcompGroup(hslider("[08]transitionTime[unit:ms][scale:log]", 420, 1, 3000, 1)*0.001);
+transitionRange = DJcompGroup(hslider("[09]transitionRange[unit:dB]", -9, -18, -0.1, 0.1));
 
 // --- Smoother parameters ---
 // compile-time maximum: 50 ms at maxSR. Lower maxSR if you never run
@@ -1887,54 +1879,24 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
     with {
         loop(prevGain, prevRef) = gain, ref, holdGain
             with {
-                // rawGain = gain_computer(1, thresh-attOvershoot, knee, level)*strength;
                 rawGain = gain_computer(1, thresh, knee, level)*strength;
                 holdGain = rawGain:releaseHold;
 
-                // --- attack modes (attMode, A/B) ---
-                // 0: the v1.8.0 adaptive attack -- attCurve warps the
-                //    pole from maxAttDJ down to 0 as the lag
-                //    prevGain - holdGain approaches attOvershoot. The
-                //    overshoot bound is only EMERGENT here (a reactive
-                //    coefficient-modulated pole: the actual excess
-                //    depends on the rise rate, and the fast end
-                //    degenerates to an instant clamp).
-                // 1: mode 0's pole plus the hard cap at
-                //    holdGain + attOvershoot (the historic gain1
-                //    experiment, live).
-                // 2 (default): FIXED slow pole + the hard cap. The cap
-                //    corner is deliberate: the smoother downstream
-                //    plans C1 legs through it with lookahead (the
-                //    compressor re-applies the same cap in the Os
-                //    wrapper -- idempotent here), so the pair
-                //    (maxAttDJ, attOvershoot) fully determines the
-                //    attack: musical pace outside the band, exact
-                //    capped protection inside it, settle to full depth
-                //    at maxAttDJ. attShape and the attDV meter only
-                //    drive modes 0/1.
-                coeff = select2(holdGain>prevGain, ba.tau2pole(gainAtt), ba.tau2pole(gainRel));
-                smoothed = holdGain+(prevGain-holdGain)*coeff;
-                gain0 = holdGain:si.onePoleSwitching(gainRel, gainAtt);
-                gain1 = min(smoothed, holdGain+attOvershoot);
+                // --- attack ---
+                // FIXED slow pole toward holdGain, hard-capped at
+                // holdGain + attOvershoot. The cap corner is
+                // deliberate: the smoother downstream plans C1 legs
+                // through it with lookahead (the compressor re-applies
+                // the same cap in the Os wrapper -- idempotent here,
+                // kept in the loop so dv and ref read the capped
+                // trajectory), so the pair (maxAttDJ, attOvershoot)
+                // fully determines the attack: musical pace outside
+                // the band, exact capped protection inside it, settle
+                // to full depth at maxAttDJ.
                 gainSlow = holdGain:si.onePoleSwitching(gainRel, maxAttDJ);
-                gain2 = min(gainSlow, min(0.0, holdGain+attOvershoot));
-                gain = select3(attMode, gain0, gain1, gain2);
+                gain = min(gainSlow, min(0.0, holdGain+attOvershoot));
 
                 gainRel = interpolate_logarithmic(dv, endRelease, startRelease);
-                gainAttDV = (prevGain-holdGain)/attOvershoot:max(0):min(1):gainAttDVmeter;
-
-                attCurve(shape, dv) = select2(abs(shape)<2e-3,
-                    pow(r, dv)*g-r*g// == (r^dv - r)/(1 - r), exact
-                    ,
-                    1-dv)// r -> 1 limit
-                    with {
-                        r = pow(1000, shape);
-                        den = 1-r+select2(abs(1-r)<ma.EPSILON, 0, ma.EPSILON);
-                        g = 1/den;
-                    };
-                gainAtt = maxAttDJ*attCurve(attShape, gainAttDV);
-
-                // gainAtt = interpolate_logarithmic(gainAttDV, maxAttDJ+minAtt, minAtt)-minAtt;
 
                 refAttackTime = 0;
                 singleprecisionMAX = 3.402823466e+38;
