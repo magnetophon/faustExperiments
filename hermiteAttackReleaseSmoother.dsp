@@ -1677,15 +1677,21 @@ testSignal3 = testSignal1:relFollow
             };
     };
 
-grMeter = DJcompGroup(hbargraph("[0]gain reduction[unit:dB]", -24, 0));
-refMeter = DJcompGroup(hbargraph("[1]ref[unit:dB]", -24, 0));
-dvMeter = DJcompGroup(hbargraph("[2]dv", 0, 1));
+grMeter = DJcompGroup(hbargraph("[00]gain reduction[unit:dB]", -24, 0));
+refMeter = DJcompGroup(hbargraph("[01]ref[unit:dB]", -24, 0));
+dvMeter = DJcompGroup(hbargraph("[02]dv", 0, 1));
 
-thres = DJcompGroup(hslider("[3]thres[unit:dB]", -1, -30, 0, 0.1));
-startRelease = DJcompGroup(hslider("[4]startRelease[unit:ms][scale:log]", 13, 1, 3000, 1)*0.001);
-endRelease = DJcompGroup(hslider("[5]endRelease[unit:ms][scale:log]", 69, 1, 3000, 1)*0.001);
-transitionTime = DJcompGroup(hslider("[6]transitionTime[unit:ms][scale:log]", 420, 1, 3000, 1)*0.001);
-transitionRange = DJcompGroup(hslider("[7]transitionRange[unit:dB]", -9, -30, -0.1, 0.1));
+thres = DJcompGroup(hslider("[03]thres[unit:dB]", -1, -30, 0, 0.1));
+
+attOvershoot = DJcompGroup(hslider("[04]attOvershoot[unit:dB]", 4.2, 0, 18, 0.1)):max(ma.EPSILON);
+gainAttDVmeter = DJcompGroup(_<:(_, ((_):hbargraph("[05]attDV", 0, 1))):attach);
+maxAttDJ = DJcompGroup(hslider("[06]maxAtt[unit:ms][scale:log]", 42, 1, 420, 1)*0.001);
+attShape = DJcompGroup(hslider("[07]attShape", -0.42, -1, 1, 0.01));
+
+startRelease = DJcompGroup(hslider("[08]startRelease[unit:ms][scale:log]", 13, 1, 3000, 1)*0.001);
+endRelease = DJcompGroup(hslider("[09]endRelease[unit:ms][scale:log]", 69, 1, 3000, 1)*0.001);
+transitionTime = DJcompGroup(hslider("[10]transitionTime[unit:ms][scale:log]", 420, 1, 3000, 1)*0.001);
+transitionRange = DJcompGroup(hslider("[11]transitionRange[unit:dB]", -9, -18, -0.1, 0.1));
 
 // --- Smoother parameters ---
 // compile-time maximum: 50 ms at maxSR. Lower maxSR if you never run
@@ -1825,11 +1831,31 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
     with {
         loop(prevGain, prevRef) = gain, ref
             with {
+                // rawGain = gain_computer(1, thresh-attOvershoot, knee, level)*strength;
                 rawGain = gain_computer(1, thresh, knee, level)*strength;
                 holdGain = rawGain:releaseHold;
 
-                gain = holdGain:si.onePoleSwitching(gainRel, 0);
+                coeff = select2(holdGain>prevGain, ba.tau2pole(gainAtt), ba.tau2pole(gainRel));
+                smoothed = holdGain+(prevGain-holdGain)*coeff;
+                gainSEL = select3(DJcompGroup(hslider("OS", 0, 0, 2, 1)), smoothed, gain1, gain2);
+                gain1 = min(smoothed, holdGain+attOvershoot);
+
+                gain = holdGain:si.onePoleSwitching(gainRel, gainAtt);
                 gainRel = interpolate_logarithmic(dv, endRelease, startRelease);
+                gainAttDV = (prevGain-holdGain)/attOvershoot:max(0):min(1):gainAttDVmeter;
+
+                attCurve(shape, dv) = select2(abs(shape)<2e-3,
+                    pow(r, dv)*g-r*g// == (r^dv - r)/(1 - r), exact
+                    ,
+                    1-dv)// r -> 1 limit
+                    with {
+                        r = pow(1000, shape);
+                        den = 1-r+select2(abs(1-r)<ma.EPSILON, 0, ma.EPSILON);
+                        g = 1/den;
+                    };
+                gainAtt = maxAttDJ*attCurve(attShape, gainAttDV);
+
+                // gainAtt = interpolate_logarithmic(gainAttDV, maxAttDJ+minAtt, minAtt)-minAtt;
 
                 refAttackTime = 0;
                 singleprecisionMAX = 3.402823466e+38;
