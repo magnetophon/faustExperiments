@@ -1,11 +1,14 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "1.9.0";
+declare version "1.9.1";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
 import("stdfaust.lib");
 
 // TODO: DJ gain release gets a ceiling target that it releases towards
+// DJ gain attack: DONE in v1.9.0 -- the adaptive interpolator is superseded
+// by the overshoot cap in the smoother (lookaheadAttackReleaseSmootherShapedOs
+// + attMode 2); the old law is kept as attMode 0/1 for A/B.
 
 //========================================================================
 // Attack + release lookahead smoother. ONE Hermite-leg follower shapes
@@ -577,6 +580,63 @@ import("stdfaust.lib");
 // smoother's own rising launches -- their humps are now capped
 // too, which is the point.
 //
+// THE GLIDE GOVERNOR (v1.9.1). The overshoot wrapper's slow arm
+// feeds the smoother a diet the step-shaped world never served: a
+// monotone SMOOTH descent (a one-pole settling into the band).
+// There the window argmin is the NEWEST sample every sample --
+// critDl pinned at nAtt - 1, RECEDING -- so the creep gate reads
+// steeper every sample, the leg re-latches per sample, and only
+// FIRST steps of full-length legs ever play. Every attack latch
+// is velocity-preserving by design (the C1 contract), and the
+// first step of a velocity-kept T-length cubic is dirPrev again,
+// so the follower degenerates to an integrator:
+//   v <- v*(1 - 2/(gT)) + 3*gap/(gT)^2
+// -- velocity time constant gT/2, the same order as the
+// schedule's own pole. Symptom, both phases: an attack fired
+// mid-rise COASTS upward (the crest arc's rising first step,
+// re-latched forever, never turns) while the schedule descends
+// underneath, then the repayment integrates into a too-steep,
+// too-STRAIGHT plunge that crosses the schedule's convex curve
+// and lands early. Steps never showed it: their deadlines
+// APPROACH, the creep gate flies legs whole, the S-curves play
+// out.
+//
+// The medicine is the release ride's, mirrored: pull the entry
+// velocity toward the winner's own score at every latch,
+//   dirPrevP = dirPrev + (sReq - dirPrev)*gvK,
+//   sReq = critNum/max(1, critDl),  gvK = min(1, 24/critDl).
+// The fixed point is velocity == required average slope, i.e.
+// the plan ON schedule: quasi-steady on a glide, the gain rides
+// the schedule delayed by the window with residual lag
+// 2/(gAtt*gvK) = critDl/(12*gAtt) samples, and gvK scaling with
+// the deadline keeps that a fixed FRACTION of the horizon at
+// every window size. Gated on dirPrev != 0.0 -- an exact test,
+// holds emit bit-zero steps -- so REST entries are bit-identical
+// to v1.9.0. Consumed by the ATTACK machinery only (shDir's
+// attack arm, attHot/attAdapt, dpT/attRise, the launch fold dTA,
+// ckM0, and the Tclr class split), so the clearance check clears
+// the SAME plan the latch flies, and every release branch keeps
+// the raw dirPrev, bit-identical. Flown-whole legs feel it once,
+// at their single latch: a mid-rise step entry blends 24/critDl
+// (~1%) of the score into its launch -- inside the existing
+// latch-corner budget, measured <= 0.09 dB on a mid-rise step
+// battery. The clamp min(1, .) keeps small-deadline latches
+// stable (deadbeat at worst); the pull is a per-sample
+// ACCELERATION bounded by gvK*|sReq - dirPrev|, not a velocity
+// corner. Cost: ONE division (the score -- off the min-tree's
+// critical path, it consumes the tree's output) plus a multiply
+// and a select; no state. The 24 is empirical like checkEvery,
+// measured on the glide battery: crest coast gone, plunge slope
+// from 2.3x down to 1.3x the local schedule slope, brickwall
+// exactly 0 throughout, noise diet within 0.07 dB of v1.9.0.
+// Residual, documented not hidden: the governor rides the
+// CHORD-AVERAGE to the pin, so at a schedule CORNER (a flat
+// ceiling, then the descent enters the window) it leads the turn
+// by a few dB where the maximal path would hold the ceiling to
+// the last sample; closing that needs a schedule-aware plan
+// (candidate-shape-FITTING, not just candidate-clearing) --
+// future work.
+//
 // THE AUC COMPENSATION (v1.7.0). Shaping a leg changes its area
 // under the curve (AUC), hence its perceived loudness: a
 // back-loaded release (g > 1) spends longer near full reduction
@@ -984,6 +1044,21 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                         half = int(N/2);
                     };
 
+                // ---- the glide governor (v1.9.1, see the header) ----
+                // the winner's score = the required average slope,
+                // divided ONCE here -- the only new division, off the
+                // min-tree's critical path (it consumes the tree's
+                // output). The entry velocity is pulled toward it at a
+                // deadline-tied rate; min(1, .) keeps small-deadline
+                // latches stable, deadbeat at worst. dirPrev != 0.0 is
+                // an exact test (holds emit bit-zero steps), so rest
+                // entries stay bit-identical, and only the ATTACK
+                // machinery consumes dirPrevP -- every release branch
+                // keeps the raw dirPrev, bit-identical.
+                sReq = critNum/max(1, critDl);
+                gvK = min(1.0, 24.0/max(1.0, dlF));
+                dirPrevP = select2(dirPrev!=0.0, dirPrev, dirPrev+(sReq-dirPrev)*gvK);
+
                 // ---- triggers ----
                 attNeed = critNum<0;
                 // re-latch when the critical value changes, when its (exact)
@@ -1175,7 +1250,7 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 // RAW gRel while liftAhead (the ride's shorten is
                 // untouched).
                 shGap = select2(relTrig, attGap, relGap);
-                shDir = select2(relTrig, min(0-ma.EPSILON, dirPrev*gShA), max(ma.EPSILON, dirPrev*select2(liftAhead, gShR, gR)));
+                shDir = select2(relTrig, min(0-ma.EPSILON, dirPrevP*gShA), max(ma.EPSILON, dirPrev*select2(liftAhead, gShR, gR)));
                 // g3 == 3*(p1t - gain), bitwise: subtracting gain commutes
                 // through select2 (shGap IS p1t - gain branch by branch),
                 // and it feeds Tsh, the FC latch caps and the clearance
@@ -1233,8 +1308,8 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 attGap = critNum;
                 dlF = 1.0*critDl;
                 flatChord = critNpV==critVal;
-                attHot = flatChord&(((dirPrev*gA)*critDl)<(3*attGap));
-                attAdapt = attHot&((dirPrev*critDl)>=(3*attGap));
+                attHot = flatChord&(((dirPrevP*gA)*critDl)<(3*attGap));
+                attAdapt = attHot&((dirPrevP*critDl)>=(3*attGap));
                 // THE RISING-ENTRY FEASIBLE SHAPE (v1.8.0, see the
                 // header). Crest bound for a rising launch: with
                 // a = m0T, D = gain - critVal (= -critNum, free off
@@ -1253,12 +1328,13 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 attHeadroom = max(0.0, val0-gain);
                 aMax = 3.0*attHeadroom+sqrt(max(0.0, attHeadroom*(9.0*attHeadroom+(0.0-12.0*critNum))));
                 // the gate: the requested plan's crest exceeds the
-                // headroom. dpT = dirPrev*critDl > 0 on any taken
-                // branch: critDl = 0 or dirPrev <= 0 read the gate
-                // false (aMax >= 0, strict >), so the pair's
-                // denominator never goes 0 where it is consumed.
-                dpT = dirPrev*dlF;
-                attRise = (dirPrev>0)&((gA*dpT)>aMax);
+                // headroom. dpT = dirPrevP*critDl > 0 on any taken
+                // branch (the governed entry since v1.9.1): critDl = 0
+                // or dirPrevP <= 0 read the gate false (aMax >= 0,
+                // strict >), so the pair's denominator never goes 0
+                // where it is consumed.
+                dpT = dirPrevP*dlF;
+                attRise = (dirPrevP>0)&((gA*dpT)>aMax);
                 attT = select2(attHot, critDl, select2(attAdapt, max(1, min(critDl, Tsh)), critDl));
                 T0 = max(1, select2(relTrig, attT, relT));
                 p1t = select2(relTrig, critVal, v1);
@@ -1344,7 +1420,10 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 // 1.0 on an engaged relax) like the quotient itself.
                 TtG = Tt*gF;
                 TtIG = Tt*invGF;
+                // dT stays the RAW entry (the release floor aBT reads
+                // it); dTA is the governed attack arm (v1.9.1)
                 dT = dirPrev*TtG;
+                dTA = dirPrevP*TtG;
                 rideT = min(dirPrev+(nhV-v1)*rideK, aim)*TtG;
                 // launch floor: never descend toward the deepest point (a
                 // two-sided launch can swoop below the window min -- see
@@ -1440,7 +1519,7 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 // aMax, a bit-exact no-op. The release branch of
                 // ckM0 is never consumed (engagement gates on
                 // relTrig == 0), so the min rides unconditionally.
-                ckM0 = max(g3, min(dirPrev*ckTG, aMax));
+                ckM0 = max(g3, min(dirPrevP*ckTG, aMax));
                 ckM1 = select2(relTrig, max(g3, min(0, aim)*ckTIG), 0);
                 // the check cubic under the warp, contracted
                 // homogeneously. At deadline df the leg clock reads
@@ -1507,7 +1586,7 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 // g <= 1 never needed a scale (see the header).
                 Tneg = ceil(sqrt(max(0.0, (gain-p1t)*(clrPair:(_, !))/(clrPair:(!, _)))));
                 Tpos = checks:par(i, nC, (!, !, _)):minTree(nC);
-                Tclr = select2(dirPrev>0, Tneg, Tpos);
+                Tclr = select2(dirPrevP>0, Tneg, Tpos);
                 // Tpos doubles as the clear flag: every failed candidate
                 // contributes dlP = df < ckT <= 1e30 and every passing one
                 // the 1e30 sentinel, so "some check failed" == Tpos < 1e30,
@@ -1515,7 +1594,7 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 engaged = (relTrig==0)&(Tpos<1e30);
                 Tt = select2(engaged, T0, max(1, min(T0, Tclr)));
                 m0Tt = select2(relTrig,
-                    max(g3, min(dT, aMax)),
+                    max(g3, min(dTA, aMax)),
                     select2(liftAhead, aBT, max(aBT, rideT)));
                 m1Tt = select2(relTrig, max(g3, min(0, aim)*TtIG), 0);
 
