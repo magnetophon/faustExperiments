@@ -1958,24 +1958,37 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
     with {
         loop(prevGain, prevRef) = gain, ref, holdGain
             with {
+                // rawGain = gain_computer(1, thresh-attOvershoot, knee, level)*strength;
                 rawGain = gain_computer(1, thresh, knee, level)*strength;
                 holdGain = rawGain:releaseHold;
 
-                // --- attack ---
-                // FIXED slow pole toward holdGain, hard-capped at
-                // holdGain + attOvershoot. The cap corner is
-                // deliberate: the smoother downstream plans C1 legs
-                // through it with lookahead (the compressor re-applies
-                // the same cap in the Os wrapper -- idempotent here,
-                // kept in the loop so dv and ref read the capped
-                // trajectory), so the pair (maxAttDJ, attOvershoot)
-                // fully determines the attack: musical pace outside
-                // the band, exact capped protection inside it, settle
-                // to full depth at maxAttDJ.
-                gainSlow = holdGain:si.onePoleSwitching(gainRel, maxAttDJ);
-                gain = min(gainSlow, min(0.0, holdGain+attOvershoot));
+                coeff = select2(holdGain>prevGain, ba.tau2pole(gainAtt), ba.tau2pole(gainRel));
+                smoothed = holdGain+(prevGain-holdGain)*coeff;
+                gain = holdGain:onePoleSwitching(gainRel, gainAtt);
 
+                onePoleSwitching(att, rel, x) = loop~_
+                    with {
+                        loop(yState) = (1.0-coeff)*x+coeff*yState
+                            with {
+                                coeff = ba.if(x>yState, ba.tau2pole(att), ba.tau2pole(rel));
+                            };
+                    };
                 gainRel = interpolate_logarithmic(dv, endRelease, startRelease);
+                gainAttDV = (prevGain-holdGain)/attOvershoot:max(0):min(1):gainAttDVmeter;
+
+                attCurve(shape, dv) = select2(abs(shape)<2e-3,
+                    pow(r, dv)*g-r*g// == (r^dv - r)/(1 - r), exact
+                    ,
+                    1-dv)// r -> 1 limit
+                    with {
+                        r = pow(1000, shape);
+                        den = 1-r+select2(abs(1-r)<ma.EPSILON, 0, ma.EPSILON);
+                        g = 1/den;
+                    };
+                gainAtt = 0;
+                //maxAttDJ*attCurve(attShape, gainAttDV);
+
+                // gainAtt = interpolate_logarithmic(gainAttDV, maxAttDJ+minAtt, minAtt)-minAtt;
 
                 refAttackTime = 0;
                 singleprecisionMAX = 3.402823466e+38;
