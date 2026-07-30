@@ -1,5 +1,5 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "1.9.1";
+declare version "1.16.1";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -11,6 +11,28 @@ import("stdfaust.lib");
 // + attMode 2); the old law is kept as attMode 0/1 for A/B.
 
 //========================================================================
+// THE LINEAR DOMAIN (v1.13.0). The follower shapes LINEAR gain, not
+// dB. Six rounds of release-shape work (v1.10.0..v1.12.1) fixed real
+// mechanisms -- reveal phase pinning, the ride's rate-trim, the
+// slider mapping, the launch tangent, its gap law -- and the judged
+// symptom never moved: "too slow at first, too fast at the end."
+// Root cause: every trace the user judges (scope and ear) is the
+// LINEAR multiplier, and dB -> linear is convex -- at -18 dB the
+// linear trace moves at 0.126x the dB rate, near 0 dB at ~1x -- so
+// ANY dB-shaped release, including a maximum-velocity-first ease-out,
+// reads slow-then-rushing in linear. Descents run INTO the
+// compressive end of the map, which is why the attack always looked
+// right: the domain worked for one direction and against the other,
+// masquerading as a curve problem. Every core lemma here is built
+// from min/max/monotone comparisons and argmin/deadline bookkeeping
+// -- none references the unit -- so the whole proof structure
+// transfers verbatim; the only domain-aware points are the ease
+// law's unity (1.0), the Os wrapper's cap arm (a dB os parameter
+// converted once at control rate), and the demo's conversion
+// boundary (the DJ computer stays dB internally; releaseHold is
+// pure min/max, so hold-then-convert equals convert-then-hold,
+// bit-for-bit). Expected input: a gain MULTIPLIER in (0, 1].
+//
 // Attack + release lookahead smoother. ONE Hermite-leg follower shapes
 // both directions of a gain-reduction signal: descents chase the
 // critical constraint read from a dyadic candidate bank (lookahead
@@ -63,11 +85,18 @@ import("stdfaust.lib");
 // releasing slowly where it could release fast, and block input
 // would never show it, because a block reveals its rise in ONE
 // window-min step. Riding the reveal instead, a creeping v1
-// becomes a per-sample re-plan whose velocity is governed by the
-// FC cap at 3*(v1 - gain)/nRel -- fast when far, gentle when near,
-// no zero-velocity joints -- while a stepped v1 still flies whole
-// legs (v1 == p1 in flight), so block input gets one S-curve of
-// exactly nRel. A v1 that DROPS back under a flying target is
+// becomes a per-sample re-plan over the running leg's REMAINING
+// deadline (v1.10.0, THE RECEDING DEADLINE at the latch block;
+// since v1.11.0 it holds on EVERY release re-latch, lifts
+// included, with a renewal floor -- see relCont): each re-latch
+// keeps the landing sample, so the leg clock
+// advances one phase step per trigger and the creep flies as ONE
+// whole-shaped leg continuously re-aimed -- the shape warp
+// expresses on creeping material exactly as on blocks, with the
+// FC cap 3*(p1t - gain)/(g*(T - k)) as the approach governor --
+// fast when far, gentle when near, no zero-velocity joints --
+// while a stepped v1 still flies whole legs (v1 == p1 in flight),
+// so block input gets one S-curve of exactly nRel. A v1 that DROPS back under a flying target is
 // flown past unchanged (re-targeting down would clamp a fast rise
 // onto the FC cap in one sample: a corner); if the gain crosses
 // it, attNeed catches the crossing with a smooth arc, as on any
@@ -86,59 +115,75 @@ import("stdfaust.lib");
 // plays out (the largest suffix excluding i1; dyadic resolution
 // can read HIGH -- the mirror of the shadowed-second-deepest gap;
 // ties where the min value recurs later give nhV == v1, the flat
-// sentinel), plus the play index of that level's own min. The
-// pair drives the lift-aware ride (below); it is also selected
-// into the shared landing-chord endpoints for release legs, but
-// the release LANDS FLAT and flies T = nRel from rest -- the two
-// obvious schedule-aware landing shapes (aim the landing slope
-// into the coming rise; stretch T to land ON the pin's play
-// sample so the lift re-latch carries velocity) both measured as
-// regressions on the noisy workload, so they ship NEUTRALIZED:
-// the release chord (nhV - p1t)/(nhD - i1) is never computed, and
-// its would-be division is branch-shared with the ride cap (see
-// the latch block to restore it). Why more landing information
+// sentinel), plus the play index of that level's own min. Since
+// v1.11.0 the pair's value arm is the SWOOP TARGET: while a lift
+// is scheduled, release legs aim p1 = nhV (the level the material
+// is going to) instead of the pin, so the requested curve spans
+// the real recovery. The two old schedule-aware LANDING shapes
+// (aim the landing slope into the coming rise; stretch T to land
+// ON the pin's play sample) both measured as regressions on the
+// noisy workload and stay out: swoop legs still LAND FLAT
+// (m1 = 0), and the release chord (nhV - p1t)/(nhD - i1) is still
+// never computed (nhD stays dead). Why more landing information
 // cannot fix the remaining crawls: at an attack landing the gain
 // is pinned AT v1 through its play sample (it must be), so C1
 // forces velocity ~0 into every such lift -- the rebuild there is
 // the constraint, not a knowledge gap.
 //
-// The lift-aware ride. The v1-chase brakes as its gap closes (the
-// drive term 3*(v1 - gain)/T^2 vanishes) -- wasted braking
-// whenever the pin plays out before the gain could reach it
-// anyway. While a strictly higher level is scheduled
-// (liftAhead = nhV > v1), the launch may keep the boosted chase
-// velocity -- dirPrev plus the farther level's drive,
-// (nhV - v1) * 3/nRel^2 per sample, a control-rate constant --
-// capped by the fastest rate that cannot cross v1 before the
-// lift: rideMax = (v1 - gain)/(i1 + 1). Safety is per-sample
-// INDUCTION, not a curve property: one step at v <= rideMax
-// leaves gain <= v1, and the trigger re-plans every sample while
-// liftAhead (term 2) or while a relaxed launch is latched
-// (term 3, the flown-whole guard: m0*T > 3*(p1 - p0), computable
-// from latched state alone, release legs only, with a 1e-8
-// relative margin so FC-capped launches never trip it). Both
-// terms yield to attNeed -- unlike v1 > p1 they do not imply
-// v1 > gain, and a missed attack is a brickwall leak. Isolated
-// single-step rises never see liftAhead (the post-lift window is
-// single-level, nhV == v1), so the calibrated exact-nRel block
-// S-curve is preserved; on multi-level material the ride roughly
-// halves the stall fraction a plain v1-chase leaves on the noisy
-// workload and cuts its brickwall residual, with blocks
-// unchanged. Accepted corners, both bounded: a pin that RECURS at
-// the wall (nhV read high in the dyadic blind spot, or the i1 = 0
-// rounding, leak <= 3*gap/T^2, orders below the hump class) parks
-// the ride at v1 -- as a flat landing, since the momentum
-// re-latch (below) starts the deceleration when the cap first
-// binds instead of at the wall; attacks that fire mid-ride pick
-// up the hotter dirPrev, growing their hump within the documented
-// class.
+// THE CLAMPED SWOOP (v1.11.0, replacing the lift-aware ride).
+// The ride kept chase velocity alive by INJECTING drive into the
+// launch every sample -- which bounded stalls, but a trajectory
+// built from per-sample drive integration expresses only the
+// CLOCK of the requested shape (drive ~ 1/gRel), never its curve:
+// each re-latch evaluated the first step of a fresh phase-0 plan,
+// so on lifting material (noise, creeps -- liftAhead duty ~1
+// there) the shape knob read as a rate trim, the release "just
+// got shorter" as the shape went up, and the curve's late
+// character -- the END STAGE: the slow settle of a front-load,
+// the hard finish of a back-load -- never played. Now a lift
+// latches an ordinary leg AT the lift: p1 = nhV, entry aBT
+// (velocity-continuous, floored at 0, FC-capped against the
+// leg's own wide gap), warp = the requested gRel, deadline =
+// THE RECEDING DEADLINE (relCont, no liftAhead gate since
+// v1.11.0) -- so per-sample re-latches restrict the running
+// cubic instead of restarting it and the phase ADVANCES through
+// the curve. The brickwall moves from construction to THE OUTPUT
+// CAP at gainN: every gliding release step is clamped to the
+// ride's old bound rideMaxU = (v1 - gain)/(i1 + 1); one step at
+// that rate cannot cross v1 before the pin plays, per-sample,
+// fresh (v1, i1) each sample -- the same induction, now on the
+// output where it also covers legs flown whole. The audible
+// contract: the CURVE plays wherever the curve is the binding
+// constraint, the fastest legal pin-pursuit plays where the
+// material is -- shape expresses exactly where shape can exist.
+// Verified: blocks bit-identical to v1.10.0 (single-step rises
+// never see liftAhead, and the swoop arms sit behind it); the
+// noisy workload runs ZERO brickwall exceedance at every tested
+// shape (the v1.10.0 g = 4 residual, 1.9e-6, is gone -- the
+// output cap is tighter than the ride's flown-whole corner) with
+// the stall fraction cut 3-15x; a fast noisy recovery now times
+// out per-shape like the calibrated block leg does. Accepted
+// corners, all bounded: nhV read high in the dyadic blind spot
+// over-aims the leg (the cap governs; the curve runs mildly hot
+// early -- on the fast-creep render this pulls a front-load's
+// t99 a few ms ahead of the block's); a lift that EVAPORATES
+// (noise hair) leaves a leg aimed at a phantom nhV, and the cap
+// walks the gain gently onto v1 until the next reveal re-aims;
+// a hug past the leg's own landing parks the output at the
+// capped value until v1 rises (term 2 refires on the first
+// reveal); recoveries much longer than nRel renew (fresh nRel
+// cycle, velocity-continuous through dT) when a still-lifting
+// deadline expires -- the renewal floor in relCont, (T - k) >= 2,
+// so no flat landing mid-lift; attacks that fire mid-swoop pick
+// up the hotter dirPrev, growing their hump within the
+// documented class.
 //
 // Momentum-preserving release re-latch. A re-latch that CLAMPS
 // the launch velocity onto its cap -- the fresh-leg FC cap
 // 3*(v1 - gain)/nRel, which any window-min creep past a flying
 // leg's midpoint lands on (for a whole leg re-latched at phase
 // tau, cap/velocity = (1-tau)(1+2tau)/(2tau) < 1 for tau > 1/2),
-// or max(FC cap, rideMax) the sample a lift blip appears (nhV one
+// or the FC cap the sample a lift blip appears (nhV one
 // noise-hair above v1 flips liftAhead while a leg is hot) -- is a
 // one-sample velocity corner: a kink on the release on noisy
 // material. Instead, when dirPrev exceeds the fresh-leg cap
@@ -353,10 +398,10 @@ import("stdfaust.lib");
 // a latched leg's physical launch velocity is
 // (m0T/T) * w'(0) = m0T/(g*T) and its landing velocity
 // m1T * g / T, so every latch arm that carries a PHYSICAL slope
-// is folded -- launches by * g (dT, rideT, ckM0's velocity arm,
+// is folded -- launches by * g (dT, ckM0's velocity arm,
 // the capped test's nRel*g; shDir by the SHORTEN's flight g,
-// min(g, 1) since v1.6.0, the ride's kept raw), landings by / g
-// (aim's m1
+// min(g, 1) since v1.6.0, uniform across lifts since v1.11.0),
+// landings by / g (aim's m1
 // arm, ckM1) -- while the FC bounds themselves stay in u-space,
 // untouched: min/max against g3 exactly as before. Scaling by a
 // positive control-rate constant commutes bitwise with
@@ -364,16 +409,18 @@ import("stdfaust.lib");
 // capped launches still store g3 itself, and both shortens still
 // put m0*T exactly ON the bound. Under per-sample re-latch the
 // release cap doubles as before into the approach governor, now
-// velocity <= 3*(v1 - gain)/(g*nRel): a front-loaded release
+// velocity <= 3*(p1t - gain)/(g*(T - k)) over the receding
+// deadline (v1.10.0; p1t = nhV on swoop legs since v1.11.0): a
+// front-loaded release
 // legitimately recovers faster from the first sample. (The
 // shapedSmoother's AUC compensation is the analogous knob if
 // shape is wanted loudness-neutral -- scale nRel by the family's
-// area ratio; not shipped here.) The ride's drive constant picks
-// up the same launch-law factor (rideK * 1/gRel); its safety
-// never lived in the drive value -- rideMax plus the per-sample
-// induction own it, and the first emitted step of a latched leg
+// area ratio; not shipped here.) The swoop carries no drive
+// constant: its acceleration is the latched cubic's own
+// curvature, and the brickwall lives in the output cap plus the
+// per-sample re-latch; the first emitted step of a latched leg
 // is still the physical velocity (p(w(1/T)) ~= p0 + m0T/(g*T)),
-// so the induction reads exactly as before.
+// so that induction reads exactly as before.
 //
 // THE FEASIBLE SHAPE (v1.6.0). A back-loaded leg and a hot entry
 // are incompatible over a long leg: the u-space launch tangent
@@ -409,10 +456,12 @@ import("stdfaust.lib");
 // failed set of the taller plan covers the neutral flight
 // (H(w_g(t)) >= H(w_1(t)) pointwise under FC monotonicity), and
 // the shorten-monotonicity lemma is exact again on the flight
-// actually flown. The ride keeps the raw g (its safety lives in
-// rideMax + the per-sample induction, and a mid-ride relax would
-// mis-scale the stored boosted launch), so relAdapt gates on
-// liftAhead == 0.
+// actually flown. relAdapt still gates on liftAhead == 0 in
+// v1.11.0 -- no longer because a relax would mis-scale a boosted
+// launch (the swoop launch is the plain aBT, per-latch
+// self-consistent under g changes), but as the conservative
+// choice: the adapt is a plain-leg feature, and swoop legs are
+// rarely capped against their wide gap anyway.
 //
 // The clearance check keeps its exact play-time meaning by
 // evaluating the WARPED plan: at deadline df the leg clock reads
@@ -460,9 +509,10 @@ import("stdfaust.lib");
 // Cost: the audio hot path is dominated by the argmin tree and
 // the clearance check; per-candidate scoring is DIVISION-FREE
 // (slopes ride the tree as cross-multiplied (num, den) pairs,
-// dens >= 1). The landing chord and the ride cap share ONE
-// division (the numerator/denominator pairs are selected first,
-// branch-exclusive by relTrig); the shortened legs share ONE
+// dens >= 1). The attack landing chord pays ONE division (its
+// old release-side share, the ride cap, moved to the output cap
+// as rideMaxU when the ride became the swoop -- same total
+// count); the shortened legs share ONE
 // division + ceil (Tshort and attTs, same exclusivity; its
 // un-ceiled quotient Tq doubles as the feasible-shape pair's
 // numerator, so gEff costs NO division of its own); Tclr adds
@@ -479,8 +529,8 @@ import("stdfaust.lib");
 // per-sample shared coefficients; ~5 unwarped) plus its two
 // trees -- the all-pass AND tree is folded into the Tpos min tree
 // (all-pass reads back as exactly 1e30). No
-// state beyond the 9-wide loop (the latched warp rides as a
-// (num, den) pair in the last two), no
+// state beyond the 10-wide loop (the latched warp rides as a
+// (num, den) pair; the tenth is the release desync bit), no
 // delay lines beyond the bank's.
 // nRel is slider-derived, so its guard runs in the control block.
 // Latency: nAtt - 1.
@@ -517,11 +567,12 @@ import("stdfaust.lib");
 //   the hump class, per-play-time deadlines still enforced --
 //   before attNeed reels it in. Re-targeting down would trade
 //   that arc for a velocity corner.
-// * A ride into a pin that RECURS (nhV read high in the dyadic
+// * A swoop into a pin that RECURS (nhV read high in the dyadic
 //   blind spot, or the min value recurring past the largest
-//   excluding suffix) parks at v1 instead of lifting -- as a
-//   flat landing (the shortened leg decelerates in) rather than
-//   a velocity chop.
+//   excluding suffix) over-aims its leg; the output cap walks
+//   the gain onto v1 at the fastest legal rate and holds it
+//   there -- a hug, not a velocity chop -- until the next
+//   reveal re-aims.
 //
 // THE RISING-ENTRY FEASIBLE SHAPE (v1.8.0). The hump class had a
 // worst case the clearance check is structurally blind to: on a
@@ -601,7 +652,7 @@ import("stdfaust.lib");
 // APPROACH, the creep gate flies legs whole, the S-curves play
 // out.
 //
-// The medicine is the release ride's, mirrored: pull the entry
+// The medicine mirrors the release side's old drive term: pull the entry
 // velocity toward the winner's own score at every latch,
 //   dirPrevP = dirPrev + (sReq - dirPrev)*gvK,
 //   sReq = critNum/max(1, critDl),  gvK = min(1, 24/critDl).
@@ -879,7 +930,7 @@ slidingMinIdxBankAtt(nAtt, maxAtt, x) = (v1, i1, npFullV, npFullD), par(i, nB, (
 // #### Usage
 //
 // ```
-// hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) : _
+// hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, relEase, checkEvery, cands) : _
 // ```
 //
 // Where:
@@ -921,16 +972,16 @@ slidingMinIdxBankAtt(nAtt, maxAtt, x) = (v1, i1, npFullV, npFullD), par(i, nB, (
 // * release: three-term trigger. v1 > p1 latches from rest
 //   (gain == p1 there) and re-latches mid-leg whenever the window
 //   min rises above the running target; a target that drops back is
-//   flown past. Two ride terms re-plan every sample -- while a lift
-//   is scheduled (liftAhead) and while a relaxed launch is latched
-//   (the flown-whole guard) -- both gated on attNeed == 0, so
+//   flown past. Two more terms re-plan every sample -- the clamped
+//   swoop while a lift is scheduled (liftAhead), and the dormant
+//   flown-whole guard -- both gated on attNeed == 0, so
 //   attacks always win. Inert mid-attack-leg (v1 <= p1 until
 //   touchdown).
 // * idle (arrived, v1 == gain) holds gain. The landed target stays
 //   the window min through its own play sample, so peaks are held
 //   through the peak's play sample.
 //----------------------------------------------------------------------
-hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si.bus(9)):(_, si.block(8))
+hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, relEase, checkEvery, cands) = (loop~si.bus(10)):(_, si.block(9))
     with {
         // release reads: candidate 0's value/deadline = the attack-window
         // min and the pin's play index; the tail = the next-higher pair
@@ -949,9 +1000,11 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
         // untouched), the reciprocals stay out of the audio loop.
         gA = max(ma.EPSILON, gAtt);
         gR = max(ma.EPSILON, gRel);
+        // THE EASE LAUNCH (v1.12.0): launch-boost fraction, clamped
+        // once at control rate. See easeT at the latch block.
+        relEaseC = max(0.0, min(1.0, relEase));
         invGA = 1.0/gA;
         invGR = 1.0/gR;
-        nRelG = nRel*gR;
         // the shorten/feasible-shape divisor factors: min(g, 1) is
         // the flight g of a past-neutral shorten (the requested g
         // for front-loads, neutral for back-loads), so Tq/Tsh come
@@ -960,6 +1013,7 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
         gShA = min(gA, 1.0);
         gShR = min(gR, 1.0);
         nRelF = 1.0*nRel;
+        invNRelF = 1.0/nRelF;
 
         // state: gain, p0, m0T, p1, m1T, k, T, gNL, gDL
         // (previous-sample values
@@ -980,7 +1034,7 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
         // absorb the denominator (THE FEASIBLE SHAPE), and plain
         // latches store (g, 1.0) so the neutral and front-loaded
         // paths stay bit-identical.
-        loop(gain, p0, m0T, p1, m1T, k, T, gNL, gDL) = gainN, p0N, m0TN, p1N, m1TN, kN, TN, gNN, gDN
+        loop(gain, p0, m0T, p1, m1T, k, T, gNL, gDL, dsy) = gainN, p0N, m0TN, p1N, m1TN, kN, TN, gNN, gDN, dsyN
             with {
                 dirPrev = gain-gain';
                 // current slope, units/sample
@@ -1114,32 +1168,65 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 //    is inert mid-attack-leg (v1 <= p1 until touchdown).
                 // 2) liftAhead & (v1 > gain): while a strictly higher
                 //    level is scheduled behind the pin, re-plan every
-                //    sample so the ride cap (see m0Tt) stays inductively safe
-                //    and its boost keeps feeding. Strict v1 > gain: a pinned
-                //    gain must not latch (a flat latch would dip, m0 <= 0,
-                //    below the pin).
+                //    sample -- since v1.11.0 this latches THE CLAMPED
+                //    SWOOP (see m0Tt/p1t): an ordinary receding-deadline
+                //    leg aimed at nhV, so the re-latch is a restriction
+                //    of the running cubic and the phase advances through
+                //    the curve. Strict v1 > gain: a pinned gain must not
+                //    latch (a flat latch would dip, m0 <= 0, below the
+                //    pin), and a hug past the leg's own landing waits
+                //    here (parked at the capped value) for the first
+                //    reveal.
                 // 3) the flown-whole guard: a curve latched with a
-                //    relaxed launch (m0 above the FC cap -- only the ride
-                //    does this) must never fly uncorrected, since per-sample
-                //    re-latch is what makes the ride safe. Detected from
-                //    latched state alone: m0T > 3*(p1 - p0), release legs
-                //    only (p1 >= p0), with a 1e-8 relative margin so an
-                //    FC-capped launch (m0T == 3*(p1 - p0), exactly, since
-                //    the product itself is latched) never trips it and block
+                //    relaxed launch (m0 above the FC cap) must never fly
+                //    uncorrected. Dormant through v1.11.x (the swoop
+                //    launch was the plain aBT <= g3); LIVE and
+                //    load-bearing since v1.12.1: the ease boost is a
+                //    gap-to-unity velocity floor that legitimately
+                //    exceeds the leg's own g3, and THIS term is the
+                //    per-sample re-latch engine that keeps only first
+                //    steps of such plans playing (see THE EASE LAUNCH
+                //    at m0Tt). Detected from latched state alone:
+                //    m0T > 3*(p1 - p0), release legs only (p1 >= p0),
+                //    with a 1e-8 relative margin so an FC-capped launch
+                //    (m0T == 3*(p1 - p0), exactly, since the product
+                //    itself is latched) never trips it and block
                 //    S-curves keep flying whole.
                 // Terms 2 and 3 yield to attNeed explicitly: unlike term 1
                 // they do not imply v1 > gain, and a missed attack is a
                 // brickwall leak. A v1 that drops back under a flying
                 // release target is still flown past; if the gain crosses
                 // it, attNeed catches the crossing with a smooth arc.
+                // THE CEILING-DROP RE-AIM (v1.16.0). A rising release
+                // used to hit a FALLING ceiling as a chop: the moment
+                // a deeper future step enters the lookahead window,
+                // v1 drops toward the rising gain, the pursuit
+                // bound's gap collapses, and the rise brakes to a
+                // shelf in one sample -- a kink sitting exactly nAtt
+                // before every constraint step-down (his cursor).
+                // Instead, a v1 DROP over a flying release re-latches
+                // the leg AT the new pin with T = the pin's play
+                // deadline (i1 + 1): velocity-continuous entry, flat
+                // landing exactly as the ceiling arrives -- the crest
+                // becomes one decelerating curve. Hot entries fall to
+                // the shorten medicine verbatim (relGap/relTbase read
+                // the drop target/deadline), landing early and flat,
+                // still <= v1 by construction. Gated on attNeed == 0
+                // (a pin below the gain is the attack's business) and
+                // v1 > gain (a pin at the gain is the hold's). The
+                // ease boost is gated off on drop latches (a
+                // unity-gap launch toward a near target would just
+                // re-arm the flown-whole churn). Blocks never see a
+                // v1 drop mid-release, bit-identical.
                 liftAhead = nhV>v1;
-                relTrig = (v1>p1)|((attNeed==0)&((liftAhead&(v1>gain))|((p1>=p0)&((m0T*0.99999999)>(3*(p1-p0))))));
+                relDrop = (attNeed==0)&(p1>=p0)&(v1<v1')&(v1>gain);
+                relTrig = (v1>p1)|relDrop|((attNeed==0)&(((v1>gain)&(k>=T))|((p1>=p0)&((m0T*0.99999999)>(3*(p1-p0))))));
                 trig = attTrig|relTrig;
 
                 // the NEW leg's warp, three layers:
                 // * gCk/invGCk -- the RAW per-direction g, branch-shared
                 //   by relTrig. These drive the physical-slope FOLDS
-                //   (dT, rideT, ckM0/ckM1, TtG/TtIG): on the adapt
+                //   (dT, ckM0/ckM1, TtG/TtIG): on the adapt
                 //   branches the raw-g arm always sits past the FC
                 //   bound (that is what the hot gate MEANS), so every
                 //   max()/min() saturates to g3 exactly -- the folds
@@ -1149,8 +1236,9 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 //   (g = num/den, never divided): the requested g on
                 //   cool branches, (Tq, T) on adapt (min-clamped to the
                 //   requested g against eps-distorted Tq on vanishing
-                //   gaps), min(g, 1) on a past-neutral shorten, the raw
-                //   g on the ride's. The check's DD and the evaluator's
+                //   gaps), min(g, 1) on a past-neutral shorten (swoop
+                //   legs included since v1.11.0). The check's DD and
+                //   the evaluator's
                 //   clock absorb the denominator.
                 // * (gNt, gDt) -- post-engage: a clearance engagement
                 //   of a flying g > 1 relaxes the leg to NEUTRAL (1, 1)
@@ -1174,8 +1262,8 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 // the pair needs no normalization.
                 gAttN = select2(attRise, select2(attHot, gA, select2(attAdapt, gShA, min(Tq, gA*dlF))), max(aMax, gShA*dpT));
                 gAttD = select2(attRise, select2(attAdapt, 1.0, dlF), dpT);
-                gRelN = select2(relAdapt, select2(capped&(liftAhead==0), gR, gShR), min(Tq, gR*nRelF));
-                gRelD = select2(relAdapt, 1.0, nRelF);
+                gRelN = select2(relAdapt, select2(capped, gR, gShR), min(Tq, gR*relTbase));
+                gRelD = select2(relAdapt, 1.0, relTbase);
                 gN1 = select2(relTrig, gAttN, gRelN);
                 gD1 = select2(relTrig, gAttD, gRelD);
                 // an engaged attRise leg relaxes to neutral even at
@@ -1215,9 +1303,10 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 // mis-scale the stored boosted launch, whose safety
                 // lives in rideMax + the per-sample induction, not in
                 // the cap. All branches agree at their boundaries
-                // (dirPrev == 3*gap/(gRel*nRel) is capped's edge with
-                // relT == nRel on both sides; dirPrev*nRel == 3*gap
-                // gives Tsh == nRel == the adapt branch -- adapt is only
+                // (dirPrev == 3*gap/(gRel*relTbase) is capped's edge
+                // with relT == relTbase on both sides;
+                // dirPrev*relTbase == 3*gap gives Tsh == relTbase ==
+                // the adapt branch -- adapt is only
                 // reachable at gRel > 1, where the divisor's gShR = 1),
                 // launches from rest are untouched (capped false at
                 // dirPrev ~ 0), and ceil keeps T integer so the leg
@@ -1228,8 +1317,48 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 // the eps floor keeps the idle division finite and
                 // max(1, ...) catches the negative branch -- a T = 1
                 // stop, identical in output to an m0 = 0 clamp.
-                relGap = v1-gain;
-                capped = (dirPrev*nRelG)>(3*relGap);
+                relGap = select2(relDrop, 1.0, v1)-gain;
+                // THE RECEDING DEADLINE (v1.10.0). A mid-flight release
+                // re-latch (a creeping v1) used to restart the leg
+                // clock at phase 0 of a FRESH nRel every sample: the
+                // flight never left the launch region, so the visible
+                // rise was the launch curvature integrated from zero
+                // velocity (slow start) into the cap's tail (fast end)
+                // -- and the WARP washed out entirely on creeping
+                // material, g scaling the rates but never the shape
+                // (only block steps, which latch once and fly whole,
+                // ever showed it). Now a re-latch while a release leg
+                // is in flight keeps the leg's LANDING SAMPLE: the new
+                // leg flies the REMAINING time. A single-trigger flight
+                // never re-latches, so block S-curves are bit-exactly
+                // untouched; under per-sample re-latch each trigger
+                // shrinks T by exactly one, so the leg clock ADVANCES
+                // one phase step per sample -- a creeping v1 becomes
+                // ONE whole-shaped leg continuously re-aimed, landing
+                // nRel after the rise began, and the warp expresses at
+                // every shape. (At g = 1 the re-aimed flight is the
+                // running leg's own tail exactly -- cubic Hermite is
+                // closed under restriction; at g != 1 the tail's
+                // effective Moebius clock drifts with the re-aim, which
+                // is the re-plan's job anyway.) Since v1.11.0 the
+                // deadline recedes on EVERY release re-latch -- the
+                // liftAhead gate is gone with the ride; swoop legs
+                // (p1 = nhV) restrict the same way -- with one
+                // RENEWAL FLOOR: relCont demands at least 2 samples of
+                // remaining flight, so a re-latch on the final sample
+                // of a still-lifting leg starts a FRESH nRel cycle
+                // instead of a degenerate T = 1 flat landing --
+                // velocity-continuous through dT, no mid-lift stall.
+                // A lift that simply ends lets its leg land flat at
+                // nhV (= v1 by then): the family's own m1 = 0 look,
+                // the END STAGE. Every release-side length below --
+                // the cap test, the adapt window, the shorten clamp,
+                // the adapt pair's denominator -- reads relTbase, so
+                // the momentum algebra is the old one with
+                // nRel |-> relTbase verbatim, boundaries included.
+                relCont = (p1>=p0)&((T-k)>=2);
+                relTbase = select2(relDrop, select2(relCont, nRelF, max(1.0, rRem)), max(1.0, 1.0*(i1+1)));
+                capped = (dirPrev*gR*relTbase)>(3*relGap);
                 // ONE shared division (+ its ceil) serves BOTH shortened
                 // legs AND both feasible-shape pairs: Tshort (release,
                 // the max(eps, ...) branch) and attTs (attack, the
@@ -1246,11 +1375,12 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 // carried as the pair, never divided. The shorten
                 // divisor keeps min(g, 1) -- the flight g of a
                 // past-neutral shorten -- inside the eps clamp, keeping
-                // the floor at eps itself; the release arm keeps the
-                // RAW gRel while liftAhead (the ride's shorten is
-                // untouched).
+                // the floor at eps itself; since v1.11.0 the release
+                // arm uses gShR uniformly (the ride's raw-g special
+                // case left with the ride: swoop legs are ordinary
+                // legs).
                 shGap = select2(relTrig, attGap, relGap);
-                shDir = select2(relTrig, min(0-ma.EPSILON, dirPrevP*gShA), max(ma.EPSILON, dirPrev*select2(liftAhead, gShR, gR)));
+                shDir = select2(relTrig, min(0-ma.EPSILON, dirPrevP*gShA), max(ma.EPSILON, dirPrev*gShR));
                 // g3 == 3*(p1t - gain), bitwise: subtracting gain commutes
                 // through select2 (shGap IS p1t - gain branch by branch),
                 // and it feeds Tsh, the FC latch caps and the clearance
@@ -1259,12 +1389,13 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 // read back as m0*T) would land an ulp off the cap; the
                 // x T latch stores g3 itself, so a capped launch sits
                 // exactly ON 3*(p1 - p0) and the flown-whole margin
-                // guards only the ride entries.
+                // never trips (no latch arm exceeds the cap since
+                // v1.11.0 -- the guard is dormant, see relTrig).
                 g3 = 3*shGap;
                 Tq = g3/shDir;
                 Tsh = ceil(Tq);
-                relAdapt = capped&(liftAhead==0)&((dirPrev*nRel)<=(3*relGap));
-                relT = select2(capped, nRel, select2(relAdapt, max(1, min(nRel, Tsh)), nRel));
+                relAdapt = capped&(liftAhead==0)&((dirPrev*relTbase)<=(3*relGap));
+                relT = select2(capped, relTbase, select2(relAdapt, max(1, min(relTbase, Tsh)), relTbase));
                 // the same medicine, mirrored onto flat-chord attacks: a
                 // leg whose landing chord is flat (the critical candidate
                 // IS the window-deepest -- its next-deeper sentinel copies
@@ -1337,24 +1468,62 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 attRise = (dirPrevP>0)&((gA*dpT)>aMax);
                 attT = select2(attHot, critDl, select2(attAdapt, max(1, min(critDl, Tsh)), critDl));
                 T0 = max(1, select2(relTrig, attT, relT));
-                p1t = select2(relTrig, critVal, v1);
-                // landing chord / rideMax, ONE shared division: every
-                // attack landing aims at the nearest strictly-deeper point
-                // one scale out (the critical candidate's np pair; own
-                // value as np value = land flat); the release side reads
-                // this same quotient as rideMax = (v1 - gain)/(i1 + 1)
-                // (the m0Tt path below). The two are consumed on opposite
-                // sides of relTrig -- aim only in m1Tt/ckM1's attack
-                // branches, rideMax only in m0Tt's release branch -- so
-                // one division serves both, bit-exactly (dens >= 1 on
-                // both branches, so the discarded value is always
-                // finite). A schedule-aware release chord
-                // (nhV - v1)/(nhD - i1) measured as a regression (see
-                // the header); to fly one anyway, give rideMax its own
-                // division and rebind aim over select2(relTrig, ...)
-                // endpoints. nhD is dead without it, so its bank chain
+                // THE UNITY TARGET (v1.14.0). Release legs aim at FULL
+                // recovery, unconditionally: p1 = 1.0, one latch per
+                // release cycle, flown whole, landing flat at unity in
+                // exactly nRel -- the calibrated BLOCK leg, now on
+                // EVERY input. The v1.10.0..v1.13.0 lineage aimed at
+                // the revealed constraint instead (v1, then nhV) under
+                // a receding deadline, and that composite is
+                // structurally back-loaded on any gradual reveal: one
+                // fixed landing sample while the target RISES means
+                // early progress is capped by early targets and the
+                // late gap is crammed into the late clock -- an
+                // S re-aimed at a rising target is slow-then-fast BY
+                // CONSTRUCTION, at every shape setting, in every
+                // domain. Blocks reveal their target in one step,
+                // which is why only blocks ever looked right. With the
+                // target fixed at unity the reveal has nothing to
+                // re-aim (v1 <= 1.0 = p1 keeps term 1 quiet mid-leg),
+                // the curve is the leg's own, and the brickwall moves
+                // entirely to THE OUTPUT CLAMP at gainN: gliding
+                // release samples are min'd with v1 itself -- inert
+                // wherever the curve fits under the ceiling (the open
+                // field this fix is for); where the ceiling binds it
+                // pursues at the RATE FORM gain + (v1 - gain)/(i1 + 1)
+                // (v1.15.1, restoring the v1.12/v1.13 output path): a
+                // hard min at v1 itself welded the gain to the
+                // constraint's staircase, kinks included, on lumpy
+                // slow recoveries -- the rate form lags each reveal,
+                // decelerates smoothly onto plateaus, and leaves air
+                // under the ceiling, with slope steps only at reveals
+                // (which the upstream hold already spaces out). The clamp also
+                // retires the v1.12.1 rideMaxU pre-cap on the ease
+                // boost, whose (i1 + 1) divisor read the FAR window
+                // edge on smooth creeps (argmin = newest sample) and
+                // strangled the boost to a crawl. A leg that spends
+                // its landing capped below unity parks at the clamp;
+                // the re-armed trigger term (v1 > gain at k >= T)
+                // starts the next full-nRel cycle from there when the
+                // ceiling grants more room -- a staircase of plateaus
+                // gets one block leg per step.
+                p1t = select2(relTrig, critVal, select2(relDrop, 1.0, v1));
+                // landing chord, attack-only since v1.11.0: every
+                // attack landing aims at the nearest strictly-deeper
+                // point one scale out (the critical candidate's np
+                // pair; own value as np value = land flat). The old
+                // shared division (its release side read as
+                // rideMax = (v1 - gain)/(i1 + 1), the ride's cap) is
+                // DISSOLVED: the swoop's launch is the plain aBT, so
+                // the release consumer moved to THE OUTPUT CAP at
+                // gainN, which needs the quotient on EVERY gliding
+                // sample, not just trigger samples -- it pays its own
+                // division there (rideMaxU). Net audio-rate division
+                // count is unchanged: one here (attack chord, den
+                // >= 1, finite and discarded on release samples), one
+                // at the cap. nhD stays dead, so its bank chain still
                 // compiles out.
-                aim = (select2(relTrig, critNpV-p1t, v1-gain))/(select2(relTrig, max(1, critNpD-critDl), i1+1));
+                aim = (critNpV-p1t)/max(1, critNpD-critDl);
                 // Fritsch-Carlson bound, carried x T: g3 = 3*(p1t - gain)
                 // is a launch floor on attacks (g3 < 0), a launch cap on
                 // releases (g3 > 0). All caps/floors below act on the
@@ -1384,29 +1553,44 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 // launch is floored at 0 instead; attacks keep the two-sided
                 // pickup (their targets legitimately lie below).
                 //
-                // the lift-aware ride. The v1-chase brakes as the gap
-                // closes -- its drive term 3*(v1 - gain)/T^2 vanishes --
-                // which is wasted braking when the pin plays out before the
-                // gain could reach it anyway. While a lift is scheduled
-                // (liftAhead), the launch may instead keep the boosted chase
-                // velocity: dirPrev plus the drive the farther level nhV
-                // would add, (nhV - v1) * 3/nRel^2 per sample (control-rate
-                // constant), capped by the fastest rate that cannot cross v1
-                // before the lift, rideMax = (v1 - gain)/(i1 + 1). One step
-                // at v <= rideMax leaves gain <= v1, and trigger term 2
-                // re-plans every sample with fresh (v1, i1, nhV), so the
-                // bound holds by induction; the flown-whole guard (term 3)
-                // covers the moment liftAhead vanishes under a still-hot
-                // launch. Two corners are accepted, both bounded: a pin that
-                // RECURS at the wall (nhV read high in the dyadic blind
-                // spot; or the i1 = 0 rounding, whose leak is <= 3*gap/T^2,
-                // orders below the hump class) parks the ride at v1 with a
-                // flat landing instead of a lift; and attacks that fire
-                // mid-ride pick up the hotter dirPrev, growing their hump
-                // within the documented class. max(aBT, rideT) keeps the ride
-                // never slower than the plain chase (and discards a negative
-                // rideMax the same way).
-                rideK = (3.0*invGR)/(float(nRel)*float(nRel));
+                // THE CLAMPED SWOOP (v1.11.0, replacing the lift-aware
+                // ride). The ride solved wasted braking by INJECTING
+                // velocity -- dirPrev plus a drive term each sample --
+                // but a trajectory built from per-sample drive
+                // integration can only ever express the CLOCK of the
+                // requested shape (the old drive constant ~ 1/gRel), never
+                // each re-latch evaluated only the first step of a
+                // fresh phase-0 plan, so on lifting material the shape
+                // knob read as a rate trim and the leg's late character
+                // (the end stage) never played. Instead, while a lift
+                // is scheduled (liftAhead) the latch now aims the leg
+                // AT the lift: p1 = nhV, the next-higher scheduled
+                // level, with the ordinary velocity-continuous
+                // FC-capped entry aBT (g3 reads the same wide gap
+                // through shGap, branch by branch) and the RECEDING
+                // deadline (relCont no longer gates on liftAhead) -- so
+                // per-sample re-latches restrict the running cubic
+                // instead of restarting it, the phase advances through
+                // the curve, and the warp expresses. The brickwall
+                // moves to THE OUTPUT CAP at gainN (see there): a leg
+                // aimed above the pin is <= nhV by construction, not
+                // <= v1, so every gliding release step is clamped to
+                // the ride's old bound (v1 - gain)/(i1 + 1) -- curve
+                // when the curve is slower, fastest-legal pin pursuit
+                // when it is not. Corners, all bounded: nhV read high
+                // in the dyadic blind spot over-aims the leg (the cap
+                // governs; the curve runs mildly hot early); a lift
+                // that evaporates leaves a leg aimed at a phantom nhV
+                // (the cap walks the gain gently onto v1 and the next
+                // reveal re-aims); a hug past the leg's own landing
+                // parks the output at the capped value until v1 rises
+                // (term 2 refires on the first reveal). The renewal
+                // floor in relCont ((T - k) >= 2) starts a FRESH nRel
+                // cycle, velocity-continuous through dT, when a still-
+                // lifting deadline expires -- no flat landing mid-lift.
+                // Term 3 (the flown-whole guard) is retained though no
+                // latch can exceed g3 anymore: it documents and guards
+                // the invariant against future launch arms.
                 // aim IS rideMax = (v1 - gain)/(i1 + 1) on this branch:
                 // the shared quotient above, release side. The x Tt scale
                 // is applied OUTSIDE the min/max (bitwise-identical:
@@ -1424,7 +1608,6 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 // it); dTA is the governed attack arm (v1.9.1)
                 dT = dirPrev*TtG;
                 dTA = dirPrevP*TtG;
-                rideT = min(dirPrev+(nhV-v1)*rideK, aim)*TtG;
                 // launch floor: never descend toward the deepest point (a
                 // two-sided launch can swoop below the window min -- see
                 // the header).
@@ -1593,9 +1776,70 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 // exactly -- no separate pass AND-tree is needed.
                 engaged = (relTrig==0)&(Tpos<1e30);
                 Tt = select2(engaged, T0, max(1, min(T0, Tclr)));
+                // THE EASE LAUNCH (v1.12.1). The from-rest release
+                // leg has m0 = 0 -- h01'(0) = 0 -- so NO Moebius warp
+                // can make a release leave the floor fast: every g
+                // still hesitates at launch (the v1.9.1..v1.11.1
+                // shape-slider saga, in one line). And a boost capped
+                // at the leg's OWN FC bound (v1.12.0) dies on real
+                // material: the leg's target is the pin or the
+                // next-higher dyadic level, a NEARBY point on any
+                // creeping constraint, so "full ease" toward it is a
+                // crawl -- measured 0.09 dB/ms on a drum tail where
+                // the wanted look is ~0.8. The reference model is the
+                // ONE-POLE: velocity proportional to the gap TO
+                // UNITY, ceiling handled by clamping, tail
+                // decelerating as the gap closes. So the boost is a
+                // VELOCITY FLOOR at exactly that law: physical launch
+                // velocity >= relEase * 3 * (1 - gain) / nRel (gain is
+                // LINEAR since v1.13.0, unity = 1.0), stored
+                // x TtG (the physical fold) so the per-sample first
+                // step eK*|gain| is T-invariant -- shortened,
+                // receding, and renewed legs all launch at the same
+                // gap-to-unity rate, a finite-time one-pole with
+                // tau = nRel/(3*relEase) under the brickwall. The
+                // floor may EXCEED the leg's g3 (a plan that would
+                // overshoot its nearby target if flown whole): the
+                // flown-whole guard (term 3) is exactly the engine
+                // that makes this safe -- it refires every sample the
+                // stored launch sits past the leg's FC bound, each
+                // re-latch re-aims from the true state, so only first
+                // steps of boosted plans ever play, and THE OUTPUT
+                // CAP bounds every gliding step below the pin
+                // besides. Gated on relGap > 0: a zero-gap latch at a
+                // flat ceiling must not carry a positive launch (its
+                // uncapped h10 rise would poke above v1 -- the one
+                // leak class the output cap's strict p1N > v1 gate
+                // does not cover). At relEase = 0 the floor is 0 and
+                // max(0, aBT) reproduces aBT on every live branch
+                // (aBT < 0 only in the zero-gap degenerate stop,
+                // where the T = 1 clamp lands on p1 regardless of
+                // m0T -- output-identical). On BLOCKS the unity gap
+                // IS the leg gap (v1 = 0 there), so the calibrated
+                // block ease family of v1.12.0 is reproduced, and
+                // hot entries stay velocity-continuous through the
+                // max(easeT, .) blend. Attacks that fire mid-ease
+                // pick up the hotter dirPrev, growing their hump
+                // within the documented class.
+                // The floor's per-sample step is pre-capped at
+                // rideMaxU (the output cap's own bound, one shared
+                // division -- declarative reference, defined at
+                // gainN): a MICRO-reveal with a flat top (liftAhead
+                // == 0, p1 == v1 a hair above gain) leaves the
+                // output cap's strict p1N > v1 gate inactive, and an
+                // uncapped boost step eK*|gain| would poke past the
+                // sliver of room in ONE sample -- measured 5e-3 dB
+                // pokes with attack-repayment dips on the torture
+                // workload. Capped, the step never exceeds
+                // (v1 - gain)/(i1 + 1), so gain <= v1 survives every
+                // boosted first step by the cap's own induction; on
+                // blocks i1 = 0 makes the cap the full gap and the
+                // calibrated block family is untouched bit-for-bit.
+                eK = relEaseC*3.0*invNRelF;
+                easeT = eK*max(0.0, 1.0-gain)*TtG*(relGap>0.0)*(1.0-relDrop);
                 m0Tt = select2(relTrig,
                     max(g3, min(dTA, aMax)),
-                    select2(liftAhead, aBT, max(aBT, rideT)));
+                    max(easeT, aBT));
                 m1Tt = select2(relTrig, max(g3, min(0, aim)*TtIG), 0);
 
                 TN = select2(trig, T, Tt);
@@ -1642,9 +1886,79 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
                 hermiteVal = h00*p0N+h10*m0TN+h01*p1N+h11*m1TN;
 
                 gliding = kN<=TN;
+                // THE OUTPUT CAP (v1.11.0). A swoop leg targets p1 = nhV
+                // ABOVE the pin v1, so <= p1 by construction no longer
+                // implies the brickwall. Safety moves to the output: any
+                // gliding release step is clamped to the ride bound
+                // (v1 - gain)/(i1 + 1) -- one step at that rate cannot
+                // cross v1 before the pin plays, per-sample, with fresh
+                // (v1, i1) each sample, so gain <= v1 holds by the same
+                // induction the ride used. When the cap binds, the gain
+                // pursues the pin at the fastest legal rate (smooth, no
+                // v1-staircase zipper); when the curve is slower, the
+                // cap is inert and the CURVE is what plays -- the shape
+                // shows exactly where shape can exist. Costs the one
+                // audio-rate division the shared-quotient note foresaw
+                // (rideMaxU needs a per-sample value; aim's release arm
+                // only exists on trigger samples). i1 + 1 >= 1, and the
+                // numerator's max(0, .) floors a transient v1 < gain
+                // read (attack side owns those samples anyway; relCap
+                // gates the min to release legs, p1N >= p0N, aimed
+                // above the pin, p1N > v1).
+                // v1.15.1: the pursuit bound. The old ride form
+                // (v1 - gain)/(i1 + 1) is DEGENERATE during releases:
+                // on any rising constraint the window argmin is the
+                // OLDEST sample, i1 == 0 every sample, and the bound
+                // collapses to v1 itself -- a hard min that welds the
+                // gain to the constraint's staircase, kinks included
+                // (the smoothing it provided on the torture workload
+                // came entirely from non-monotone stretches). The
+                // pursuit instead closes the ceiling gap as a ONE-POLE
+                // at the leg family's own rate, pK = 3/(gRel*nRel)
+                // per sample (clamped <= 1): tau = gRel*nRel/3, so the
+                // shape knob speeds the pursuit exactly as it speeds
+                // the curve. pK sits ABOVE the warped leg's peak
+                // physical velocity (max of h01'(w)*w' is ~3/g at
+                // small g, ~1.5 at g = 1, against the bound's 3/g over
+                // the SAME remaining gap, 2x+ margin at every g), so a
+                // free leg under an open ceiling is never clipped --
+                // the clamp only shapes genuinely ceiling-limited
+                // stretches, where it lags each reveal by the pole and
+                // decelerates smoothly onto plateaus. gain + pK*(v1 -
+                // gain) <= v1 for pK <= 1, so the brickwall induction
+                // is unconditional; one audio division cheaper than
+                // the ride form.
+                pK = min(1.0, 3.0*invGR*invNRelF);
+                rideMaxU = max(0.0, v1-gain)*pK;
+                // v1.16.1: the clamp gate no longer tests p1N > v1.
+                // While a release is ceiling-limited the OUTPUT lags
+                // but the leg's clock keeps flying -- hermiteVal runs
+                // ahead (the desync). With the old strict gate, the
+                // sample v1 reached EXACTLY the target (the end of
+                // the transition to no GR), p1N > v1 flipped false,
+                // the clamp switched off, and the output snapped from
+                // the lagged gain to the raw desynced leg value in
+                // one sample -- an occasional upward JUMP, exactly at
+                // GR -> 0, only after a clamped (lumpy) recovery.
+                // A remaining-gap bound cannot simply stay on for
+                // free legs: velocity over remaining gap DIVERGES at
+                // a polynomial landing (v ~ (1-u), gap ~ (1-u)^2), so
+                // an always-on clamp strangles every tail into an
+                // asymptote. Instead ONE bit of loop state, dsy,
+                // remembers whether the clamp ever bound during THIS
+                // leg (set on bind, cleared at every latch): a
+                // desynced leg stays pursuit-governed to its end --
+                // no gate flip, no snap -- and the k >= T re-arm then
+                // flies one fresh FREE leg that completes the landing
+                // exactly. Free legs never bind, never set dsy, and
+                // keep the strict gate: blocks bit-identical.
+                relCap = (p1N>=p0N)&((p1N>v1)|(dsy!=0.0));
+                bind = relCap&((gain+rideMaxU)<hermiteVal);
+                dsyN = select2(trig, max(dsy, 1.0*bind), 0.0);
+                hermiteOut = select2(relCap, hermiteVal, min(hermiteVal, gain+rideMaxU));
                 // at rest the output HOLDS: v1 == gain there (v1 > gain fires
                 // a release leg, v1 < gain an attack); rises are latched legs
-                gainN = select2(gliding, gain, hermiteVal);
+                gainN = select2(gliding, gain, hermiteOut);
             };
     };
 
@@ -1657,7 +1971,7 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
 //
 // ```
 // _ : lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt) : _
-// _ : lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, maxAtt) : _
+// _ : lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, relEase, maxAtt) : _
 // ```
 //
 // * `nAtt`: attack lookahead in samples (1 <= nAtt <= maxAtt, may
@@ -1691,15 +2005,15 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, checkEvery, cands) = (loop~si
 // with the check removed entirely.
 checkEvery = 2;
 
-lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR) = lookaheadAttackReleaseSmootherShapedCk(nAtt, nRel, 1, 1, maxAtt, checkEvery, rawGR);
+lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR) = lookaheadAttackReleaseSmootherShapedCk(nAtt, nRel, 1, 1, 0, maxAtt, checkEvery, rawGR);
 
-lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, maxAtt, rawGR) = lookaheadAttackReleaseSmootherShapedCk(nAtt, nRel, gAtt, gRel, maxAtt, checkEvery, rawGR);
+lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, relEase, maxAtt, rawGR) = lookaheadAttackReleaseSmootherShapedCk(nAtt, nRel, gAtt, gRel, relEase, maxAtt, checkEvery, rawGR);
 
 // fully parameterized variants, for callers that want the knob as an
 // argument instead of the constant above
-lookaheadAttackReleaseSmootherCk(nAtt, nRel, maxAtt, checkEvery, rawGR) = lookaheadAttackReleaseSmootherShapedCk(nAtt, nRel, 1, 1, maxAtt, checkEvery, rawGR);
+lookaheadAttackReleaseSmootherCk(nAtt, nRel, maxAtt, checkEvery, rawGR) = lookaheadAttackReleaseSmootherShapedCk(nAtt, nRel, 1, 1, 0, maxAtt, checkEvery, rawGR);
 
-lookaheadAttackReleaseSmootherShapedCk(nAtt, nRel, gAtt, gRel, maxAtt, checkEvery, rawGR) = hermiteAttackReleaseFollower(nB+1, nRel, gAtt, gRel, checkEvery, cands)
+lookaheadAttackReleaseSmootherShapedCk(nAtt, nRel, gAtt, gRel, relEase, maxAtt, checkEvery, rawGR) = hermiteAttackReleaseFollower(nB+1, nRel, gAtt, gRel, relEase, checkEvery, cands)
     with {
         nB = int(floor(log(maxAtt)/log(2))+1);
         // the bank output is the follower's candidate list: (value,
@@ -1745,16 +2059,22 @@ lookaheadAttackReleaseSmootherShapedCk(nAtt, nRel, gAtt, gRel, maxAtt, checkEver
 //
 // ```
 // slowGR, rawGR : lookaheadAttackReleaseSmootherOs(nAtt, nRel, maxAtt, os) : _
-// slowGR, rawGR : lookaheadAttackReleaseSmootherShapedOs(nAtt, nRel, gAtt, gRel, maxAtt, os) : _
+// slowGR, rawGR : lookaheadAttackReleaseSmootherShapedOs(nAtt, nRel, gAtt, gRel, relEase, maxAtt, os) : _
 // ```
 //
 // * `os`: overshoot allowance in dB (>= 0, control rate)
 // * `slowGR`: the slow/settle gain path (<= 0 dB)
 // * `rawGR`: the raw (full-depth) GR signal the cap is measured from
 //----------------------------------------------------------------------
-lookaheadAttackReleaseSmootherOs(nAtt, nRel, maxAtt, os, slowGR, rawGR) = lookaheadAttackReleaseSmootherShapedOs(nAtt, nRel, 1, 1, maxAtt, os, slowGR, rawGR);
+lookaheadAttackReleaseSmootherOs(nAtt, nRel, maxAtt, os, slowGR, rawGR) = lookaheadAttackReleaseSmootherShapedOs(nAtt, nRel, 1, 1, 0, maxAtt, os, slowGR, rawGR);
 
-lookaheadAttackReleaseSmootherShapedOs(nAtt, nRel, gAtt, gRel, maxAtt, os, slowGR, rawGR) = min(slowGR, min(0.0, rawGR+os)):lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, maxAtt);
+lookaheadAttackReleaseSmootherShapedOs(nAtt, nRel, gAtt, gRel, relEase, maxAtt, os, slowGR, rawGR) = min(slowGR, min(1.0, rawGR*osL)):lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, relEase, maxAtt)
+    with {
+        // os stays a dB PARAMETER (control rate, one pow); the cap arm
+        // itself is linear like everything else since v1.13.0:
+        // rawGR*osL clamped to unity mirrors the old min(0, raw+os).
+        osL = ba.db2linear(os);
+    };
 
 //-------------------------------- demo ---------------------------------
 // out1: delayed raw GR (the constraint the smoother must stay <= )
@@ -1861,7 +2181,21 @@ shapeBase = 4;
 // shapeBase = SmootherGroup(hslider("[2a]shape base", 8, 4, 16, 1));
 
 gAtt = pow(shapeBase, attShapeSl);
+// v1.15.0: the release slider drives the FRONT-LOAD Moebius warp --
+// the ORIGINAL v1.9.1 mapping, restored. The warp keeps m0 = 0
+// (h01'(0) = 0 at every g), so the release starts FLAT from the
+// hold at any setting; g = 4^-s tightens the bottom knee and
+// stretches the tail: sine at 0, pointy S at 1. This mapping was
+// right all along -- it read as broken for five versions because
+// the receding-deadline composite (v1.10.0..v1.13.0) re-aimed the
+// leg at the rising reveal and back-loaded every non-block input;
+// THE UNITY TARGET (v1.14.0) fixed that, so the warp now expresses
+// on every input exactly as on blocks. relEase (the one-pole-style
+// launch boost, v1.12.x) stays in the API for callers that want a
+// non-flat exponential onset; the demo keeps the flat-start S
+// contract and pins it to 0.
 gRel = pow(shapeBase, 0-relShapeSl);
+relEase = 0.0;
 
 // --- AUC (loudness) area factor ---------------------------------------
 // The shape here is a Moebius time-warp w(t) = t/(t + g*(1-t)) on a cubic
@@ -2004,12 +2338,15 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
 
 interpolate_logarithmic(dv, v0, v1) = v0*pow(v1/v0, dv);
 
-compressor(l, r) = l@latency*gain, r@latency*gain, (preGain:ba.db2linear)@(nAtt-1), gain
+compressor(l, r) = l@latency*gain, r@latency*gain, preGainL@(nAtt-1), gain
     with {
         preBoth = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db);
-        preGain = preBoth:(_, !);
-        preHold = preBoth:(!, _);
-        gain = lookaheadAttackReleaseSmootherShapedOs(nAtt, nRel, gAtt, gRel, maxAtt, attOvershoot, preGain, preHold):grMeter:ba.db2linear;
+        // the DJ computer stays dB inside; the smoothing chain is
+        // LINEAR from here (v1.13.0, THE LINEAR DOMAIN in the header)
+        preGainL = preBoth:(_, !):ba.db2linear;
+        preHoldL = preBoth:(!, _):ba.db2linear;
+        gainL = lookaheadAttackReleaseSmootherShapedOs(nAtt, nRel, gAtt, gRel, relEase, maxAtt, attOvershoot, preGainL, preHoldL);
+        gain = attach(gainL, (gainL:ba.linear2db:grMeter));
         latency = nAtt-1+rel_hold_samples;
     };
 
@@ -2019,7 +2356,7 @@ demoGR = MainGroup(demo(testSignal))
     with {
         demo(rawGR) = grPlay, smoothed
             with {
-                grPlay = de.delay(maxAtt-1+maxRelHoldSamples, nAtt-1+rel_hold_samples, rawGR);
-                smoothed = lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, maxAtt, (rawGR:releaseHold));
+                grPlay = de.delay(maxAtt-1+maxRelHoldSamples, nAtt-1+rel_hold_samples, rawGR):ba.db2linear;
+                smoothed = lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, relEase, maxAtt, (rawGR:releaseHold:ba.db2linear));
             };
     };
