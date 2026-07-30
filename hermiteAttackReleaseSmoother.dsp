@@ -1,5 +1,5 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "1.16.1";
+declare version "1.16.2";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -2336,15 +2336,28 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
             };
     };
 
-interpolate_logarithmic(dv, v0, v1) = v0*pow(v1/v0, dv);
+// v0*pow(v1/v0, dv) with the pow opened into exp(dv*log(v1/v0))
+// (v1.16.2, perf): valid for v0, v1 > 0 (they are times here), and
+// log(v1/v0) depends only on sliders, so Faust hoists it to the
+// control block -- the audio path pays ONE exp instead of a full
+// pow. ulp-level differences from the pow form only (libm pow is
+// exp(y*log(x)) plus edge-case guards).
+interpolate_logarithmic(dv, v0, v1) = v0*exp(dv*log(v1/v0));
+
+// audio-rate dB -> linear (v1.16.2, perf): pow(10, x/20) opened into
+// exp(x*(log(10)/20)) -- the constant folds at compile time, so the
+// per-sample cost is ONE exp instead of a full pow. ulp-level
+// differences from ba.db2linear only. Control-rate sites (osL) and
+// the demo keep ba.db2linear.
+db2linearFast(x) = exp(x*(log(10.0)*0.05));
 
 compressor(l, r) = l@latency*gain, r@latency*gain, preGainL@(nAtt-1), gain
     with {
         preBoth = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db);
         // the DJ computer stays dB inside; the smoothing chain is
         // LINEAR from here (v1.13.0, THE LINEAR DOMAIN in the header)
-        preGainL = preBoth:(_, !):ba.db2linear;
-        preHoldL = preBoth:(!, _):ba.db2linear;
+        preGainL = preBoth:(_, !):db2linearFast;
+        preHoldL = preBoth:(!, _):db2linearFast;
         gainL = lookaheadAttackReleaseSmootherShapedOs(nAtt, nRel, gAtt, gRel, relEase, maxAtt, attOvershoot, preGainL, preHoldL);
         gain = attach(gainL, (gainL:ba.linear2db:grMeter));
         latency = nAtt-1+rel_hold_samples;
