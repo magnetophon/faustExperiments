@@ -2300,9 +2300,11 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                 smoothed = holdGain+(prevGain-holdGain)*coeff;
                 gain = holdGain:onePoleSwitching(gainRel, gainAtt);
 
+                // gainSlow = holdGain:si.onePoleSwitching(gainRel, maxAttDJ);
+                // gain = min(gainSlow, min(0.0, holdGain+attOvershoot));
                 onePoleSwitching(att, rel, x) = loop~_
                     with {
-                        loop(yState) = (1.0-coeff)*x+coeff*yState
+                        loop(yState) = min(((1.0-coeff)*x+coeff*yState), min(0, holdGain+attOvershoot))
                             with {
                                 coeff = ba.if(x>yState, ba.tau2pole(att), ba.tau2pole(rel));
                             };
@@ -2319,7 +2321,7 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                         den = 1-r+select2(abs(1-r)<ma.EPSILON, 0, ma.EPSILON);
                         g = 1/den;
                     };
-                gainAtt = 0;
+                gainAtt = maxAttDJ;
                 //maxAttDJ*attCurve(attShape, gainAttDV);
 
                 // gainAtt = interpolate_logarithmic(gainAttDV, maxAttDJ+minAtt, minAtt)-minAtt;
