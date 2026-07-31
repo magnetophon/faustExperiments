@@ -417,7 +417,7 @@ slidingMinIdxBankAtt(nAtt, maxAtt, x) = (v1, i1, npFullV, npFullD), par(i, nB, (
         cV(i) = casc:ba.selector(2*i, 2*nB);
         cT(i) = casc:ba.selector(2*i+1, 2*nB);
 
-        // attack window: the last nAtt samples of x (oldest = the sample
+        // attack window: the last nAtt samples of x (oldest = the sampl24e
         // playing now), read sparse-table style: min is idempotent, so
         // TWO overlapping dyadic blocks that COVER the window give the
         // same (min, oldest-timestamp) pair as an exact partition --
@@ -1111,6 +1111,7 @@ lookaheadAttackReleaseSmootherCk(nAtt, nRel, maxAtt, checkEvery, rawGR) = hermit
 
 MainGroup(x) = hgroup("[0]hermiteAttackReleaseSmoother", x);
 TestGroup(x) = vgroup("[0]Test signal", x);
+DJcompGroup(x) = vgroup("[0]DJ comp", x);
 SmootherGroup(x) = vgroup("[1]Smoother", x);
 
 // --- Test signal ---
@@ -1151,16 +1152,178 @@ testSignal3 = testSignal1:relFollow
 maxSR = 192000;
 maxAtt = int(0.05*maxSR);
 
-attMs = SmootherGroup(hslider("[0]attack lookahead [unit:ms]", 25, 0, 50, 0.1));
+relHoldMs = SmootherGroup(hslider("[0]rel hold[unit:ms][scale:log]", 50, 0.1, maxRelHold*1000, 0.1));
+attMs = SmootherGroup(hslider("[1]attack lookahead [unit:ms]", 25, 0, 50, 0.1));
 nAtt = max(2, min(maxAtt, int(attMs*0.001*ma.SR)));
-relMs = SmootherGroup(hslider("[1]release [unit:ms]", 50, 0, 500, 0.1));
+relMs = SmootherGroup(hslider("[2]release [unit:ms]", 50, 0, 500, 0.1));
 nRel = max(1, int(relMs*0.001*ma.SR));
 
-process = MainGroup(demo(testSignal))
+// Shape slider base: g = shapeBase^s, so |s| = 1 gives a
+// shapeBase^2 : 1 endpoint-velocity skew. Must stay > 1.
+shapeBase = 6;
+// shapeBase = SmootherGroup(hslider("[2a]shape base", 8, 4, 16, 1));
+
+gAtt = pow(shapeBase, attShapeSl);
+// v1.15.0: the release slider drives the FRONT-LOAD Moebius warp --
+// the ORIGINAL v1.9.1 mapping, restored. The warp keeps m0 = 0
+// (h01'(0) = 0 at every g), so the release starts FLAT from the
+// hold at any setting; g = 4^-s tightens the bottom knee and
+// stretches the tail: sine at 0, pointy S at 1. This mapping was
+// right all along -- it read as broken for five versions because
+// the receding-deadline composite (v1.10.0..v1.13.0) re-aimed the
+// leg at the rising reveal and back-loaded every non-block input;
+// THE UNITY TARGET (v1.14.0) fixed that, so the warp now expresses
+// on every input exactly as on blocks. relEase (the one-pole-style
+// launch boost, v1.12.x) stays in the API for callers that want a
+// non-flat exponential onset; the demo keeps the flat-start S
+// contract and pins it to 0.
+gRel = pow(shapeBase, 0-relShapeSl);
+relEase = 0.0;
+
+// ============================================================================
+//  GUI
+// ============================================================================
+
+grMeter = DJcompGroup(hbargraph("[00]gain reduction[unit:dB]", -24, 0));
+refMeter = DJcompGroup(hbargraph("[01]ref[unit:dB]", -24, 0));
+dvMeter = DJcompGroup(hbargraph("[02]dv", 0, 1));
+
+thres = DJcompGroup(hslider("[03]thres[unit:dB]", -1, -30, 0, 0.1));
+
+attOvershoot = DJcompGroup(hslider("[04]attOvershoot[unit:dB]", 4.2, 0, 18, 0.1));
+maxAttDJ = DJcompGroup(hslider("[05]maxAtt[unit:ms][scale:log]", 42, 1, 420, 1)*0.001);
+
+startRelease = DJcompGroup(hslider("[06]startRelease[unit:ms][scale:log]", 13, 1, 3000, 1)*0.001);
+endRelease = DJcompGroup(hslider("[07]endRelease[unit:ms][scale:log]", 69, 1, 3000, 1)*0.001);
+transitionTime = DJcompGroup(hslider("[08]transitionTime[unit:ms][scale:log]", 420, 1, 3000, 1)*0.001);
+transitionRange = DJcompGroup(hslider("[09]transitionRange[unit:dB]", -9, -18, -0.1, 0.1));
+
+// ============================================================================
+//  RELEASE HOLD (from lamb)
+// ============================================================================
+maxRelHold = 0.05;
+maxRelHoldSamples = maxRelHold*maxSR;
+
+// Clamped into the budget per the SR-budget note. Adds rel_hold_samples of
+// latency on top of the input; at rel hold = 0 the stage is the identity
+// (held == x, both delays are @0).
+rel_hold_samples = int(relHoldMs*0.001*ma.SR:max(0):min(maxRelHoldSamples));
+
+// - min(prevGain, x @ rel_hold_samples) keeps the output monotonically
+//   non-rising: once we've gone down, we can't release.
+// - slidingMin(rel_hold_samples+1, ...) is the future-min within the hold
+//   window: we may go as low as that, but no lower is required.
+// - max() of those two yields the held value.
+// Falls always emerge from the x@rel_hold_samples arm, so held is presented
+// exactly rel_hold_samples late.
+releaseHold(x) = loop~_
+    with {
+        loop(prevGain) = max(min(prevGain, x@rel_hold_samples),
+            x:ba.slidingMin(rel_hold_samples+1, 1+maxRelHoldSamples));
+    };
+
+// ============================================================================
+//  DJ-comp
+// ============================================================================
+
+gain_computer(strength, thresh, knee, level) = select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2))),
+    0,
+    ((level-thresh+(knee/2)):pow(2)/(2*max(ma.EPSILON, knee))),
+    (level-thresh)):max(0)*-strength;
+
+// TODO: put smoothing after channel-link in N-chan version
+// Outputs (gain, holdGain): the DJ gain and the hold-processed raw GR
+// it chases -- the compressor feeds BOTH into the smoother's overshoot
+// cap (lookaheadAttackReleaseSmootherShapedOs).
+compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !)
+    with {
+        loop(prevGain, prevRef) = gain, ref
+            with {
+                // rawGain = gain_computer(1, thresh-attOvershoot, knee, level)*strength;
+                rawGain = gain_computer(1, thresh, knee, level)*strength;
+                holdGain = rawGain:releaseHold;
+
+                coeff = select2(holdGain>prevGain, ba.tau2pole(gainAtt), ba.tau2pole(gainRel));
+                smoothed = holdGain+(prevGain-holdGain)*coeff;
+                gain = holdGain:onePoleSwitching(gainRel, gainAtt);
+
+                // gainSlow = holdGain:si.onePoleSwitching(gainRel, maxAttDJ);
+                // gain = min(gainSlow, min(0.0, holdGain+attOvershoot));
+                onePoleSwitching(att, rel, x) = loop~_
+                    with {
+                        loop(yState) = min(((1.0-coeff)*x+coeff*yState), min(0, holdGain+attOvershoot))
+                            with {
+                                coeff = ba.if(x>yState, ba.tau2pole(att), ba.tau2pole(rel));
+                            };
+                    };
+                gainRel = interpolate_logarithmic(dv, endRelease, startRelease);
+                gainAttDV = (prevGain-holdGain)/attOvershoot:max(0):min(1):gainAttDVmeter;
+
+                attCurve(shape, dv) = select2(abs(shape)<2e-3,
+                    pow(r, dv)*g-r*g// == (r^dv - r)/(1 - r), exact
+                    ,
+                    1-dv)// r -> 1 limit
+                    with {
+                        r = pow(1000, shape);
+                        den = 1-r+select2(abs(1-r)<ma.EPSILON, 0, ma.EPSILON);
+                        g = 1/den;
+                    };
+                gainAtt = maxAttDJ;
+                //maxAttDJ*attCurve(attShape, gainAttDV);
+
+                // gainAtt = interpolate_logarithmic(gainAttDV, maxAttDJ+minAtt, minAtt)-minAtt;
+
+                refAttackTime = 0;
+                singleprecisionMAX = 3.402823466e+38;
+
+                ref = (prevGain-transitionRange):min(0)*strength:si.onePoleSwitching(refRel, refAttackTime):refMeter;
+                refRel = it.interpolate_linear(dv,
+                    transitionTime,
+                    singleprecisionMAX/128);
+                fastGR = (prevGain-prevRef);
+                dv = (fastGR/transitionRange):max(0):min(1):dvMeter;
+            };
+    };
+
+// v0*pow(v1/v0, dv) with the pow opened into exp(dv*log(v1/v0))
+// (v1.16.2, perf): valid for v0, v1 > 0 (they are times here), and
+// log(v1/v0) depends only on sliders, so Faust hoists it to the
+// control block -- the audio path pays ONE exp instead of a full
+// pow. ulp-level differences from the pow form only (libm pow is
+// exp(y*log(x)) plus edge-case guards).
+interpolate_logarithmic(dv, v0, v1) = v0*exp(dv*log(v1/v0));
+
+// audio-rate dB -> linear (v1.16.2, perf): pow(10, x/20) opened into
+// exp(x*(log(10)/20)) -- the constant folds at compile time, so the
+// per-sample cost is ONE exp instead of a full pow. ulp-level
+// differences from ba.db2linear only. Control-rate sites (osL) and
+// the demo keep ba.db2linear.
+db2linearFast(x) = exp(x*(log(10.0)*0.05));
+
+compressor(l, r) = l@latency*gain, r@latency*gain, (rawGR:db2linearFast)@(nAtt-1), gain
+    with {
+        rawGR = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db);
+        gain = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR):grMeter:db2linearFast;
+
+        // the DJ computer stays dB inside; the smoothing chain is
+        // LINEAR from here (v1.13.0, THE LINEAR DOMAIN in the header)
+        // preGainL = preBoth:(_, !):db2linearFast;
+        // preHoldL = preBoth:(!, _):db2linearFast;
+        // gainL = lookaheadAttackReleaseSmootherShapedOs(nAtt, nRel, gAtt, gRel, relEase, maxAtt, attOvershoot, preGainL, preHoldL);
+        // gain = attach(gainL, (gainL:ba.linear2db:grMeter));
+        latency = nAtt-1+rel_hold_samples;
+    };
+
+process = MainGroup(compressor);
+
+demoGR = MainGroup(demo(testSignal))
     with {
         demo(rawGR) = grPlay, smoothed
             with {
-                grPlay = de.delay(maxAtt-1, nAtt-1, rawGR);
-                smoothed = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR);
+                grPlay = de.delay(maxAtt-1+maxRelHoldSamples, nAtt-1+rel_hold_samples, rawGR):ba.db2linear;
+                smoothed = lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, relEase, maxAtt, (rawGR:releaseHold:ba.db2linear));
+
+                // -                grPlay = de.delay(maxAtt-1, nAtt-1, rawGR);
+                // -                smoothed = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR);
             };
     };
