@@ -1,5 +1,5 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "1.16.2";
+declare version "1.17.1";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -686,7 +686,113 @@ import("stdfaust.lib");
 // by a few dB where the maximal path would hold the ceiling to
 // the last sample; closing that needs a schedule-aware plan
 // (candidate-shape-FITTING, not just candidate-clearing) --
-// future work.
+// future work. (Since v1.17.0 the pull is gated to
+// non-restriction latches -- restrictions keep the raw dirPrev,
+// see THE ATTACK RECEDING DEADLINE -- so the glide diet flies
+// whole legs and the governor serves fresh and emergency
+// latches only.)
+//
+// THE ATTACK RECEDING DEADLINE (v1.17.0). The glide diet above
+// starved the attack curve at the root: a same-event re-latch --
+// a deeper reveal whose pin plays at-or-after the running leg's
+// landing -- restarted the leg clock at phase 0 of a FRESH
+// full-length deadline (attT = critDl, pinned at nAtt - 1 on
+// any smooth descent, RECEDING), so tau never left the launch
+// region, only first steps of velocity-kept plans ever played,
+// and the governor's chord was the visible attack: straight.
+// Worse, the restart sabotaged the creep gate itself: steeper
+// reads eps > (gain - p1)*k/rRem -- re-aim only while the
+// reveal outruns what the leg's own remaining chord absorbs --
+// a threshold that GROWS as the leg matures; with k reset at
+// every trigger the gate was forever tested at k = 1, threshold
+// ~gap/nAtt, maximally permissive, so a settling tail churned
+// it for tens of ms.
+// Now the same-event class RESTRICTS the running leg instead,
+// relCont mirrored: attCont = mid-attack-flight (p1 < p0), pin
+// at-or-after the landing (critDl >= rRem), renewal floor
+// (T - k) >= 2. On that class every leg length reads
+// attTbase = rRem -- the momentum algebra is the old one with
+// critDl |-> attTbase verbatim (the attHot gate and its adapt
+// window, the attTs shorten clamp, the adapt pair's fold and
+// denominator, the attRise pair through dpT, the check's ckT
+// through T0), boundaries included, exactly as nRel |->
+// relTbase was. The clock advances one phase step per trigger,
+// the kept clock lets the gate mature, and re-aim bursts
+// self-extinguish: on the scope workload (3 dB os, 9 ms glide,
+// 42 ms window, ~6 dB GR) a step+tail entry re-aims for ~4
+// samples, then flies whole -- the warp expresses over the full
+// window and the tail is pursuit, which the ceiling forces
+// regardless. Deeper-sooner emergencies (critDl < rRem) and
+// rest/handoff latches (k >= T) restart on critDl as before --
+// their horizon shrinks by construction -- and below the floor
+// a creep that outlives its leg renews on a fresh critDl cycle,
+// velocity-continuous through dT. Single-trigger flights never
+// consult the branch: blocks bit-identical (attTbase IS dlF at
+// attCont == 0, and every substituted arm promotes to the same
+// double, arm by arm).
+// THE PERTURBATION GUARD (v1.17.1). Unguarded, the restriction
+// class has two failure modes, both measured on spiky material
+// at tau(maxAttDJ) >= the window: the creep gate's threshold
+// G*(critDl - rRem)/rRem collapses as G -> 0 at touchdown, so
+// re-aim bursts RESURGE exactly where rRem is smallest and the
+// accumulated reveal gets crammed into the leg's last samples
+// (a steep pre-flat drop); and a genuinely NEW deeper event
+// disclosed mid-flight -- a second hit entering the window --
+// has critDl >= rRem like any creep, so it too was crammed
+// into the old leg's remainder instead of earning its own
+// full-length leg (the post-flat notch). Both are one flaw:
+// restriction must be reserved for PERTURBATIONS of the
+// running plan. The guard is eps <= G -- restrict only while
+// the fresh reveal (p1 - critVal) is no larger than the leg's
+// remaining work (gain - p1); otherwise the re-latch RESTARTS
+// on the reveal's own deadline, velocity kept, the hot-entry
+// shorten landing it C1 -- v1.16.2's response, which was
+// correct for new events all along. Parameter-free,
+// division-free, two subtracts and a compare.
+// The governor yields on restrictions: dirPrevP keeps the raw
+// dirPrev there. The pull was the medicine for the phase
+// pinning this removes; on a phase-advancing leg it drags the
+// velocity off the curve toward the chord. Fresh latches keep
+// the governed entry -- the mid-rise blend and its battery are
+// untouched.
+// Accepted corners, all bounded:
+// * THE UNITY TARGET's argument, mirrored: a leg re-aimed at a
+//   deepening target under a fixed landing is structurally
+//   back-loaded on gradual reveals -- early progress capped by
+//   early targets, the late gap crammed into the late clock --
+//   so a front-loaded attack request (gAtt < 1) reads
+//   back-loaded there, and the knob expresses fully only on
+//   step reveals. The release escaped by aiming at a FIXED far
+//   target (unity); no attack mirror exists -- there is no
+//   universal bottom -- so the composite bias is accepted: it
+//   points where the attack knob's musical default points.
+// * the endgame is ambiguous to a stateless latch test: a
+//   settling tail's dregs and a still-moving schedule look
+//   identical at the moment a late re-aim fires (the
+//   difference is the reveal's FUTURE), so the guard restarts
+//   BOTH -- malign crams by design, benign settles harmlessly
+//   (velocity-kept, C1, artifact-free per the valley battery).
+//   The cost lands on deep pure glides: the late dive of the
+//   ideal single-leg S is truncated by restarts, stretching
+//   the descent past the unguarded ideal (early character
+//   kept; measured 9 ms-tau half-time progress 63% vs the
+//   ideal's 19%). Distinguishing settle from motion needs
+//   reveal-rate state -- future work.
+// * a sloped-chord restriction lands early with its tangent
+//   aimed at the pin's own chord (aim keeps critDl: pin
+//   geometry, not a leg length) -- a bounded tangent request,
+//   backstopped by the check + deadline clamp as ever.
+// * the Moebius clock drifts across re-aims at g != 1 -- the
+//   relCont parenthetical verbatim; closed under restriction
+//   at g = 1.
+// Cost: a handful of compares and selects on the latch path;
+// no division, no state, no sliders. Verify: the block battery
+// bit-identical; steptail/ramp S per shape; the spiky battery
+// (multi-dip raw through the DJ arm, tau >= window) for the
+// two v1.17.0 artifact classes -- no pre-flat cram steps
+// beyond the schedule's own, flats >= v1.16.2's, no post-flat
+// notch; testSignal4 (the attack-side torture, v1.17.0) for
+// launches off a moving constraint.
 //
 // THE AUC COMPENSATION (v1.7.0). Shaping a leg changes its area
 // under the curve (AUC), hence its perceived loudness: a
@@ -1111,7 +1217,13 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, relEase, checkEvery, cands) =
                 // keeps the raw dirPrev, bit-identical.
                 sReq = critNum/max(1, critDl);
                 gvK = min(1.0, 24.0/max(1.0, dlF));
-                dirPrevP = select2(dirPrev!=0.0, dirPrev, dirPrev+(sReq-dirPrev)*gvK);
+                // v1.17.0: restrictions (attCont) keep the RAW dirPrev
+                // -- the pull was the medicine for the phase pinning
+                // the receding deadline removes, and on a
+                // phase-advancing leg it drags the velocity off the
+                // curve toward the chord. Fresh and emergency latches
+                // keep the governed entry, bit-identical.
+                dirPrevP = select2((dirPrev!=0.0)&(attCont==0), dirPrev, dirPrev+(sReq-dirPrev)*gvK);
 
                 // ---- triggers ----
                 attNeed = critNum<0;
@@ -1132,6 +1244,12 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, relEase, checkEvery, cands) =
                 // `arrived`). During a release leg p1 - gain > 0 while
                 // critVal - gain < 0, so steeper is true and the creep gate
                 // can never swallow an attack that fires mid-rise.
+                // Since v1.17.0 the same-event firings of this gate --
+                // (critVal != p1) & steeper with the pin at-or-after
+                // the landing -- RESTRICT the running leg (attCont /
+                // attTbase at the latch block) instead of restarting
+                // it: the kept clock is what lets the gate's threshold
+                // mature. See THE ATTACK RECEDING DEADLINE.
                 rRem = max(0, T-k);
                 // remaining steps of the leg
                 steeper = (critNum*rRem)<((p1-gain)*critDl);
@@ -1260,8 +1378,8 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, relEase, checkEvery, cands) =
                 // the m0Tt min caps at aMax, the accepted latch
                 // corner). The evaluator's ratio is scale-free, so
                 // the pair needs no normalization.
-                gAttN = select2(attRise, select2(attHot, gA, select2(attAdapt, gShA, min(Tq, gA*dlF))), max(aMax, gShA*dpT));
-                gAttD = select2(attRise, select2(attAdapt, 1.0, dlF), dpT);
+                gAttN = select2(attRise, select2(attHot, gA, select2(attAdapt, gShA, min(Tq, gA*attTbase))), max(aMax, gShA*dpT));
+                gAttD = select2(attRise, select2(attAdapt, 1.0, attTbase), dpT);
                 gRelN = select2(relAdapt, select2(capped, gR, gShR), min(Tq, gR*relTbase));
                 gRelD = select2(relAdapt, 1.0, relTbase);
                 gN1 = select2(relTrig, gAttN, gRelN);
@@ -1438,9 +1556,38 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, relEase, checkEvery, cands) =
                 // as before).
                 attGap = critNum;
                 dlF = 1.0*critDl;
+                // THE ATTACK RECEDING DEADLINE (v1.17.0, see the
+                // header). A same-event re-latch -- mid-attack-flight,
+                // deeper reveal, pin at-or-after the running leg's
+                // landing -- flies the REMAINING time: the landing
+                // sample is kept, the clock advances one phase step
+                // per trigger, and the creep gate's threshold matures
+                // with it. relCont, mirrored, renewal floor included:
+                // below (T - k) >= 2 a creep that outlives its leg
+                // renews on a fresh critDl cycle. Every attack leg
+                // length below reads attTbase, so the momentum
+                // algebra is the old one with critDl |-> attTbase
+                // verbatim; at attCont == 0 attTbase IS dlF, arm by
+                // arm -- single-trigger flights (blocks) never
+                // consult the branch, bit-identical. aim keeps
+                // critDl: the pin's chord is geometry, not a length.
+                // THE PERTURBATION GUARD (v1.17.1): restrict only
+                // while the re-aim perturbs the running plan by less
+                // than the plan's remaining work -- eps <= G, spelled
+                // (p1 - critVal) <= (gain - p1). A reveal exceeding
+                // the leg's own remaining gap is a NEW event (a
+                // deeper hit disclosed mid-flight) or an endgame cram
+                // (the creep gate's threshold collapses with G at
+                // touchdown, so re-aim bursts resurge exactly where
+                // rRem is smallest): both restart on the reveal's OWN
+                // deadline instead of squeezing into rRem --
+                // velocity-kept, so the hot-entry shorten lands them
+                // C1.
+                attCont = (p1<p0)&((T-k)>=2)&(critDl>=rRem)&((p1-critVal)<=(gain-p1));
+                attTbase = select2(attCont, dlF, max(1.0, rRem));
                 flatChord = critNpV==critVal;
-                attHot = flatChord&(((dirPrevP*gA)*critDl)<(3*attGap));
-                attAdapt = attHot&((dirPrevP*critDl)>=(3*attGap));
+                attHot = flatChord&(((dirPrevP*gA)*attTbase)<(3*attGap));
+                attAdapt = attHot&((dirPrevP*attTbase)>=(3*attGap));
                 // THE RISING-ENTRY FEASIBLE SHAPE (v1.8.0, see the
                 // header). Crest bound for a rising launch: with
                 // a = m0T, D = gain - critVal (= -critNum, free off
@@ -1464,9 +1611,9 @@ hermiteAttackReleaseFollower(nC, nRel, gAtt, gRel, relEase, checkEvery, cands) =
                 // or dirPrevP <= 0 read the gate false (aMax >= 0,
                 // strict >), so the pair's denominator never goes 0
                 // where it is consumed.
-                dpT = dirPrevP*dlF;
+                dpT = dirPrevP*attTbase;
                 attRise = (dirPrevP>0)&((gA*dpT)>aMax);
-                attT = select2(attHot, critDl, select2(attAdapt, max(1, min(critDl, Tsh)), critDl));
+                attT = select2(attHot, attTbase, select2(attAdapt, max(1, min(attTbase, Tsh)), attTbase));
                 T0 = max(1, select2(relTrig, attT, relT));
                 // THE UNITY TARGET (v1.14.0). Release legs aim at FULL
                 // recovery, unconditionally: p1 = 1.0, one latch per
@@ -2098,8 +2245,8 @@ testBlockscale = TestGroup(hslider("[2]blockscale", 1, 0.01, 10, 0.01));
 testFreq = TestGroup(hslider("[3]freq", 1, 0.001, 30, 0.001));
 testStep1 = TestGroup(hslider("[4]step1", 0.75, -1, 1, 0.001));
 testStep2 = TestGroup(hslider("[5]step2", 0.125, -1, 1, 0.001));
-testSelect = TestGroup(hslider("[6]signal select", 0, 0, 2, 1));
-testSignal = select3(testSelect, testSignal1, testSignal2, testSignal3);
+testSelect = TestGroup(hslider("[6]signal select", 0, 0, 3, 1));
+testSignal = testSignal1, testSignal2, testSignal3, testSignal4 : ba.selectn(4, testSelect);
 testSignal1 = it.interpolate_linear(testNoiseLevel,
     (loop~_),
     no.lfnoise(testNoiseRate))
@@ -2120,6 +2267,21 @@ testSignal3 = testSignal1:relFollow
         relFollow(x) = loop~_
             with {
                 loop(y) = min(x, x+(y-x)*relCoef);
+            };
+    };
+// the attack-side mirror of testSignal3 (v1.17.0): a ONE-POLE-ATTACK /
+// instant-release follower, so every DESCENT is a smooth exponential --
+// the overshoot wrapper's glide diet, distilled -- and every rise a
+// step. The restriction class lives or dies on this input: whole
+// shaped legs continuously re-aimed while the reveal outruns their
+// chord, self-extinguishing re-aim bursts, no chord-riding.
+testAttMs = TestGroup(hslider("[8]upstream attack [unit:ms]", 9, 1, 500, 1));
+testSignal4 = testSignal1:attFollow
+    with {
+        attCoef = exp(-1.0/(testAttMs*0.001*ma.SR));
+        attFollow(x) = loop~_
+            with {
+                loop(y) = max(x, x+(y-x)*attCoef);
             };
     };
 
