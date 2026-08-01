@@ -1,5 +1,5 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "1.8.0";
+declare version "1.9.0";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -562,6 +562,65 @@ slidingMinIdx(n, maxN, x) = v, idx
         full = (wV, wT, (wV:de.delay(dMax, dW)), (wT:de.delay(dMax, dW))):minIdxOp;
         v = full:(_, !);
         idx = full:(!, _):idxFromOldest;
+    };
+
+//------------------------`slidingMinIdxBankDJ`--------------------------
+// The DJ glide's demand ladder (v1.9.0): the slidingMinIdx window read
+// PLUS the dyadic prefix taps of the same window -- tap j = min over
+// the FIRST pow2(j) samples to play, the bank's attack-tap alignment
+// (delay n - 2^j on cascade stage j) reused over the DJ lookahead
+// window. ONE (value, timestamp) pair cascade feeds the window read;
+// the taps ride its VALUE lane only -- they carry no timestamps,
+// because the consumer plans each rung against its window EDGE, not
+// the min's exact position (see the loop comment). The taps sample
+// the ceiling schedule C(s) = min over play [0, s) at dyadic
+// horizons -- the pending-demand structure the single window min
+// throws away.
+//
+// A tap wider than the window reads ma.MAX: its glide target
+// min(0, ma.MAX + os) pins to 0, which the strict gate
+// (tgt < yState <= 0) reads as inert -- no separate active() gate at
+// the consumer.
+//
+// #### Usage
+//
+// ```
+// _ : slidingMinIdxBankDJ(n, maxN) : si.bus(nB+2)
+// ```
+//
+// * `n`: window length (1 <= n <= maxN, may vary at control rate)
+// * `maxN`: compile-time maximum (int); nB = int2nrOfBits(maxN)
+// * out1, out2: v, idx (the full window, == slidingMinIdx)
+// * out(3+j):   tap j value
+//----------------------------------------------------------------------
+slidingMinIdxBankDJ(n, maxN, x) = (v, idx), par(j, nB, tV(j))
+    with {
+        nB = int(floor(log(maxN)/log(2))+1);
+        pow2(i) = 1<<i;
+        idxFromOldest(tMin) = ((n-1)-ba.time)+tMin;
+        minIdxOp(va, ta, vb, tb) = select2(pickSecond, va, vb), select2(pickSecond, ta, tb)
+            with {
+                pickSecond = (vb<va)|((vb==va)&((tb-ta)<0));
+            };
+        operator(i) = si.bus(2*i), (si.bus(2)<:(si.bus(2), ((si.bus(2), par(j, 2, _@pow2(i))):minIdxOp)));
+        casc = (x, ba.time):seq(i, nB-1, operator(i));
+        cV(i) = casc:ba.selector(2*i, 2*nB);
+        cT(i) = casc:ba.selector(2*i+1, 2*nB);
+        jW = (par(i, nB, (pow2(i)<=n)):>_)-1;
+        dW = n-(1<<jW);
+        wV = par(i, nB, cV(i)):ba.selectn(nB, jW);
+        wT = par(i, nB, cT(i)):ba.selectn(nB, jW);
+        dMax = max(0, max(pow2(max(0, nB-2))-1, maxN-pow2(nB-1)));
+        full = (wV, wT, (wV:de.delay(dMax, dW)), (wT:de.delay(dMax, dW))):minIdxOp;
+        v = full:(_, !);
+        idx = full:(!, _):idxFromOldest;
+        // tap path, the bank's alignment verbatim: stage j covers
+        // [t-2^j+1, t]; delayed by n-2^j it covers the first 2^j
+        // samples to play. Value lane only: the consumer's edge
+        // deadline needs no timestamp.
+        dl(j) = de.delay(maxN-pow2(j), max(0, n-pow2(j)));
+        active(j) = pow2(j)<=n;
+        tV(j) = select2(active(j), ma.MAX, cV(j):dl(j));
     };
 
 //========================================================================
@@ -1248,7 +1307,7 @@ transitionTime = DJcompGroup(hslider("[08]transitionTime[unit:ms][scale:log]", 4
 transitionRange = DJcompGroup(hslider("[09]transitionRange[unit:dB]", -9, -18, -0.1, 0.1));
 
 djLookMs = DJcompGroup(hslider("[10]lookahead[unit:ms]", 0, 0, maxDJLook*1000, 1));
-underreact = DJcompGroup(hslider("[11]underreact[scale:log]", 42, 1, 1000, 0.1));
+underreact = DJcompGroup(hslider("[11]underreact[scale:log]", 42, 1, 10000, 0.1));
 
 // ============================================================================
 //  RELEASE HOLD (from lamb)
@@ -1280,6 +1339,9 @@ releaseHold(x) = loop~_
 
 maxDJLook = 0.05;
 maxDJLookSamples = int(maxDJLook*maxSR);
+// tap count of the DJ demand ladder (v1.9.0): compile-time, from the
+// bank's own int2nrOfBits over the maximum window
+nBDJ = int(floor(log(maxDJLookSamples+1)/log(2))+1);
 
 // Attack lookahead for the DJ computer (v1.5.0). Clamped into the
 // budget per the SR-budget note, like rel_hold_samples. Adds
@@ -1305,7 +1367,7 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                 rawGain = gain_computer(1, thresh, knee, level)*strength;
                 holdGain = rawGain:releaseHold;
 
-                // --- DJ lookahead, spent on the ATTACK (v1.8.0) ---
+                // --- DJ lookahead, spent on the ATTACK (v1.8.0; v1.9.0: the demand ladder) ---
                 // The attack time itself is AUTOMATED by the distance
                 // to the event. (lookGain, lookIdx) = the min over the
                 // lookahead window [now .. now + dj_look] (play sample
@@ -1358,31 +1420,100 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                 // binds mid-release and bends it smoothly down
                 // instead of letting it pump out and attack straight
                 // back in.
-                // Single-event focus, on purpose: only the WINDOW MIN
-                // is pre-chased. A shallower event due sooner is left
-                // to the deadline cap min(0, playGain + attOvershoot)
-                // + the maxAttDJ settle; once the deep pin plays out,
-                // (lookGain, lookIdx) snap to the next min and the
-                // plan re-derives. dj_look = 0 gates the glide inert
-                // (0, above any real state): v1.4.1 recovered, as
-                // before.
-                // Cost: the value cascade keeps its timestamp lane
-                // (slidingMinIdx). The pole is GAP-AWARE now, so its
-                // final exp lives INSIDE the recursion -- live
-                // re-planning, like the Hermite side -- with
-                // everything feedback-free (the 1/lookIdx division
-                // included) hoisted into lookRate: the loop proper
-                // pays one log + one exp + a mult chain per sample.
-                // Measured: 45 s compile with -wall, the v1.7.0
-                // ~40 s band -- the 179 s tau2pole-in-loop blowup
-                // does NOT recur when the division rides outside
-                // the feedback.
-                lookPair = holdGain:slidingMinIdx(dj_look_samples+1, maxDJLookSamples+1);
-                lookGain = lookPair:(_, !);
-                lookIdx = lookPair:(!, _);
+                // THE DEMAND LADDER (v1.9.0). Single-event focus --
+                // pre-chasing only the window min -- had two failure
+                // modes, both "the lookahead attack doesn't fire":
+                // * STOLEN PLAN: a deeper sample landing later takes
+                //   over (lookGain, lookIdx); the sooner, shallower
+                //   demand is abandoned to the deadline cap, and with
+                //   attOvershoot = 0 the cap is playGain itself -- a
+                //   raw-speed cliff of the whole residual at the
+                //   abandoned deadline. Measured 3+ dB single-sample
+                //   yanks on plain two-step pairs 30 ms apart.
+                // * PINNED SLOTH: while holdGain still makes new
+                //   record lows at the horizon (any ramped or bursty
+                //   attack), every record re-enters at lookIdx =
+                //   dj_look, attDV pins at 1, and the plan crawls at
+                //   underreact x too slow for the ENTIRE record-making
+                //   phase; the already-revealed near portion of the
+                //   descent replays through the cap instead of being
+                //   flown.
+                // Both are the same hole: the schedule authority was
+                // derived from ONE (value, idx) pair, so the pending
+                // demands the window had already revealed carried no
+                // authority of their own. The fix samples the ceiling
+                // schedule C(s) = min over play [0, s) at dyadic
+                // horizons -- the prefix taps of slidingMinIdxBankDJ,
+                // the bank's attack-tap alignment reused on the DJ
+                // window -- and flies ONE glide step per rung: same
+                // exact-landing pole, same gate, each rung's
+                // underreaction from its EDGE DEADLINE -- the far
+                // edge 2^j - 1 of its prefix window, not the min's
+                // exact position, so the rung needs no timestamp
+                // lane and its authority is control-rate. The
+                // glide is the rungs' LOWER ENVELOPE (min): near
+                // rungs commit for what is about to play while far
+                // rungs keep the horizon sloth, so every revealed
+                // demand is served at its scale and nothing is left
+                // to the cap but the glideEps landing hair. An
+                // isolated event renders BIT-IDENTICALLY to v1.8.0:
+                // the full-window rung below keeps the true
+                // (value, idx) plan verbatim, it is the deepest and
+                // slowest rung, and on a lone event it IS the
+                // envelope. Edge deadlines serve a demand up to one
+                // scale late -- the same bound dyadic shadowing
+                // already imposed with true per-tap indices -- and
+                // the next tighter rung picks the demand up as it
+                // crosses each edge, so the residual lands through a
+                // hotter, still-smooth pole one class below the
+                // removed cliffs; the downstream Hermite window
+                // absorbs what is left. dj_look = 0 gates
+                // every rung inert (0, above any real state):
+                // v1.4.1 recovered, as before.
+                // Cost: the pair cascade is unchanged; the taps add
+                // nBDJ value-lane alignment delays (the Att bank's
+                // own trick, half its lanes). The pole is GAP-AWARE,
+                // so its final exp lives INSIDE the recursion --
+                // live re-planning, like the Hermite side -- and the
+                // loop proper pays one log + one exp + a mult chain
+                // PER RUNG per sample, nBDJ + 1 rungs (14 + 1 at the
+                // default budget, of which only the rungs at or
+                // under the live window are ever engaged). Everything
+                // else (edge divisions, underreact exps) is
+                // CONTROL-RATE in tapRate. Measured on the full
+                // chain, 48 kHz double: +8% process time over
+                // v1.8.0, compile 2m20s vs 0m49s -- the enlarged
+                // recursion outgrows faust's DEFAULT 120 s
+                // self-timeout, so pass -t <big> or the compiler
+                // dies silently at exactly two minutes. Rungs
+                // shallower than the downstream Hermite window are
+                // redundant insurance (nAtt absorbs sub-window
+                // steps); drop the smallest few from the par() if
+                // the exp budget pinches, though measured compile
+                // time barely moves with rung count.
+                lookBank = holdGain:slidingMinIdxBankDJ(dj_look_samples+1, maxDJLookSamples+1);
+                lookGain = lookBank:ba.selector(0, nBDJ+2);
+                lookIdx = lookBank:ba.selector(1, nBDJ+2);
+                tapV(j) = lookBank:ba.selector(2+j, nBDJ+2);
+                // Edge deadline of rung j: the far edge of its prefix
+                // window, floored like lookIdx. No timestamp lane --
+                // planning against the edge keeps the identical
+                // one-scale-late worst case (the next tighter rung
+                // picks the demand up as it crosses each edge) and
+                // makes the rung's authority CONTROL-RATE.
+                tapI(j) = max(1, min((1<<j)-1, dj_look_samples));
                 playGain = holdGain@dj_look_samples;
 
                 lookTgt = min(0.0, lookGain+attOvershoot);
+                // Per-tap plans: target, horizon fraction and
+                // authority of rung j -- target audio-rate off the
+                // value lane, authority control-rate off the edge.
+                // Inactive taps read
+                // (ma.MAX, 1), so tapTgt pins to 0 and the strict gate
+                // in the loop reads them inert.
+                tapTgt(j) = min(0.0, tapV(j)+attOvershoot);
+                tapDV(j) = (tapI(j)*(1.0/max(1, dj_look_samples))):max(0.0):min(1.0);
+                tapRate(j) = (1.0/max(1.0, tapI(j)))*exp(0.0-tapDV(j)*log(underreact));
                 // 0 = the event plays NOW, 1 = event at the
                 // horizon. The reciprocal multiply (not /) hoists
                 // THIS division to the control block; the plan's
@@ -1396,6 +1527,8 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                 // under it pin the pole to 1 (see the loop).
                 // Constant: 1/glideEps folds at compile time.
                 glideEps = 0.1;
+                //hslider("glideEps[unit:dB]", 0.1, ma.EPSILON, 12, 0.1);
+
                 // The plan's per-sample authority: the fraction of
                 // the REMAINING log-gap one pole step closes,
                 //   lookRate = 1 / (lookIdx * underreact^attDV)
@@ -1437,14 +1570,27 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                                 // landing -- by then the boost has decayed
                                 // and the gap is ~glideEps, so that step is
                                 // a hair, not a yank.
-                                lookRatio = max((yState-lookTgt)*(1.0/glideEps), 1.0);
-                                lookPole = exp(0.0-log(lookRatio)*lookRate);
-                                // one pole step from the shared
-                                // state; inert (0, above any real
-                                // state) unless the punch ceiling
-                                // is below the state.
+                                // glideAt(tgt, rate): ONE exact-landing
+                                // step toward one (target, authority)
+                                // pair; inert (0, above any real state)
+                                // unless the target is below the state.
                                 glStep(a, t) = a*yState+(1.0-a)*t;
-                                glide = select2((dj_look_samples>0)&(lookTgt<yState), 0.0, glStep(lookPole, lookTgt));
+                                glideAt(tgt, rate) = select2((dj_look_samples>0)&(tgt<yState), 0.0, glStep(pole, tgt))
+                                    with {
+                                        ratio = max((yState-tgt)*(1.0/glideEps), 1.0);
+                                        pole = exp(0.0-log(ratio)*rate);
+                                    };
+                                // v1.9.0: the glide is the LOWER
+                                // ENVELOPE of one such step per ladder
+                                // rung -- the full window plus every
+                                // dyadic prefix tap, each flying its
+                                // own plan at its own scale's
+                                // underreaction. Engaged rungs are
+                                // <= 0, inert rungs read 0, so the min
+                                // is the envelope and all-inert
+                                // recovers the plain one-pole exactly
+                                // as before.
+                                glide = (glideAt(lookTgt, lookRate), par(j, nBDJ, glideAt(tapTgt(j), tapRate(j)))):ba.parallelMin(nBDJ+1);
                             };
                     };
                 gainRel = interpolate_logarithmic(dv, endRelease, startRelease);
