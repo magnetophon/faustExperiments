@@ -396,7 +396,13 @@ import("stdfaust.lib");
 //   of that level's own min, read off the mirror-aligned release taps
 //   (see the header)
 //----------------------------------------------------------------------
-slidingMinIdxBankAtt(nAtt, maxAtt, x) = (v1, i1, npFullV, npFullD), par(i, nB, (outV(i), outD(i), npTV(i), npTD(i))), (nhV, nhD)
+slidingMinIdxBankAtt(nAtt, maxAtt, x) = casc// (v0,t0, v1,t1, ... ) -- ONE instance
+:ro.interleave(2, nB)// -> V(0..nB-1), T(0..nB-1)
+:deal// -> Vw,Tw | Vt,Tt | Vn,Tn
+:(winBlk, tapBlk, si.bus(2*nB))// -> v1,i1 | tV,tD | Vn,Tn
+:spread// -> heads | tap units | np seed | nh
+:(si.bus(4), par(i, nB, tapUnit(i)), si.bus(6+3*nB)):zipNp// -> heads | outV/outD | np chain in | nh
+:(si.bus(4+2*nB), npChain, si.bus(2+3*nB)):(si.bus(4+4*nB), nhChain):lace// -> the declared output order
     with {
         nB = maxNrBits(maxAtt);
         // tap scales 2^0 .. 2^(nB-1)
@@ -412,12 +418,17 @@ slidingMinIdxBankAtt(nAtt, maxAtt, x) = (v1, i1, npFullV, npFullD), par(i, nB, (
             };
 
         // THE shared cascade: pair i = (min, oldest timestamp) over the
-        // last pow2(i) raw input samples
+        // last pow2(i) raw input samples. Instantiated exactly once; every
+        // consumer below is reached by routing, never by re-selecting.
         casc = (x, ba.time):sequentialOperatorParOut(nB-1);
-        cV(i) = casc:ba.selector(2*i, 2*nB);
-        cT(i) = casc:ba.selector(2*i+1, 2*nB);
 
-        // attack window: the last nAtt samples of x (oldest = the sampl24e
+        // ro.interleave(2,nB) transposes the (v,t) pairs into lane order.
+        // Each lane then feeds three consumers -- the attack window, the
+        // tap path and the next-higher chain -- so triple both and zip the
+        // copies back into (V,T) pairs per consumer.
+        deal = ((si.bus(nB)<:si.bus(3*nB)), (si.bus(nB)<:si.bus(3*nB))):route(6*nB, 6*nB, (par(g, 3, par(i, nB, (g*nB+i+1, 2*g*nB+i+1), (3*nB+g*nB+i+1, 2*g*nB+nB+i+1)))));
+
+        // attack window: the last nAtt samples of x (oldest = the sample
         // playing now), read sparse-table style: min is idempotent, so
         // TWO overlapping dyadic blocks that COVER the window give the
         // same (min, oldest-timestamp) pair as an exact partition --
@@ -433,45 +444,70 @@ slidingMinIdxBankAtt(nAtt, maxAtt, x) = (v1, i1, npFullV, npFullD), par(i, nB, (
         // of comparator flags is integer-exact where a float log2 is not.
         jW = (par(i, nB, (pow2(i)<=nAtt)):>_)-1;
         dW = nAtt-(1<<jW);
-        wV = par(i, nB, cV(i)):ba.selectn(nB, jW);
-        wT = par(i, nB, cT(i)):ba.selectn(nB, jW);
         // dW never exceeds max(2^(nB-2)-1, maxAtt-2^(nB-1)): for
         // jW <= nB-2, dW < 2^jW <= 2^(nB-2); for jW = nB-1,
         // dW <= maxAtt-2^(nB-1). Compile-time int, so the two block
         // delay lines size to it instead of to 2^(nB-1) -- half the
         // added memory at the default maxAtt.
         dMax = max(0, max(pow2(max(0, nB-2))-1, maxAtt-pow2(nB-1)));
-        fullA = (wV, wT, (wV:de.delay(dMax, dW)), (wT:de.delay(dMax, dW))):minIdxOp;
-        v1 = fullA:(_, !);
-        i1 = fullA:(!, _):idxFromOldest;
+        // (V,T) -> (v1, i1)
+        winBlk = (ba.selectn(nB, jW), ba.selectn(nB, jW))// wV, wT
+        :si.bus(2)<:(si.bus(2), par(k, 2, de.delay(dMax, dW))):minIdxOp:_, idxFromOldest;
 
         // tap path: cascade stage i covers [t-pow2(i)+1, t]; delaying the
         // pair by nAtt-pow2(i) moves that to the first pow2(i) samples to
         // play. The delayed timestamp then yields the exact play index
         // through the same idxFromOldest.
         dl(i) = de.delay(maxAtt-pow2(i), max(0, nAtt-pow2(i)));
-        tV(i) = cV(i):dl(i);
-        tD(i) = cT(i):dl(i):idxFromOldest;
         active(i) = pow2(i)<=nAtt;
-        outV(i) = select2(active(i), ma.MAX, tV(i));
-        outD(i) = select2(active(i), 1, tD(i));
+        tapBlk = par(i, nB, dl(i)), par(i, nB, dl(i):idxFromOldest);
+        // -> tV, tD
+
+        // v1/i1 feed a lot of sinks, so fan them out here and lay the bus
+        // out consumer by consumer. i1+1 (= npFullD) is computed once and
+        // split three ways: the head output, the np seed, and nhD.
+        //   copies: v1  -> head, npFullV, one per tap unit, 2 for the np
+        //                  seed, 1 for the nh seed
+        //           i1  -> head, the +1, one per tap unit (sD), np seed,
+        //                  one per nh link (exc)
+        spread = ((_<:si.bus(nB+5)), (_<:si.bus(2*nB+3)), si.bus(4*nB)):(si.bus(nB+5), (_, (+(1)<:si.bus(3)), si.bus(2*nB+1)), si.bus(4*nB)):route(7*nB+10, 7*nB+10, (// heads: v1, i1, npFullV, npFullD
+        (1, 1), (nB+6, 2), (2, 3), (nB+7, 4), // per tap unit i: v1, i1, tV(i), tD(i)
+        par(i, nB, (3+i, 5+4*i), (nB+10+i, 6+4*i), (3*nB+11+i, 7+4*i), (4*nB+11+i, 8+4*i)), // np seed: v1 (as npKV(0)), v1 (compare), i1, npFullD
+        (nB+3, 5+4*nB), (nB+4, 6+4*nB), (2*nB+10, 7+4*nB), (nB+8, 8+4*nB), // nh: v1, i1+1, then (i1, V, T) per link
+        (nB+5, 9+4*nB), (nB+9, 10+4*nB), par(j, nB, (2*nB+11+j, 11+4*nB+3*j), (5*nB+11+j, 12+4*nB+3*j), (6*nB+11+j, 13+4*nB+3*j))));
+
+        // one tap: the bank's own output pair, plus the chain's view of it
+        // (sV/sD = the tap clipped to the current window; a disabled tap's
+        // clipped window IS the attack window). sV is emitted twice: each
+        // link of the np chain looks at its own tap and peeks at the next.
+        tapUnit(i, v1i, i1i, tv, td) = select2(active(i), ma.MAX, tv), // outV(i)
+        select2(active(i), 1, td), // outD(i)
+        (select2(active(i), v1i, tv)<:si.bus(2)), // sV(i), twice
+        select2(active(i), i1i, td);
+        // sD(i)
 
         // --- the next-deeper chain --- (top link = the flat sentinel:
         // no lookahead beyond the window)
-        // sV/sD: the tap clipped to the current window; a disabled tap's
-        // clipped window IS the attack window
-        sV(i) = select2(active(i), v1, tV(i));
-        sD(i) = select2(active(i), i1, tD(i));
-        npFullV = v1;
-        npFullD = i1+1;
-        // chain indexed from the top: k = 0 is the largest tap, whose
-        // neighbour is the attack window; tap i sits at k = nB-1-i.
-        npKV(0) = v1;
-        npKD(0) = select2(v1<sV(nB-1), npFullD, i1);
-        npKV(k) = select2(sV(nB-k)<sV(nB-1-k), npKV(k-1), sV(nB-k));
-        npKD(k) = select2(sV(nB-k)<sV(nB-1-k), npKD(k-1), sD(nB-k));
-        npTV(i) = npKV(nB-1-i);
-        npTD(i) = npKD(nB-1-i);
+        // Walked from the largest tap down, emitting every intermediate,
+        // so the whole chain costs one pass instead of one chain per tap.
+        // Link m consumes sV(m+1), sD(m+1) and peeks at sV(m); the seed
+        // (m = nB-1) peeks at sV(nB-1). sV(0)/sD(0) are dead ends and get
+        // dropped by the route.
+        zipNp = route(8*nB+10, 8*nB+8, (par(i, 4, (i+1, i+1)), par(i, nB, (5+5*i, 5+2*i), (6+5*i, 6+2*i)), // outV, outD
+        par(i, 4, (5+5*nB+i, 5+2*nB+i)), // np seed
+        (5*nB+2, 2*nB+9), // sV(nB-1)
+        par(q, nB-1, (5*nB-5*q+3, 10+2*nB+3*q), // sV(nB-1-q)
+        (5*nB-5*q+4, 11+2*nB+3*q), // sD(nB-1-q)
+        (5*nB-5*q-3, 12+2*nB+3*q)), // sV(nB-2-q)
+        par(i, 2+3*nB, (9+5*nB+i, 7+5*nB+i))));
+        // nh, passed on
+        npChain = (npSeed, si.bus(3*(nB-1))):seq(q, nB-1, (si.bus(2*q), npStep, si.bus(3*(nB-2-q))));
+        npSeed(vpv, vc, i1s, nfd, svTop) = vpv, select2(vc<svTop, nfd, i1s);
+        npStep(pv, pd, svn, sdn, svm) = pv, pd, // emit link m+1
+        select2(c, pv, svn), select2(c, pd, sdn)// carry link m
+            with {
+                c = svn<svm;
+            };
 
         // --- release taps + next-higher chain ---
         // The mirror alignment: suffix j = the LAST pow2(j) samples of
@@ -500,13 +536,23 @@ slidingMinIdxBankAtt(nAtt, maxAtt, x) = (v1, i1, npFullV, npFullD), par(i, nB, (
         // pin (i1 = nAtt - 1), or the min value recurs later so a suffix
         // still contains it, nhV = v1: the flat sentinel, aim 0 --
         // mirroring npFull.
-        exc(j) = (nAtt-pow2(j))>i1;
-        nhKV(0) = select2(exc(0), v1, cV(0));
-        nhKT(0) = select2(exc(0), 0, cT(0));
-        nhKV(j) = select2(exc(j), nhKV(j-1), cV(j));
-        nhKT(j) = select2(exc(j), nhKT(j-1), cT(j));
-        nhV = nhKV(nB-1);
-        nhD = select2(exc(0), i1+1, (nhKT(nB-1):idxFromOldest));
+        // exc(0) is carried down the chain because nhD needs it again.
+        nhChain = (nhSeed, si.bus(3*(nB-1))):seq(j, nB-1, (nhStep(j+1), si.bus(3*(nB-2-j)))):nhFin;
+        exc(j, i1j) = (nAtt-pow2(j))>i1j;
+        nhSeed(v1n, i1p1, i1j, vj, tj) = e0, i1p1, select2(e0, v1n, vj), select2(e0, 0, tj)
+            with {
+                e0 = exc(0, i1j);
+            };
+        nhStep(j, e0, i1p1, kv, kt, i1j, vj, tj) = e0, i1p1, select2(ej, kv, vj), select2(ej, kt, tj)
+            with {
+                ej = exc(j, i1j);
+            };
+        nhFin(e0, i1p1, kv, kt) = kv, select2(e0, i1p1, idxFromOldest(kt));
+
+        // interleave the four per-tap lanes back into the declared shape:
+        // (outV, outD, npTV, npTD) per tap. The np chain emitted its links
+        // largest-tap-first, so it is read back in reverse.
+        lace = route(4*nB+6, 4*nB+6, (par(i, 4, (i+1, i+1)), par(i, nB, (5+2*i, 5+4*i), (6+2*i, 6+4*i), (3+4*nB-2*i, 7+4*i), (4+4*nB-2*i, 8+4*i)), (5+4*nB, 5+4*nB), (6+4*nB, 6+4*nB)));
 
         // shared helpers (op bound to minIdxOp):
         sequentialOperatorParOut(N) = seq(i, N, operator(i));
@@ -535,7 +581,7 @@ slidingMinIdxBankAtt(nAtt, maxAtt, x) = (v1, i1, npFullV, npFullD), par(i, nB, (
 // * `maxN`: compile-time maximum (int)
 // * out: minVal, playIdx (0 .. n-1)
 //----------------------------------------------------------------------
-slidingMinIdx(n, maxN, x) = v, idx
+slidingMinIdx(n, maxN, x) = casc:deint:reduce:win
     with {
         nB = int(floor(log(maxN)/log(2))+1);
         pow2(i) = 1<<i;
@@ -547,21 +593,21 @@ slidingMinIdx(n, maxN, x) = v, idx
                 pickSecond = (vb<va)|((vb==va)&((tb-ta)<0));
             };
         operator(i) = si.bus(2*i), (si.bus(2)<:(si.bus(2), ((si.bus(2), par(j, 2, _@pow2(i))):minIdxOp)));
+        // the one and only cascade: (v0,t0, v1,t1, ..., v(nB-1),t(nB-1))
         casc = (x, ba.time):seq(i, nB-1, operator(i));
-        cV(i) = casc:ba.selector(2*i, 2*nB);
-        cT(i) = casc:ba.selector(2*i+1, 2*nB);
+        // transpose the (v,t) pairs into lane order: v(0..nB-1), t(0..nB-1)
+        deint = ro.interleave(2, nB);
         // two overlapping dyadic blocks cover the window (min is
         // idempotent; minIdxOp on equal values passes the OLDER
         // timestamp) -- see the bank's window read for the full
         // argument, incl. the dMax sizing bound
         jW = (par(i, nB, (pow2(i)<=n)):>_)-1;
         dW = n-(1<<jW);
-        wV = par(i, nB, cV(i)):ba.selectn(nB, jW);
-        wT = par(i, nB, cT(i)):ba.selectn(nB, jW);
+        reduce = ba.selectn(nB, jW), ba.selectn(nB, jW);
+        // -> wV, wT
         dMax = max(0, max(pow2(max(0, nB-2))-1, maxN-pow2(nB-1)));
-        full = (wV, wT, (wV:de.delay(dMax, dW)), (wT:de.delay(dMax, dW))):minIdxOp;
-        v = full:(_, !);
-        idx = full:(!, _):idxFromOldest;
+        win = si.bus(2)<:(si.bus(2), par(k, 2, de.delay(dMax, dW))):minIdxOp:_, idxFromOldest;
+        // -> v, idx
     };
 
 //------------------------`slidingMinIdxBankDJ`--------------------------
@@ -593,7 +639,7 @@ slidingMinIdx(n, maxN, x) = v, idx
 // * out1, out2: v, idx (the full window, == slidingMinIdx)
 // * out(3+j):   tap j value
 //----------------------------------------------------------------------
-slidingMinIdxBankDJ(n, maxN, x) = (v, idx), par(j, nB, tV(j))
+slidingMinIdxBankDJ(n, maxN, x) = casc:fanout:reduce:(win, taps)
     with {
         nB = int(floor(log(maxN)/log(2))+1);
         pow2(i) = 1<<i;
@@ -603,24 +649,30 @@ slidingMinIdxBankDJ(n, maxN, x) = (v, idx), par(j, nB, tV(j))
                 pickSecond = (vb<va)|((vb==va)&((tb-ta)<0));
             };
         operator(i) = si.bus(2*i), (si.bus(2)<:(si.bus(2), ((si.bus(2), par(j, 2, _@pow2(i))):minIdxOp)));
+        // the one and only cascade: (v0,t0, v1,t1, ..., v(nB-1),t(nB-1))
         casc = (x, ba.time):seq(i, nB-1, operator(i));
-        cV(i) = casc:ba.selector(2*i, 2*nB);
-        cT(i) = casc:ba.selector(2*i+1, 2*nB);
+
+        // deinterleave the (v,t) pairs into lane order, duplicate the value
+        // lane (window reduction and tap path each need one copy), then park
+        // the tap copy at the end:
+        //   -> vA(0..nB-1), t(0..nB-1), vB(0..nB-1)
+        fanout = ro.interleave(2, nB):(si.bus(nB)<:si.bus(2*nB)), si.bus(nB):si.bus(nB), ro.crossNM(nB, nB);
+        // -> wV, wT, vB(0..nB-1)
+        reduce = ba.selectn(nB, jW), ba.selectn(nB, jW), si.bus(nB);
+
         jW = (par(i, nB, (pow2(i)<=n)):>_)-1;
         dW = n-(1<<jW);
-        wV = par(i, nB, cV(i)):ba.selectn(nB, jW);
-        wT = par(i, nB, cT(i)):ba.selectn(nB, jW);
         dMax = max(0, max(pow2(max(0, nB-2))-1, maxN-pow2(nB-1)));
-        full = (wV, wT, (wV:de.delay(dMax, dW)), (wT:de.delay(dMax, dW))):minIdxOp;
-        v = full:(_, !);
-        idx = full:(!, _):idxFromOldest;
+        // (wV,wT) -> (v, idx)
+        win = si.bus(2)<:(si.bus(2), par(k, 2, de.delay(dMax, dW))):minIdxOp:_, idxFromOldest;
+
         // tap path, the bank's alignment verbatim: stage j covers
         // [t-2^j+1, t]; delayed by n-2^j it covers the first 2^j
         // samples to play. Value lane only: the consumer's edge
         // deadline needs no timestamp.
         dl(j) = de.delay(maxN-pow2(j), max(0, n-pow2(j)));
         active(j) = pow2(j)<=n;
-        tV(j) = select2(active(j), ma.MAX, cV(j):dl(j));
+        taps = par(j, nB, dl(j):select2(active(j), ma.MAX));
     };
 
 //========================================================================
@@ -1627,7 +1679,7 @@ interpolate_logarithmic(dv, v0, v1) = v0*exp(dv*log(v1/v0));
 // the demo keep ba.db2linear.
 db2linearFast(x) = exp(x*(log(10.0)*0.05));
 
-compressor(l, r) = rawGR// l@latency*gain, r@latency*gain, scopeGain, gain
+compressor(l, r) = l@latency*gain, r@latency*gain, scopeGain, gain
     with {
         rawGR = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db):(_, !);
         playGain = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db):(!, _);
