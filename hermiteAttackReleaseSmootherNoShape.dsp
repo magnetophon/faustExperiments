@@ -1294,7 +1294,6 @@ relEase = 0.0;
 grMeter = DJcompGroup(hbargraph("[00]gain reduction[unit:dB]", -24, 0));
 refMeter = DJcompGroup(hbargraph("[01]ref[unit:dB]", -24, 0));
 dvMeter = DJcompGroup(hbargraph("[02]dv", 0, 1));
-attDvMeter = DJcompGroup(hbargraph("[02a]att dv", 0, 1));
 
 thres = DJcompGroup(hslider("[03]thres[unit:dB]", -1, -30, 0, 0.1));
 
@@ -1359,9 +1358,9 @@ gain_computer(strength, thresh, knee, level) = select3((level>(thresh-(knee/2)))
 // Outputs (gain, holdGain): the DJ gain and the hold-processed raw GR
 // it chases -- the compressor feeds BOTH into the smoother's overshoot
 // cap (lookaheadAttackReleaseSmootherShapedOs).
-compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !)
+compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !, _)
     with {
-        loop(prevGain, prevRef) = gain, ref
+        loop(prevGain, prevRef) = gain, ref, playGain
             with {
                 // rawGain = gain_computer(1, thresh-attOvershoot, knee, level)*strength;
                 rawGain = gain_computer(1, thresh, knee, level)*strength;
@@ -1519,7 +1518,7 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                 // THIS division to the control block; the plan's
                 // own 1/lookIdx cannot -- it rides along in
                 // lookRate below.
-                attDV = (lookIdx*(1.0/max(1, dj_look_samples))):max(0.0):min(1.0):attDvMeter;
+                attDV = (lookIdx*(1.0/max(1, dj_look_samples))):max(0.0):min(1.0);
                 // Landing tolerance: the glide plans to sit glideEps
                 // dB above the punch ceiling when the event plays;
                 // the settle inherits a punch band grown by that
@@ -1527,7 +1526,7 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                 // under it pin the pole to 1 (see the loop).
                 // Constant: 1/glideEps folds at compile time.
                 glideEps = 0.1;
-                //hslider("glideEps[unit:dB]", 0.1, ma.EPSILON, 12, 0.1);
+                // SmootherGroup(hslider("glideEps[unit:dB]", 0.1, ma.EPSILON, 12, 0.1));
 
                 // The plan's per-sample authority: the fraction of
                 // the REMAINING log-gap one pole step closes,
@@ -1540,12 +1539,8 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                 // to the control block.
                 lookRate = (1.0/max(1.0, lookIdx))*exp(0.0-attDV*log(underreact));
 
-                coeff = select2(holdGain>prevGain, ba.tau2pole(gainAtt), ba.tau2pole(gainRel));
-                smoothed = holdGain+(prevGain-holdGain)*coeff;
-                gain = playGain:onePoleSwitching(gainRel, gainAtt);
+                gain = playGain:onePoleSwitching(gainRel, maxAttDJ);
 
-                // gainSlow = holdGain:si.onePoleSwitching(gainRel, maxAttDJ);
-                // gain = min(gainSlow, min(0.0, holdGain+attOvershoot));
                 onePoleSwitching(att, rel, x) = loop~_
                     with {
                         loop(yState) = min(min((1.0-coeff)*x+coeff*yState, glide), min(0, playGain+attOvershoot))
@@ -1593,8 +1588,8 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                                 glide = (glideAt(lookTgt, lookRate), par(j, nBDJ, glideAt(tapTgt(j), tapRate(j)))):ba.parallelMin(nBDJ+1);
                             };
                     };
+
                 gainRel = interpolate_logarithmic(dv, endRelease, startRelease);
-                gainAttDV = (prevGain-holdGain)/attOvershoot:max(0):min(1):gainAttDVmeter;
 
                 attCurve(shape, dv) = select2(abs(shape)<2e-3,
                     pow(r, dv)*g-r*g// == (r^dv - r)/(1 - r), exact
@@ -1605,11 +1600,6 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                         den = 1-r+select2(abs(1-r)<ma.EPSILON, 0, ma.EPSILON);
                         g = 1/den;
                     };
-                gainAtt = maxAttDJ;
-                //maxAttDJ*attCurve(attShape, gainAttDV);
-
-                // gainAtt = interpolate_logarithmic(gainAttDV, maxAttDJ+minAtt, minAtt)-minAtt;
-
                 refAttackTime = 0;
                 singleprecisionMAX = 3.402823466e+38;
 
@@ -1637,10 +1627,14 @@ interpolate_logarithmic(dv, v0, v1) = v0*exp(dv*log(v1/v0));
 // the demo keep ba.db2linear.
 db2linearFast(x) = exp(x*(log(10.0)*0.05));
 
-compressor(l, r) = l@latency*gain, r@latency*gain, (rawGR:db2linearFast)@(nAtt-1), gain
+compressor(l, r) = rawGR// l@latency*gain, r@latency*gain, scopeGain, gain
     with {
-        rawGR = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db);
+        rawGR = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db):(_, !);
+        playGain = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db):(!, _);
         gain = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR):grMeter:db2linearFast;
+        // scopeGain = select2(SmootherGroup(checkbox("[99]rawGR")), playGain, rawGR):db2linearFast@(nAtt-1);
+        scopeGain = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db):select2(SmootherGroup(checkbox("[99]playGain"))):db2linearFast@(nAtt-1);
+        // scopeGain = rawGR:db2linearFast@(nAtt-1);
 
         // the DJ computer stays dB inside; the smoothing chain is
         // LINEAR from here (v1.13.0, THE LINEAR DOMAIN in the header)
