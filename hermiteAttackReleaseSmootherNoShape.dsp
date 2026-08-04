@@ -1655,12 +1655,14 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                 refAttackTime = 0;
                 singleprecisionMAX = 3.402823466e+38;
 
-                ref = (prevGain-transitionRange):min(0)*strength:si.onePoleSwitching(refRel, refAttackTime):refMeter;
+                ref = (prevGain-transitionRange):min(0)*strength:si.onePoleSwitching(refRel, refAttackTime);
+                //:refMeter;
                 refRel = it.interpolate_linear(dv,
                     transitionTime,
                     singleprecisionMAX/128);
                 fastGR = (prevGain-prevRef);
-                dv = (fastGR/transitionRange):max(0):min(1):dvMeter;
+                dv = (fastGR/transitionRange):max(0):min(1);
+                //:dvMeter;
             };
     };
 
