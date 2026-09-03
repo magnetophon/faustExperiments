@@ -1703,16 +1703,14 @@ compressor(l, r) = l@latency*gain, r@latency*gain, scopeGain, gain
         latency = nAtt-1+rel_hold_samples+dj_look_samples;
     };
 
-process = MainGroup(compressor);
+process = demoGR;
+//MainGroup(compressor);
 
 demoGR = MainGroup(demo(testSignal))
     with {
         demo(rawGR) = grPlay, smoothed
             with {
-                grPlay = de.delay(maxAtt-1+maxRelHoldSamples, nAtt-1+rel_hold_samples, rawGR):ba.db2linear;
-                smoothed = lookaheadAttackReleaseSmootherShaped(nAtt, nRel, gAtt, gRel, relEase, maxAtt, (rawGR:releaseHold:ba.db2linear));
-
-                // -                grPlay = de.delay(maxAtt-1, nAtt-1, rawGR);
-                // -                smoothed = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR);
+                grPlay = de.delay(maxAtt-1, nAtt-1, rawGR);
+                smoothed = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR);
             };
     };
