@@ -1,5 +1,5 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "1.9.0";
+declare version "1.9.1";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
@@ -97,8 +97,36 @@ import("stdfaust.lib");
 // (liftAhead = nhV > v1), the launch may keep the boosted chase
 // velocity -- dirPrev plus the farther level's drive,
 // (nhV - v1) * 3/nRel^2 per sample, a control-rate constant --
-// capped by the fastest rate that cannot cross v1 before the
-// lift: rideMax = (v1 - gain)/(i1 + 1). Safety is per-sample
+// capped by rideMax = (v1 - gain)/max(i1 + 1, hugLag): the
+// fastest rate that cannot cross v1 before the lift, AND (v1.9.1)
+// the fastest rate whose turnaround still fits under the ceiling.
+// The second term is the hug governor. On any RISING raw the
+// playing sample IS the window min (i1 = 0), so the first term
+// alone let the ride close the whole gap in one step: the gain
+// rode a ramp two or three samples under the raw at the raw's own
+// slope, and the moment the ceiling dropped (a deeper pin at the
+// window's far edge, deadline D = nAtt - 1) the attack leg picked
+// up that velocity with no headroom: an arc poking above the
+// ramp, clamped by the deadline-0 candidate -- a velocity corner
+// ("bumps into the ceiling"; the clearance check cannot see it,
+// since every prefix tap of a rising raw has its min at play
+// index 0 and auto-passes). A Hermite leg launched at velocity v
+// over D samples rises at most (4/27)*D*v above its launch point
+// (max of h10; the descent and landing terms only pull it down),
+// so keeping gain <= v1 - (4/27)*nAtt*v, i.e. v <= rideMax with
+// hugLag = (4/27)*nAtt, guarantees the reversal from any ride
+// fits under the playing value, which a rising raw never drops
+// below before the pin plays. The ride still hugs: at the ramp
+// slope s the gap settles at hugLag*s (35 samples of lag at 5 ms,
+// vs 2*nRel/3 = 160 for the plain governed chase that the first
+// v1.9.1 draft fell back to), and the hug is exponential, no
+// corner at either end. Momentum re-latches (aBT, the shortened
+// leg) are not capped -- they already decelerate into their
+// target -- so a block whose min drops back mid-flight still
+// keeps its velocity. Measured (5 ms / 5 ms, noise 0.42): peak
+// |acceleration| 0.0019 -> 0.0004, brickwall residual 0.0011 ->
+// 0.0002, mean reduction within 0.001 of v1.9.0, blocks
+// bit-identical. Safety is per-sample
 // INDUCTION, not a curve property: one step at v <= rideMax
 // leaves gain <= v1, and the trigger re-plans every sample while
 // liftAhead (term 2) or while a relaxed launch is latched
@@ -112,14 +140,13 @@ import("stdfaust.lib");
 // S-curve is preserved; on multi-level material the ride roughly
 // halves the stall fraction a plain v1-chase leaves on the noisy
 // workload and cuts its brickwall residual, with blocks
-// unchanged. Accepted corners, both bounded: a pin that RECURS at
-// the wall (nhV read high in the dyadic blind spot, or the i1 = 0
-// rounding, leak <= 3*gap/T^2, orders below the hump class) parks
-// the ride at v1 -- as a flat landing, since the momentum
+// unchanged. Accepted corner, bounded: a pin that RECURS at the
+// wall (nhV read high in the dyadic blind spot) parks the ride
+// hugLag*v under v1 -- as a flat landing, since the momentum
 // re-latch (below) starts the deceleration when the cap first
 // binds instead of at the wall; attacks that fire mid-ride pick
-// up the hotter dirPrev, growing their hump within the documented
-// class.
+// up the hotter dirPrev, whose hump now fits under the ceiling
+// by construction.
 //
 // Momentum-preserving release re-latch. A re-latch that CLAMPS
 // the launch velocity onto its cap -- the fresh-leg FC cap
@@ -688,12 +715,14 @@ slidingMinIdxBankDJ(n, maxN, x) = casc:fanout:reduce:(win, taps)
 // #### Usage
 //
 // ```
-// hermiteAttackReleaseFollower(nC, nRel, checkEvery, cands) : _
+// hermiteAttackReleaseFollower(nC, nAtt, nRel, checkEvery, cands) : _
 // ```
 //
 // Where:
 //
 // * `nC`: number of candidates (compile-time int)
+// * `nAtt`: attack window length in samples (may vary at control
+//   rate); sets the hug governor hugLag = (4/27)*nAtt
 // * `nRel`: release leg length in samples (>= 1, may vary at control
 //   rate); 1 = instant rises to v1
 // * `cands`: 4*nC + 2 signals: (value, deadline, next-deeper value,
@@ -732,7 +761,7 @@ slidingMinIdxBankDJ(n, maxN, x) = casc:fanout:reduce:(win, taps)
 //   the window min through its own play sample, so peaks are held
 //   through the peak's play sample.
 //----------------------------------------------------------------------
-hermiteAttackReleaseFollower(nC, nRel, checkEvery, cands) = (loop~si.bus(7)):(_, si.block(6))
+hermiteAttackReleaseFollower(nC, nAtt, nRel, checkEvery, cands) = (loop~si.bus(7)):(_, si.block(6))
     with {
         // release reads: candidate 0's value/deadline = the attack-window
         // min and the pin's play index; the tail = the next-higher pair
@@ -740,6 +769,10 @@ hermiteAttackReleaseFollower(nC, nRel, checkEvery, cands) = (loop~si.bus(7)):(_,
         i1 = cands:ba.selector(1, 4*nC+2);
         nhV = cands:ba.selector(4*nC, 4*nC+2);
         nhD = cands:ba.selector(4*nC+1, 4*nC+2);
+        // hug governor (v1.9.1): the ride may sit no closer than
+        // hugLag*velocity under v1, so a turnaround from any ride
+        // fits under the ceiling (see the header). Control-rate.
+        hugLag = nAtt*(4.0/27.0);
 
         // state: gain, p0, m0T, p1, m1T, k, T (previous-sample values
         // inside loop). The tangent states are carried PRE-MULTIPLIED by
@@ -972,7 +1005,8 @@ hermiteAttackReleaseFollower(nC, nRel, checkEvery, cands) = (loop~si.bus(7)):(_,
                 // attack landing aims at the nearest strictly-deeper point
                 // one scale out (the critical candidate's np pair; own
                 // value as np value = land flat); the release side reads
-                // this same quotient as rideMax = (v1 - gain)/(i1 + 1)
+                // this same quotient as
+                // rideMax = (v1 - gain)/max(i1 + 1, hugLag)
                 // (the m0Tt path below). The two are consumed on opposite
                 // sides of relTrig -- aim only in m1Tt/ckM1's attack
                 // branches, rideMax only in m0Tt's release branch -- so
@@ -984,7 +1018,7 @@ hermiteAttackReleaseFollower(nC, nRel, checkEvery, cands) = (loop~si.bus(7)):(_,
                 // division and rebind aim over select2(relTrig, ...)
                 // endpoints. nhD is dead without it, so its bank chain
                 // compiles out.
-                aim = (select2(relTrig, critNpV-p1t, v1-gain))/(select2(relTrig, max(1, critNpD-critDl), i1+1));
+                aim = (select2(relTrig, critNpV-p1t, v1-gain))/(select2(relTrig, max(1, critNpD-critDl), max(i1+1, hugLag)));
                 // Fritsch-Carlson bound, carried x T: g3 = 3*(p1t - gain)
                 // is a launch floor on attacks (g3 < 0), a launch cap on
                 // releases (g3 > 0). All caps/floors below act on the
@@ -1021,22 +1055,23 @@ hermiteAttackReleaseFollower(nC, nRel, checkEvery, cands) = (loop~si.bus(7)):(_,
                 // velocity: dirPrev plus the drive the farther level nhV
                 // would add, (nhV - v1) * 3/nRel^2 per sample (control-rate
                 // constant), capped by the fastest rate that cannot cross v1
-                // before the lift, rideMax = (v1 - gain)/(i1 + 1). One step
-                // at v <= rideMax leaves gain <= v1, and trigger term 2
-                // re-plans every sample with fresh (v1, i1, nhV), so the
-                // bound holds by induction; the flown-whole guard (term 3)
-                // covers the moment liftAhead vanishes under a still-hot
-                // launch. Two corners are accepted, both bounded: a pin that
-                // RECURS at the wall (nhV read high in the dyadic blind
-                // spot; or the i1 = 0 rounding, whose leak is <= 3*gap/T^2,
-                // orders below the hump class) parks the ride at v1 with a
-                // flat landing instead of a lift; and attacks that fire
-                // mid-ride pick up the hotter dirPrev, growing their hump
-                // within the documented class. max(aBT, rideT) keeps the ride
+                // before the lift AND whose turnaround still fits under
+                // the ceiling: rideMax = (v1 - gain)/max(i1 + 1, hugLag),
+                // hugLag = (4/27)*nAtt (the hug governor -- see the
+                // header; without it, i1 = 0 on every rising raw let the
+                // ride glue the gain to the ramp and every ceiling drop
+                // was a velocity corner). One step at v <= rideMax
+                // leaves gain <= v1, and trigger term 2 re-plans every
+                // sample with fresh (v1, i1, nhV), so the bound holds by
+                // induction; the flown-whole guard (term 3) covers the
+                // moment liftAhead vanishes under a still-hot launch.
+                // Accepted corner, bounded: a pin that RECURS at the wall
+                // (nhV read high in the dyadic blind spot) parks the ride
+                // hugLag*v under v1 with a flat landing instead of a lift. max(aBT, rideT) keeps the ride
                 // never slower than the plain chase (and discards a negative
                 // rideMax the same way).
                 rideK = 3.0/(float(nRel)*float(nRel));
-                // aim IS rideMax = (v1 - gain)/(i1 + 1) on this branch:
+                // aim IS rideMax = (v1 - gain)/max(i1 + 1, hugLag) here:
                 // the shared quotient above, release side. The x Tt scale
                 // is applied OUTSIDE the min/max (bitwise-identical:
                 // scaling by Tt > 0 is monotone and rounds monotonically),
@@ -1249,7 +1284,7 @@ lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR) = lookaheadAttackRelea
 
 // fully parameterized variant, for callers that want the knob as an
 // argument instead of the constant above
-lookaheadAttackReleaseSmootherCk(nAtt, nRel, maxAtt, checkEvery, rawGR) = hermiteAttackReleaseFollower(nB+1, nRel, checkEvery, cands)
+lookaheadAttackReleaseSmootherCk(nAtt, nRel, maxAtt, checkEvery, rawGR) = hermiteAttackReleaseFollower(nB+1, nAtt, nRel, checkEvery, cands)
     with {
         nB = int(floor(log(maxAtt)/log(2))+1);
         // the bank output is the follower's candidate list: (value,
