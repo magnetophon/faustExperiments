@@ -1690,14 +1690,12 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                 refAttackTime = 0;
                 singleprecisionMAX = 3.402823466e+38;
 
-                ref = (prevGain-transitionRange):min(0)*strength:si.onePoleSwitching(refRel, refAttackTime);
-                //:refMeter;
+                ref = (prevGain-transitionRange):min(0)*strength:si.onePoleSwitching(refRel, refAttackTime):refMeter;
                 refRel = it.interpolate_linear(dv,
                     transitionTime,
                     singleprecisionMAX/128);
                 fastGR = (prevGain-prevRef);
-                dv = (fastGR/transitionRange):max(0):min(1);
-                //:dvMeter;
+                dv = (fastGR/transitionRange):max(0):min(1):dvMeter;
             };
     };
 
@@ -1718,11 +1716,12 @@ db2linearFast(x) = exp(x*(log(10.0)*0.05));
 
 compressor(l, r) = l@latency*gain, r@latency*gain, scopeGain, gain
     with {
-        rawGR = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db):(_, !);
-        playGain = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db):(!, _);
+        rawAndPlay = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db);
+        rawGR = rawAndPlay:(_, !);
+        playGain = rawAndPlay:(!, _);
         gain = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR):grMeter:db2linearFast;
         // scopeGain = select2(SmootherGroup(checkbox("[99]rawGR")), playGain, rawGR):db2linearFast@(nAtt-1);
-        scopeGain = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db):select2(SmootherGroup(checkbox("[99]playGain"))):db2linearFast@(nAtt-1);
+        scopeGain = rawAndPlay:select2(SmootherGroup(checkbox("[99]playGain"))):db2linearFast@(nAtt-1);
         // scopeGain = rawGR:db2linearFast@(nAtt-1);
 
         // the DJ computer stays dB inside; the smoothing chain is
@@ -1738,9 +1737,28 @@ compressor(l, r) = l@latency*gain, r@latency*gain, scopeGain, gain
         latency = nAtt-1+rel_hold_samples+dj_look_samples;
     };
 
-process = demoGR;
-//MainGroup(compressor);
+process = slidingMinIdxBankAtt(nAtt, maxAtt);
+// demoGR;
+// MainGroup(compressor);
+// full_demo;
 
+full_demo = testSignal@latency, rawGR, gain
+    with {
+        rawGR = compression_gain_mono_db_auto(1, thres, 0, testSignal):(_, !);
+        gain = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR):grMeter;
+
+        // the DJ computer stays dB inside; the smoothing chain is
+        // LINEAR from here (v1.13.0, THE LINEAR DOMAIN in the header)
+        // preGainL = preBoth:(_, !):db2linearFast;
+        // preHoldL = preBoth:(!, _):db2linearFast;
+        // gainL = lookaheadAttackReleaseSmootherShapedOs(nAtt, nRel, gAtt, gRel, relEase, maxAtt, attOvershoot, preGainL, preHoldL);
+        // gain = attach(gainL, (gainL:ba.linear2db:grMeter));
+        // dj_look_samples: the DJ gain rawGR(t) is planned for the
+        // input sample dj_look_samples further in the past, so play
+        // alignment gains that term. The rawGR play tap stays at
+        // @(nAtt-1): rawGR itself already carries the extra shift.
+        latency = nAtt-1+rel_hold_samples+dj_look_samples;
+    };
 demoGR = MainGroup(demo(testSignal))
     with {
         demo(rawGR) = grPlay, smoothed
