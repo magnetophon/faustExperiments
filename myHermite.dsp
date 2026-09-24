@@ -29,7 +29,7 @@ hermiteLim(x) = slidingMinPar(n, maxN, gainIsLinear, x)//
 :(par(i, nBits, !), _, _)//
 :hermiteFB~_
     with {
-        hermiteFB(prevP, alignedCombined, deepWin) = hermite(t, p0, m0, p1, m1):min(x@look), releasing, t
+        hermiteFB(prevP, alignedCombined, deepWin) = hermite(t, p0, m0, p1, m1):min(x@look), sample, t
             with {
                 directionSame = (attacking==attacking')&(releasing==releasing');
                 t = (min(1, _+1/n)*directionSame*counting)~_;
@@ -38,12 +38,13 @@ hermiteLim(x) = slidingMinPar(n, maxN, gainIsLinear, x)//
                     alignedCombined>=alignedCombined');
                 attacking = alignedCombined<prevP;
                 releasing = alignedCombined>prevP;
-                p0 = prevP:ba.sAndH(1-counting);
-                m0 = prevP-prevP':ba.sAndH(1-counting);
-                p1 = alignedCombined:ba.sAndH(1-counting);
-                m1 = (alignedCombined-deepWin)/n<:select2(attacking, max(0), min(0)):ba.sAndH(1-counting);
-                // m1 = (deepWin-alignedCombined)/n:ba.sAndH(1-counting);
+                p0 = prevP:ba.sAndH(sample);
+                m0 = (prevP-prevP')*n:ba.sAndH(sample);
+                p1 = alignedCombined:ba.sAndH(sample);
+                // m1 = (alignedCombined-deepWin)/n<:select2(attacking, max(0), min(0)):ba.sAndH(sample);
+                m1 = (deepWin-alignedCombined):ba.sAndH(sample);
                 // m1 = select2(attacking, 1/SR, -1/SR);
+                sample = t<(1/n);
             };
     };
 
