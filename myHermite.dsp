@@ -1,3 +1,9 @@
+declare name "myHermite";
+declare version "0.1";
+declare author "Bart Brouns";
+declare license "AGPL-3.0-only";
+declare copyright "2026 - 2026, Bart Brouns";
+
 import("stdfaust.lib");
 SR = 48000;
 minFreq = 23.5;
