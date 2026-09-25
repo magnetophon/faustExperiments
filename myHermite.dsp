@@ -4,6 +4,9 @@ declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
 
+// TODO: use the min(bigblock,target) as the input for the next: this works cause both the lookaheads and the prev gain are known "now"
+// AB ramps: retrigger:impulsify
+
 import("stdfaust.lib");
 
 process = (testSignal:hermiteLim), testSignal@look;
@@ -31,27 +34,50 @@ hermite(t, p0, m0, p1, m1) = ((a*t+b)*t+m0)*t+p0
         a = 2*p0+m0-2*p1+m1;
         b = -3*p0-2*m0+3*p1-m1;
     };
+// Fritsch–Carlson monotone tangent limiter: rescales m0,m1 so the
+// resulting cubic Hermite segment can't overshoot p0..p1.
+// https://en.wikipedia.org/wiki/Monotone_cubic_interpolation
+monotoneTangents(p0, p1, m0, m1) = p0, m0f, p1, m1f
+    with {
+        delta = p1-p0;
+        flat = (delta==0);
+        deltaSafe = delta+flat;
+        // avoid /0; result unused when flat
+        alpha = select2(flat, max(0, m0/deltaSafe), 0);
+        beta = select2(flat, max(0, m1/deltaSafe), 0);
+        r2 = alpha*alpha+beta*beta;
+        tau = select2(r2>9, 1, 3/sqrt(max(1e-20, r2)));
+        m0f = tau*alpha*delta;
+        m1f = tau*beta*delta;
+    };
 
 hermiteLim(x) = slidingMinPar(n, maxN, gainIsLinear, x)//
 :(par(i, nBits, !), _, _)//
 :hermiteFB~_
     with {
-        hermiteFB(prevP, alignedCombined, deepWin) = hermite(t, p0, m0, p1, m1):min(x@look), sample, t
+        // hermiteFB(prevP, alignedCombined, deepWin) = hermite(t, p0, m0, p1, m1):min(x@look), sample, t
+        hermiteFB(prevP, alignedCombined, deepWin) = hermite(t, p0, m0, p1, m1), alignedCombined, t
             with {
-                directionSame = (attacking==attacking')&(releasing==releasing');
-                t = (min(1, _+1/n)*directionSame*counting)~_;
-                counting = (prevP!=alignedCombined)*select2(attacking,
-                    alignedCombined<=alignedCombined',
-                    alignedCombined>=alignedCombined');
+                t = (min(1, _+1/n)*counting)~_;
+                // try to stay at least 1/n cheap:
+                // t = (min(1, _*counting*(1-targetReached)+1/n))~_;
+                // counting_new = alignedCombined==alignedCombined'*(1-targetReached);
+                // counting = alignedCombined==alignedCombined'*(1-(targetReached:ba.impulsify));
+                counting = alignedCombined==alignedCombined';
                 attacking = alignedCombined<prevP;
                 releasing = alignedCombined>prevP;
                 p0 = prevP:ba.sAndH(sample);
                 m0 = (prevP-prevP')*n:ba.sAndH(sample);
                 p1 = alignedCombined:ba.sAndH(sample);
                 // m1 = (alignedCombined-deepWin)/n<:select2(attacking, max(0), min(0)):ba.sAndH(sample);
-                m1 = (deepWin-alignedCombined):ba.sAndH(sample);
-                // m1 = select2(attacking, 1/SR, -1/SR);
+                // if the m1 is not 0, it's not the end yet
+                m1 = 0;
+                //(deepWin-alignedCombined):ba.sAndH(sample);
                 sample = t<(1/n);
+                minDelta(0) = 0.000001// dB
+                ;
+                minDelta(1) = 1-ba.db2linear(0-minDelta(0));
+                targetReached = abs(prevP-x@look)<minDelta(gainIsLinear);
             };
     };
 
