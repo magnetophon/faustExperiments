@@ -5,6 +5,9 @@ declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
 
 import("stdfaust.lib");
+
+process = (testSignal:hermiteLim), testSignal@look;
+
 SR = 48000;
 minFreq = 23.5;
 gainIsLinear = 1;
@@ -28,8 +31,6 @@ hermite(t, p0, m0, p1, m1) = ((a*t+b)*t+m0)*t+p0
         a = 2*p0+m0-2*p1+m1;
         b = -3*p0-2*m0+3*p1-m1;
     };
-
-process = (testSignal:hermiteLim), testSignal@look;
 
 hermiteLim(x) = slidingMinPar(n, maxN, gainIsLinear, x)//
 :(par(i, nBits, !), _, _)//
@@ -76,6 +77,10 @@ slidingReducePar(op, n, maxN, gainIsLinear) = sequentialOperatorParOut(nBits-1, 
         int2bin(x) = par(j, nBits, int(floor(x/pow2(j)))%2);
         pow2(i) = 1<<i;
     };
+
+/************************************************************************************************************
+**************         testSignal
+************************************************************************************************************/
 
 MainGroup(x) = hgroup("[0]Main", x);
 TestGroup(x) = vgroup("[0]Test signal", x);
