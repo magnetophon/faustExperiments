@@ -11,7 +11,20 @@ declare copyright "2026 - 2026, Bart Brouns";
 
 import("stdfaust.lib");
 
-process = (testSignal:hermiteLim), testSignal@look;
+process = //
+(testSignal:hermiteLim), testSignal@look;
+//
+// test;
+
+test = //
+slidingMinPar(halfN, maxN, gainIsLinear)://
+hermiteFB~_// "with" so we can use prev
+    with {
+        hermiteFB(prev) = seq(i, nBits+1, si.bus(nBits-i), hermiteOperator(i))// "with" so we can use i
+            with {
+                hermiteOperator(i) = min;
+            };
+    };
 
 SR = 48000;
 minFreq = 23.5;
