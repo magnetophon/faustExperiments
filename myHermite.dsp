@@ -51,26 +51,42 @@ hermite(t, p0, m0, p1, m1) = ((a*t+b)*t+m0)*t+p0
         a = 2*p0+m0-2*p1+m1;
         b = -3*p0-2*m0+3*p1-m1;
     };
-
 hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
-:(par(i, nBits+1, !), _)//
+:(par(i, nBits, !), _, _)//
 :hermiteFB~_
     with {
-        hermiteFB(prevP, fullWindow) = hermite(t, p0, m0, p1, m1), fullWindow, t
+        hermiteFB(prev, halfWindow, fullWindow) = //
+        // (hermiteHalf, hermiteFull):min//
+        // hermite(t, p0, m0, p1, m1)//, fullWindow, t
+        // (hermiteHalf, hermiteFull):min, hermiteHalf, hermiteFull
+        hermiteCombined, hermiteFull, th//, hermiteHalf
             with {
+                hermiteHalf = hermite(th, p0h, m0h, p1h, m1h);
+                hermiteFull = hermite(t, p0, m0, p1, m1);
+                hermiteCombined = select2(glideH, hermiteFull, hermiteHalf);
+                combinedWindow = min(hermiteFull, halfWindow);
                 // count from 1/n to 1, so we're always gliding:
                 t = (min(1, _*counting+1/n))~_;
+                th = (min(1, _*countingH+2/n))~_;
                 // when the target is constant, start the countdown to reach it
                 counting = fullWindow==fullWindow';
+                countingH = combinedWindow==combinedWindow';
                 // start at the previous point and direction
-                p0 = prevP:ba.sAndH(sample);
-                m0 = (prevP-prevP')*n:ba.sAndH(sample);
+                p0 = prev:ba.sAndH(sample);
+                p0h = prev:ba.sAndH(sampleH);
+                m0 = (prev-prev')*n:ba.sAndH(sample);
+                m0h = (prev-prev')*halfN:ba.sAndH(sampleH);
                 // end at the lookahead point
                 p1 = fullWindow:ba.sAndH(sample);
+                p1h = combinedWindow:ba.sAndH(sampleH);
                 // if the m1 is not 0, it's not the end yet
                 m1 = 0;
+                // TODO: use the actual predicted end speed
+                m1h = 0;
                 // get new targets when we are not yet counting.
                 sample = 1-counting;
+                sampleH = 1-countingH;
+                glideH = (combinedWindow<prev)&(hermiteHalf<hermiteFull);
             };
     };
 //
