@@ -34,50 +34,26 @@ hermite(t, p0, m0, p1, m1) = ((a*t+b)*t+m0)*t+p0
         a = 2*p0+m0-2*p1+m1;
         b = -3*p0-2*m0+3*p1-m1;
     };
-// Fritsch–Carlson monotone tangent limiter: rescales m0,m1 so the
-// resulting cubic Hermite segment can't overshoot p0..p1.
-// https://en.wikipedia.org/wiki/Monotone_cubic_interpolation
-monotoneTangents(p0, p1, m0, m1) = p0, m0f, p1, m1f
-    with {
-        delta = p1-p0;
-        flat = (delta==0);
-        deltaSafe = delta+flat;
-        // avoid /0; result unused when flat
-        alpha = select2(flat, max(0, m0/deltaSafe), 0);
-        beta = select2(flat, max(0, m1/deltaSafe), 0);
-        r2 = alpha*alpha+beta*beta;
-        tau = select2(r2>9, 1, 3/sqrt(max(1e-20, r2)));
-        m0f = tau*alpha*delta;
-        m1f = tau*beta*delta;
-    };
 
 hermiteLim(x) = slidingMinPar(n, maxN, gainIsLinear, x)//
 :(par(i, nBits, !), _, _)//
 :hermiteFB~_
     with {
-        // hermiteFB(prevP, alignedCombined, deepWin) = hermite(t, p0, m0, p1, m1):min(x@look), sample, t
+        // hermiteFB(prevP, alignedCombined, deepWin) = hermite(t, p0, m0, p1, m1):min(x@look), alignedCombined, t
         hermiteFB(prevP, alignedCombined, deepWin) = hermite(t, p0, m0, p1, m1), alignedCombined, t
             with {
-                t = (min(1, _+1/n)*counting)~_;
-                // try to stay at least 1/n cheap:
-                // t = (min(1, _*counting*(1-targetReached)+1/n))~_;
-                // counting_new = alignedCombined==alignedCombined'*(1-targetReached);
-                // counting = alignedCombined==alignedCombined'*(1-(targetReached:ba.impulsify));
+                // count from 1/n to 1, so we're always gliding:
+                t = (min(1, _*counting+1/n))~_;
+                // when the target is constant, start the countdown to reach it
                 counting = alignedCombined==alignedCombined';
-                attacking = alignedCombined<prevP;
-                releasing = alignedCombined>prevP;
+                // start at the previous point and direction
                 p0 = prevP:ba.sAndH(sample);
                 m0 = (prevP-prevP')*n:ba.sAndH(sample);
                 p1 = alignedCombined:ba.sAndH(sample);
-                // m1 = (alignedCombined-deepWin)/n<:select2(attacking, max(0), min(0)):ba.sAndH(sample);
                 // if the m1 is not 0, it's not the end yet
                 m1 = 0;
-                //(deepWin-alignedCombined):ba.sAndH(sample);
-                sample = t<(1/n);
-                minDelta(0) = 0.000001// dB
-                ;
-                minDelta(1) = 1-ba.db2linear(0-minDelta(0));
-                targetReached = abs(prevP-x@look)<minDelta(gainIsLinear);
+                // get new targets when we are not yet counting.
+                sample = 1-counting;
             };
     };
 
@@ -119,8 +95,8 @@ testBlockscale = TestGroup(hslider("[2]blockscale", 1, 0.01, 10, 0.01));
 testFreq = TestGroup(hslider("[3]freq", 1, 0.001, 30, 0.001));
 testStep1 = TestGroup(hslider("[4]step1", 0.75, -1, 1, 0.001));
 testStep2 = TestGroup(hslider("[5]step2", 0.125, -1, 1, 0.001));
-testSelect = TestGroup(hslider("[6]signal select", 0, 0, 2, 1));
-testSignal = select3(testSelect, testSignal1, testSignal2, testSignal3);
+testSelect = TestGroup(checkbox("[6]signal select"));
+testSignal = select2(testSelect, testSignal1, testSignal2);
 testSignal1 = it.interpolate_linear(testNoiseLevel,
     (loop~_),
     no.lfnoise(testNoiseRate))
@@ -128,18 +104,3 @@ testSignal1 = it.interpolate_linear(testNoiseLevel,
         loop(prev) = no.lfnoise0(testBlockscale*(abs(prev*69)%9:pow(0.75)*5+1));
     };
 testSignal2 = os.lf_squarewave(testFreq)*0.5;
-// the torture signal through an instant-attack / one-pole-release
-// follower: GR as it looks with the release applied upstream --
-// descents stay steps (the lookahead's job), every rise is a smooth
-// exponential, so attacks launch from a MOVING constraint. A/B it
-// against the raw signals to see what shaping the release inside
-// the smoother buys.
-testRelMs = TestGroup(hslider("[7]upstream release [unit:ms]", 50, 1, 500, 1));
-testSignal3 = testSignal1:relFollow
-    with {
-        relCoef = exp(-1.0/(testRelMs*0.001*ma.SR));
-        relFollow(x) = loop~_
-            with {
-                loop(y) = min(x, x+(y-x)*relCoef);
-            };
-    };
