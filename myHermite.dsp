@@ -9,6 +9,9 @@ declare copyright "2026 - 2026, Bart Brouns";
 // except the full window, which is always gliding
 // the end speed of the smaller blocks use is the end speed of the bigger neigbor, as calculated by increasing putting the t of the bigger block the size of the smaller block into the future
 
+// limit undershoot:
+// before final smoother output, autosat the diff between GR in dB and fullWindow in dB, so that the max underhoot is a known dB amount 
+
 import("stdfaust.lib");
 
 process = //
@@ -63,7 +66,8 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
             with {
                 hermiteHalf = hermite(th, p0h, m0h, p1h, m1h);
                 hermiteFull = hermite(t, p0, m0, p1, m1);
-                hermiteCombined = select2(glideH, hermiteFull, hermiteHalf);
+                hermiteCombined = select2(useHalf, hermiteFull, hermiteHalf);
+
                 combinedWindow = min(hermiteFull, halfWindow);
                 // count from 1/n to 1, so we're always gliding:
                 t = (min(1, _*counting+1/n))~_;
@@ -86,7 +90,12 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 // get new targets when we are not yet counting.
                 sample = 1-counting;
                 sampleH = 1-countingH;
-                glideH = (combinedWindow<prev)&(hermiteHalf<hermiteFull);
+
+                useHalf = //
+                ((halfWindow<prev)//
+                &(hermiteHalf<hermiteFull))//
+                // |((th>(2/n))&(fullWindow>prev));
+                |(countingH&(halfWindow>prev));
             };
     };
 //
