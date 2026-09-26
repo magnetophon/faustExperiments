@@ -5,7 +5,9 @@ declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
 
 // TODO: use the min(bigblock,target) as the input for the next: this works cause both the lookaheads and the prev gain are known "now"
-// AB ramps: retrigger:impulsify
+// as long as we don't have a steady target, use the value from the bigger neigbour block.
+// except the full window, which is always gliding
+// the end speed of the smaller blocks use is the end speed of the bigger neigbor, as calculated by increasing putting the t of the bigger block the size of the smaller block into the future
 
 import("stdfaust.lib");
 
@@ -15,9 +17,11 @@ SR = 48000;
 minFreq = 23.5;
 gainIsLinear = 1;
 maxN = 1<<int(ceil(log(SR/minFreq)/log(2)-1e-9));
-look = 2*maxN;
+look = maxN;
 freq = hslider("freq[unit:Hz][scale:log]", SR/maxN, SR/maxN, SR/2, 0.01);
-n = int(min(maxN, max(1, ceil(SR/freq))));
+// we want the small window exactly half the size of the main window
+halfN = int(min(maxN, max(1, ceil(SR/freq*0.5))));
+n = halfN*2;
 
 nBits = maxNrBits(maxN);
 maxNrBits(x) = int(floor(log(x)/log(2))+1);
@@ -35,47 +39,48 @@ hermite(t, p0, m0, p1, m1) = ((a*t+b)*t+m0)*t+p0
         b = -3*p0-2*m0+3*p1-m1;
     };
 
-hermiteLim(x) = slidingMinPar(n, maxN, gainIsLinear, x)//
-:(par(i, nBits, !), _, _)//
+hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
+:(par(i, nBits+1, !), _)//
 :hermiteFB~_
     with {
-        // hermiteFB(prevP, alignedCombined, deepWin) = hermite(t, p0, m0, p1, m1):min(x@look), alignedCombined, t
-        hermiteFB(prevP, alignedCombined, deepWin) = hermite(t, p0, m0, p1, m1), alignedCombined, t
+        hermiteFB(prevP, fullWindow) = hermite(t, p0, m0, p1, m1), fullWindow, t
             with {
                 // count from 1/n to 1, so we're always gliding:
                 t = (min(1, _*counting+1/n))~_;
                 // when the target is constant, start the countdown to reach it
-                counting = alignedCombined==alignedCombined';
+                counting = fullWindow==fullWindow';
                 // start at the previous point and direction
                 p0 = prevP:ba.sAndH(sample);
                 m0 = (prevP-prevP')*n:ba.sAndH(sample);
-                p1 = alignedCombined:ba.sAndH(sample);
+                // end at the lookahead point
+                p1 = fullWindow:ba.sAndH(sample);
                 // if the m1 is not 0, it's not the end yet
                 m1 = 0;
                 // get new targets when we are not yet counting.
                 sample = 1-counting;
             };
     };
-
-slidingMinPar(n, maxN, lin) = slidingReducePar(min, n, maxN, lin);
-slidingReducePar(op, n, maxN, gainIsLinear) = sequentialOperatorParOut(nBits-1, op)<:parTaps, (combined<:alignedCombined, deepWin)
+//
+// nBits fixed windows that are the same size or smaller than the half window, then the half window, then the full window
+//
+slidingMinPar(halfN, maxN, lin) = slidingReducePar(min, halfN, maxN, lin);
+slidingReducePar(op, halfN, maxN, gainIsLinear) = sequentialOperatorParOut(nBits-1, op)<:fixedWindows, (variableWindows<:halfWindow, fullWindow)
     with {
-        look = 2*maxN;
         disabledVal = gainIsLinear;
-        parTaps = par(i, nBits, _@(look-pow2(i)):useValSize(i));
-        useValSize(i) = select2(pow2(i)<=n, disabledVal, _);
-        combined = par(i, nBits, _@sumOfPrevBlockSizes(i):useValBit(i)):parallelOp(op, nBits);
+        fixedWindows = par(i, nBits, _@(look-pow2(i)):useValSize(i));
+        useValSize(i) = select2(pow2(i)<=halfN, disabledVal, _);
+        variableWindows = par(i, nBits, _@sumOfPrevBlockSizes(i):useValBit(i)):parallelOp(op, nBits);
         useValBit(i) = select2(isUsed(i), disabledVal, _);
-        alignedCombined = _@(look-n);
-        deepWin = (_<:op(_, _@n)):_@(look-2*n);
-        sequentialOperatorParOut(N, op) = seq(i, N, operator(i));
+        halfWindow = _@(look-halfN);
+        fullWindow = (_<:op(_, _@halfN)):_@(look-2*halfN);
+        sequentialOperatorParOut(HALFN, op) = seq(i, HALFN, operator(i));
         operator(i) = si.bus(i), (_<:_, op(_, _@pow2(i)));
         sumOfPrevBlockSizes(0) = 0;
         sumOfPrevBlockSizes(i) = ba.subseq(allBlockSizes, 0, i):>_;
         allBlockSizes = par(i, maxNrBits(maxN-1), pow2(i)*isUsed(i));
-        isUsed(i) = ba.take(i+1, int2bin(n));
+        isUsed(i) = ba.take(i+1, int2bin(halfN));
         parallelOp(op, 1) = _;
-        parallelOp(op, N) = op(parallelOp(op, N-1), _);
+        parallelOp(op, HALFN) = op(parallelOp(op, HALFN-1), _);
         int2bin(x) = par(j, nBits, int(floor(x/pow2(j)))%2);
         pow2(i) = 1<<i;
     };
