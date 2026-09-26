@@ -92,10 +92,7 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 sampleH = 1-countingH;
 
                 useHalf = //
-                ((halfWindow<prev)//
-                &(hermiteHalf<hermiteFull))//
-                // |((th>(2/n))&(fullWindow>prev));
-                |(countingH&(halfWindow>prev));
+                (p0h>p1h)&(hermiteHalf<hermiteFull);
             };
     };
 //
