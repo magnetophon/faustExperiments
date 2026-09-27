@@ -24,7 +24,7 @@ declare copyright "2026 - 2026, Bart Brouns";
 import("stdfaust.lib");
 
 process = //
-(testSignal:hermiteLim), testSignal@look;
+testSignal@look, (testSignal:hermiteLim);
 //
 // test;
 
@@ -65,13 +65,15 @@ hermite(t, p0, m0, p1, m1) = ((a*t+b)*t+m0)*t+p0
     };
 hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
 :(par(i, nBits, !), _, _)//
-:hermiteFB~_
+:hermiteFB~(_, _)
     with {
-        hermiteFB(prev, halfWindow, fullWindow) = //
+        hermiteFB(prev, prevUseHalf, halfWindow, fullWindow) = //
         // (hermiteHalf, hermiteFull):min//
         // hermite(t, p0, m0, p1, m1)//, fullWindow, t
         // (hermiteHalf, hermiteFull):min, hermiteHalf, hermiteFull
-        hermiteCombined, hermiteFull, th//, hermiteHalf
+        hermiteCombined, useHalf, min(1, abs(prev-prev')*100), prev, m0, p0, p1, t, th, counting, countingH, hermiteFull, hermiteHalf
+
+        //t, (abs(prev-prev')*100, _:max)~_, t, th, hermiteFull, hermiteHalf//th , hermiteHalf
             with {
                 hermiteHalf = hermite(th, p0h, m0h, p1h, m1h);
                 hermiteFull = hermite(t, p0, m0, p1, m1);
@@ -84,6 +86,7 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 // when the target is constant, start the countdown to reach it
                 counting = fullWindow==fullWindow';
                 countingH = combinedWindow==combinedWindow';
+                //&(1-(prevUseHalf:ba.impulsify));
                 // start at the previous point and direction
                 p0 = prev:ba.sAndH(sample);
                 p0h = prev:ba.sAndH(sampleH);
@@ -139,9 +142,9 @@ TestGroup(x) = vgroup("[0]Test signal", x);
 SmootherGroup(x) = vgroup("[1]Smoother", x);
 
 // --- Test signal ---
-testNoiseLevel = TestGroup(hslider("[0]noise level", 0, 0, 1, 0.001));
+testNoiseLevel = TestGroup(hslider("[0]noise level", 0.216, 0, 1, 0.001));
 testNoiseRate = TestGroup(hslider("[1]noise rate", 42, 1, 1000, 1));
-testBlockscale = TestGroup(hslider("[2]blockscale", 1, 0.01, 10, 0.01));
+testBlockscale = TestGroup(hslider("[2]blockscale", 6.63, 0.01, 10, 0.01));
 testFreq = TestGroup(hslider("[3]freq", 1, 0.001, 30, 0.001));
 testStep1 = TestGroup(hslider("[4]step1", 0.75, -1, 1, 0.001));
 testStep2 = TestGroup(hslider("[5]step2", 0.125, -1, 1, 0.001));
