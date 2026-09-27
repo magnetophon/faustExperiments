@@ -12,6 +12,15 @@ declare copyright "2026 - 2026, Bart Brouns";
 // limit undershoot:
 // before final smoother output, autosat the diff between GR in dB and fullWindow in dB, so that the max underhoot is a known dB amount 
 
+// shaper on t
+//
+// fix stuck release at the bottom:
+// if
+// speed < possiblespeed & t = 1/n
+// ramp up to possiblespeed
+//
+//something similar shoukd be done for stuck attacks that are going down too much: unstick them
+
 import("stdfaust.lib");
 
 process = //
