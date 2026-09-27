@@ -154,3 +154,12 @@ testSignal1 = it.interpolate_linear(testNoiseLevel,
         loop(prev) = no.lfnoise0(testBlockscale*(abs(prev*69)%9:pow(0.75)*5+1));
     };
 testSignal2 = os.lf_squarewave(testFreq)*0.5;
+
+/************************************************************************************************************
+**************         utilities
+************************************************************************************************************/
+
+// minDelta(0) = 0.001;
+minDelta(0) = hslider("minDelta", 0.001, 0, 1, 0.001)*0.001;
+minDelta(1) = ba.db2linear(minDelta(0));
+curvesMerged = abs(hermiteHalf-hermiteFull)<minDelta(gainIsLinear);
