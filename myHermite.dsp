@@ -65,13 +65,13 @@ hermite(t, p0, m0, p1, m1) = ((a*t+b)*t+m0)*t+p0
     };
 hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
 :(par(i, nBits, !), _, _)//
-:hermiteFB~(_, _)
+:hermiteFB~_
     with {
-        hermiteFB(prev, prevUseHalf, halfWindow, fullWindow) = //
+        hermiteFB(prev, halfWindow, fullWindow) = //
         // (hermiteHalf, hermiteFull):min//
         // hermite(t, p0, m0, p1, m1)//, fullWindow, t
         // (hermiteHalf, hermiteFull):min, hermiteHalf, hermiteFull
-        hermiteCombined, useHalf, min(1, abs(prev-prev')*100), prev, m0, p0, p1, t, th, counting, countingH, hermiteFull, hermiteHalf
+        hermiteCombined, hermiteFull, max(min(1, abs((prev-prev')-(prev-prev')')*1000), _)~_, t, th
 
         //t, (abs(prev-prev')*100, _:max)~_, t, th, hermiteFull, hermiteHalf//th , hermiteHalf
             with {
@@ -86,7 +86,6 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 // when the target is constant, start the countdown to reach it
                 counting = fullWindow==fullWindow';
                 countingH = combinedWindow==combinedWindow';
-                //&(1-(prevUseHalf:ba.impulsify));
                 // start at the previous point and direction
                 p0 = prev:ba.sAndH(sample);
                 p0h = prev:ba.sAndH(sampleH);
@@ -104,8 +103,15 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 sampleH = 1-countingH;
 
                 useHalf = //
-                ((p0>p1)|(p0h>p1h))//
-                &(hermiteHalf<hermiteFull);
+                useHalfFB~_
+                    with {
+                        useHalfFB(prevUseHalf) = //
+                        // ((p0>p1)|(p0h>p1h))//
+                        ((p0h>p1h)// are we attacking?
+                        |((p0>p1)&prevUseHalf)// the long window can only keep useHalf on, not trigger it
+                        )//
+                        &(hermiteHalf<hermiteFull);
+                    };
             };
     };
 //
