@@ -13,6 +13,7 @@ declare copyright "2026 - 2026, Bart Brouns";
 // before final smoother output, autosat the diff between GR in dB and fullWindow in dB, so that the max underhoot is a known dB amount 
 
 // shaper on t
+// and/or: shaper+antishaper on GR
 //
 // fix stuck release at the bottom:
 // if
@@ -20,6 +21,10 @@ declare copyright "2026 - 2026, Bart Brouns";
 // ramp up to possiblespeed
 //
 //something similar shoukd be done for stuck attacks that are going down too much: unstick them
+//
+// when coasting, cheack how far we actually are vs how far t (or th) is, if it is not far, use the ramp
+//
+// only grigger useHalf when x@? islower than fullHermite at t in the future
 
 import("stdfaust.lib");
 
@@ -97,6 +102,11 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 // if the m1 is not 0, it's not the end yet
                 m1 = 0;
                 // TODO: use the actual predicted end speed
+                // use one more sample latency:
+                // these are the old look values, so signal needs to be delayed by (look+1)
+                // dirPast = x*look-x@(look-1);
+                // dirFuture = x@(look+1)-x*look;
+                // m1 = select2(dirPast)
                 m1h = 0;
                 // get new targets when we are not yet counting.
                 sample = 1-counting;
