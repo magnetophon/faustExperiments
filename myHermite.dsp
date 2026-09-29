@@ -83,15 +83,59 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
         // (hermiteHalf, hermiteFull):min//
         // hermite(t, p0, m0, p1, m1)//, fullWindow, t
         // (hermiteHalf, hermiteFull):min, hermiteHalf, hermiteFull
-        hermiteCombined, t, th*useHalf, fullWindow, max(min(1, abs((prev-prev')-(prev-prev')')*1000), _)~_, t, th
+        hermiteFull, phantomTarget, fullWindow, abs(second)*10, th*useHalf
 
         //t, (abs(prev-prev')*100, _:max)~_, t, th, hermiteFull, hermiteHalf//th , hermiteHalf
             with {
-                // hermiteHalf = select2(sampleH, hermite(th, p0h, m0h, p1h, m1h), cascade(freq*mult, sampleH, prev, halfWindow));
+                //////////////////// debug
+                first = prev-prev';
+                second = first-first';
+                // note: has clamp at 1!
+                maxHold(x) = max(min(1, abs(x)), _)~_;
+                // note: has abs!
+                max2nd = maxHold(abs(second));
+                //////////////////// debug
+
+                // inside hermiteFB's `with`, replacing phantomTarget
+                // (x is hermiteLim's argument, so it's in scope)
+                err = fullWindow-prev;
+                vn = (prev-prev')*n;
+                // velocity per window, same units as err
+                ceiling = x@look;
+                close = max(0, 1-abs(ceiling-prev)/s)^2;
+                // 1 at the ceiling, 0 at distance s
+                urgency = 1+kc*close;
+                push = (kp*err-kd*vn)*urgency;
+
+                phantomTarget = fullWindow+push*sample;
+                //:max(-1):min(fullWindow);
+
+                kp = hslider("kp", 1, 0, 2, 0.001);
+                // overshoot per unit of error
+                kd = hslider("kd", 1, 0, 2, 0.001);
+                // damping / turn-around strength
+                kc = hslider("kc", 1, 0, 10, 0.001);
+                // extra urgency near the ceiling
+                s = hslider("s[scale:log]", 0.1, 0.01, 2, 0.001);
+                // "close" range
+
+                phantomTargetRaw = fullWindow+(sample*n*(fullWindow-fullWindow')*mult*(1+err*boost))//
+                :max(fullWindow-err*maxOver)// never overshoot more than a fraction of the distance
+                :max(-1):min(1);
+                // phantomTarget = (phantomTargetRaw+phantomTargetRaw')*0.5:max(-1):min(1);
+                phantomTarget_old = select2(abs(phantomTargetRaw)>abs(phantomTargetRaw'),
+                    phantomTargetRaw,
+                    phantomTargetRaw'):max(-1):min(fullWindow);
+                phantomTargetx = select2(prev<fullWindow,
+                    max(phantomTargetRaw, phantomTargetRaw'),
+                    min(phantomTargetRaw, phantomTargetRaw'));
+
+                // hermiteHalf = hermite(th, p0h, m0h, p1h, m1h):cascade(freq*2*mult, sampleH, prev, halfWindow);
                 hermiteHalf = hermite(th, p0h, m0h, p1h, m1h);
-                // hermiteFull = select2(sample, hermite(t, p0, m0, p1, m1), cascade(freq*mult, sample, prev, fullWindow));
+                // hermiteFull = hermite(t, p0, m0, p1, m1):cascade(freq*mult, sample, fullWindow);
                 hermiteFull = hermite(t, p0, m0, p1, m1);
-                hermiteCombined = select2(useHalf, hermiteFull, hermiteHalf):cascade(freq*mult, sample, fullWindow);
+                hermiteCombined = select2(useHalf, hermiteFull, hermiteHalf);
+                //:cascade(freq*mult, sample, fullWindow);
 
                 mult = hslider("mult[scale:log]", 0.5, 0.1, 10, 0.001);
 
@@ -99,20 +143,22 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 // count from 1/n to 1, so we're always gliding:
                 t = (min(1, _*counting+1/n))~_;
                 th = (min(1, _*countingH+2/n))~_;
-                tStuck = (min(1, _+1/n)*(1-counting))~_;
+                tStuck = (min(1, _*sample+1/n))~_;
                 // when the target is constant, start the countdown to reach it
                 counting = fullWindow==fullWindow';
-                countingH = combinedWindow==combinedWindow';
+                countingH = combinedWindow==combinedWindow'|counting;
                 // start at the previous point and direction
                 p0 = prev:ba.sAndH(sample);
                 p0h = prev:ba.sAndH(sampleH);
                 m0 = (prev-prev')*n:ba.sAndH(sample);
                 m0h = (prev-prev')*halfN:ba.sAndH(sampleH);
                 // end at the lookahead point
-                p1 = fullWindow:ba.sAndH(sample);
+                p1 = select2(counting,
+                    phantomTarget,
+                    fullWindow:ba.sAndH(sample));
                 p1h = combinedWindow:ba.sAndH(sampleH);
                 // if the m1 is not 0, it's not the end yet
-                m1 = 0;
+                m1 = sample*(fullWindow-fullWindow);
                 // TODO: use the actual predicted end speed
                 // use one more sample latency:
                 // these are the old look values, so signal needs to be delayed by (look+1)
@@ -124,6 +170,7 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 sample = 1-counting;
                 sampleH = 1-countingH;
 
+                // TODO: fix discontinuity
                 useHalf = //
                 useHalfFB~_
                     with {
