@@ -88,6 +88,7 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 // count from 1/n to 1, so we're always gliding:
                 t = (min(1, _*counting+1/n))~_;
                 th = (min(1, _*countingH+2/n))~_;
+                tStuck = (min(1, _+1/n)*(1-counting))~_;
                 // when the target is constant, start the countdown to reach it
                 counting = fullWindow==fullWindow';
                 countingH = combinedWindow==combinedWindow';
