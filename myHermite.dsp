@@ -76,13 +76,17 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
         // (hermiteHalf, hermiteFull):min//
         // hermite(t, p0, m0, p1, m1)//, fullWindow, t
         // (hermiteHalf, hermiteFull):min, hermiteHalf, hermiteFull
-        hermiteCombined, hermiteFull, max(min(1, abs((prev-prev')-(prev-prev')')*1000), _)~_, t, th
+        hermiteCombined, t, th*useHalf, fullWindow, max(min(1, abs((prev-prev')-(prev-prev')')*1000), _)~_, t, th
 
         //t, (abs(prev-prev')*100, _:max)~_, t, th, hermiteFull, hermiteHalf//th , hermiteHalf
             with {
+                // hermiteHalf = select2(sampleH, hermite(th, p0h, m0h, p1h, m1h), cascade(freq*mult, sampleH, prev, halfWindow));
                 hermiteHalf = hermite(th, p0h, m0h, p1h, m1h);
+                // hermiteFull = select2(sample, hermite(t, p0, m0, p1, m1), cascade(freq*mult, sample, prev, fullWindow));
                 hermiteFull = hermite(t, p0, m0, p1, m1);
-                hermiteCombined = select2(useHalf, hermiteFull, hermiteHalf);
+                hermiteCombined = select2(useHalf, hermiteFull, hermiteHalf):cascade(freq*mult, sample, fullWindow);
+
+                mult = hslider("mult[scale:log]", 0.5, 0.1, 10, 0.001);
 
                 combinedWindow = min(hermiteFull, halfWindow);
                 // count from 1/n to 1, so we're always gliding:
@@ -183,3 +187,35 @@ testSignal2 = os.lf_squarewave(testFreq)*0.5;
 minDelta(0) = hslider("minDelta", 0.001, 0, 1, 0.001)*0.001;
 minDelta(1) = ba.db2linear(minDelta(0));
 curvesMerged = abs(hermiteHalf-hermiteFull)<minDelta(gainIsLinear);
+
+// f: cutoff of each pole in Hz. v0 is in units per sample.
+// On a rising edge of `reset`, the states are loaded so the output starts at p0 heading with slope v0.
+cascade(f, set, target, p0) = target:stage(p0+v0/a):stage(p0)
+    with {
+        v0 = p0-p0';
+        a = 1-exp(-2*ma.PI*f/ma.SR);
+        stage(s0, x) = (step~_)
+            with {
+                step(y1) = select2(set, s0, y1+a*(x-y1));
+            };
+    };
+
+// f: natural frequency in Hz (higher = snappier), zeta: 1 = critically damped,
+// <1 = overshoot, >1 = sluggish.
+// On a rising edge of `reset`, jump to (p0, v0): "start at a point, heading this way".
+// v0 is in units per sample.
+spring(f, zeta, reset, p0, v0, target) = (step~(_, _)):(_, !)
+    with {
+        w = 2*ma.PI*f/ma.SR;
+        k = w*w;
+        c = 2*zeta*w;
+        trig = reset>reset';
+        step(y1, v1) = y, v
+            with {
+                vFree = v1+k*(target-y1)-c*v1;
+                v = select2(trig, vFree, v0);
+                y = select2(trig, y1+vFree, p0);
+            };
+    };
+
+// process = spring(2, 1, button("start"), 0, 0.001, os.osc(0.5));
