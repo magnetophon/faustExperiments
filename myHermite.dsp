@@ -23,8 +23,15 @@ declare copyright "2026 - 2026, Bart Brouns";
 //something similar shoukd be done for stuck attacks that are going down too much: unstick them
 //
 // when coasting, cheack how far we actually are vs how far t (or th) is, if it is not far, use the ramp
+// also check if we are going dangerously close to the p1 of the main hermite, for example:
+// when releaseing, check if the new taret is lower than the old one
 //
 // only grigger useHalf when x@? islower than fullHermite at t in the future
+//
+//
+//  during coasting, assume the target will go in a straight line for n samples
+//  mult phantom by distance between
+//  prev-target
 
 import("stdfaust.lib");
 
