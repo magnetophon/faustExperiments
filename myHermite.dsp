@@ -159,9 +159,9 @@ SmootherGroup(x) = vgroup("[1]Smoother", x);
 
 // --- Test signal ---
 testNoiseLevel = TestGroup(hslider("[0]noise level", 0.216, 0, 1, 0.001));
-testNoiseRate = TestGroup(hslider("[1]noise rate", 42, 1, 1000, 1));
-testBlockscale = TestGroup(hslider("[2]blockscale", 6.63, 0.01, 10, 0.01));
-testFreq = TestGroup(hslider("[3]freq", 1, 0.001, 30, 0.001));
+testNoiseRate = TestGroup(hslider("[1]noise rate[scale:log]", 42, 1, 1000, 1));
+testBlockscale = TestGroup(hslider("[2]blockscale[scale:log]", 6.63, 0.01, 10, 0.01));
+testFreq = TestGroup(hslider("[3]test freq[scale:log]", 1, 0.001, 30, 0.001));
 testStep1 = TestGroup(hslider("[4]step1", 0.75, -1, 1, 0.001));
 testStep2 = TestGroup(hslider("[5]step2", 0.125, -1, 1, 0.001));
 testSelect = TestGroup(checkbox("[6]signal select"));
