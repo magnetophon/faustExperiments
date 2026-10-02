@@ -32,6 +32,10 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  during coasting, assume the target will go in a straight line for n samples
 //  mult phantom by distance between
 //  prev-target
+//
+// only one *sample in p1 calc: at the (almost) end.
+//
+// if halfWindow<prev: n=n/2
 
 import("stdfaust.lib");
 
@@ -52,9 +56,12 @@ hermiteFB~_// "with" so we can use prev
 
 SR = 48000;
 minFreq = 23.5;
+// minFreq = 12000;
+// minFreq = 11999;
 gainIsLinear = 1;
-maxN = 1<<int(ceil(log(SR/minFreq)/log(2)-1e-9));
-look = maxN;
+maxN = (1<<int(ceil(log(SR/minFreq)/log(2)-1e-9)));
+// allign the signal properly
+look = maxN-1;
 freq = hslider("freq[unit:Hz][scale:log]", SR/maxN, SR/maxN, SR/2, 0.01);
 // we want the small window exactly half the size of the main window
 halfN = int(min(maxN, max(1, ceil(SR/freq*0.5))));
@@ -83,7 +90,7 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
         // (hermiteHalf, hermiteFull):min//
         // hermite(t, p0, m0, p1, m1)//, fullWindow, t
         // (hermiteHalf, hermiteFull):min, hermiteHalf, hermiteFull
-        hermiteFull, phantomTarget, fullWindow, abs(second)*10, th*useHalf
+        hermiteFull, p1, kc*close*(ceiling-smootherPrediction), abs(second)*10, th*useHalf
 
         //t, (abs(prev-prev')*100, _:max)~_, t, th, hermiteFull, hermiteHalf//th , hermiteHalf
             with {
@@ -96,32 +103,62 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 max2nd = maxHold(abs(second));
                 //////////////////// debug
 
-                // inside hermiteFB's `with`, replacing phantomTarget
-                // (x is hermiteLim's argument, so it's in scope)
                 err = fullWindow-prev;
                 vn = (prev-prev')*n;
                 // velocity per window, same units as err
                 ceiling = x@look;
-                close = max(0, 1-abs(ceiling-prev)/s)^2;
+                close = sample*(1-max(0, ceiling-prev))^power;
+                // close = (ceiling-prev)/(fullWindow-prev);
+                // close = sample*((smootherPrediction-ceiling)*boost);
+                power = hslider("power", 32, 1, 128, 1);
+                base = hslider("base", 0.5, 0, 1, 0.001);
                 // 1 at the ceiling, 0 at distance s
-                urgency = 1+kc*close;
+                urgency = base+kc*close;
                 push = (kp*err-kd*vn)*urgency;
 
-                phantomTarget = fullWindow+push*sample;
+                phantomTarget = (fullWindow+push*sample):min(phantomTarget_old);
                 //:max(-1):min(fullWindow);
 
                 kp = hslider("kp", 1, 0, 2, 0.001);
                 // overshoot per unit of error
                 kd = hslider("kd", 1, 0, 2, 0.001);
                 // damping / turn-around strength
-                kc = hslider("kc", 1, 0, 10, 0.001);
+                kc = hslider("kc", 13, 0, 100, 0.01);
                 // extra urgency near the ceiling
                 s = hslider("s[scale:log]", 0.1, 0.01, 2, 0.001);
                 // "close" range
 
-                phantomTargetRaw = fullWindow+(sample*n*(fullWindow-fullWindow')*mult*(1+err*boost))//
-                :max(fullWindow-err*maxOver)// never overshoot more than a fraction of the distance
-                :max(-1):min(1);
+                boost = hslider("boost", 1, 0, 13, 0.001);
+
+                // inside hermiteFB's `with`
+                // e = fullWindow-prev;
+                // dirE = select2(e>=0, -1, 1);
+                // toward = (prev-prev')*n*dirE;
+                // speed toward the target, in units per window
+                // shortfall = (abs(e)-toward):max(0);
+                //:min(kmax*abs(e));
+
+                // phantomTarget = (fullWindow+dirE*mult*shortfall*sample);
+
+                // kmax = hslider("kmax", 2, 1, 8, 0.01);
+                // cap on the push, in multiples of |e|
+                // how far the gain still has to fall (0 when not attacking)
+                err_old = max(0, p0-fullWindow);
+                // boost = hslider("boost", 1, 0, 10, 0.001);
+                maxOver = hslider("max overshoot", 0.5, 0, 2, 0.001);
+
+                windowPredictionRaw = n*(fullWindow-fullWindow');
+
+                smallestAbs(x) = select2(abs(x)<abs(x'), x', x);
+
+                windowPrediction = smallestAbs(windowPredictionRaw)+fullWindow;
+
+                smootherPrediction = prev+vn;
+
+                phantomTargetRaw = fullWindow+(sample*n*(fullWindow-fullWindow')*mult*(1+err_old*boost));
+                //
+                // :max(fullWindow-err_old*maxOver)// never overshoot more than a fraction of the distance
+                // :max(-1):min(1);
                 // phantomTarget = (phantomTargetRaw+phantomTargetRaw')*0.5:max(-1):min(1);
                 phantomTarget_old = select2(abs(phantomTargetRaw)>abs(phantomTargetRaw'),
                     phantomTargetRaw,
@@ -137,11 +174,17 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 hermiteCombined = select2(useHalf, hermiteFull, hermiteHalf);
                 //:cascade(freq*mult, sample, fullWindow);
 
-                mult = hslider("mult[scale:log]", 0.5, 0.1, 10, 0.001);
+                mult = hslider("mult", 1, 0, 42, 0.001);
 
                 combinedWindow = min(hermiteFull, halfWindow);
                 // count from 1/n to 1, so we're always gliding:
                 t = (min(1, _*counting+1/n))~_;
+                WIP_t = tFB~_
+                    with {
+                        tFB(prevT) = (min(1, prevT*counting*(1-(isFast(prevT):ba.impulsify))+(1+isFast(prevT))/n));
+                    };
+
+                isFast(prevT) = halfWindow<hermite(min(1, prevT+halfN), p0, m0, fullWindow, m1);
                 th = (min(1, _*countingH+2/n))~_;
                 tStuck = (min(1, _*sample+1/n))~_;
                 // when the target is constant, start the countdown to reach it
@@ -153,7 +196,9 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 m0 = (prev-prev')*n:ba.sAndH(sample);
                 m0h = (prev-prev')*halfN:ba.sAndH(sampleH);
                 // end at the lookahead point
-                p1 = select2(counting,
+                // p1 = sample*mult*(windowPrediction-smootherPrediction)+fullWindow;
+                p1 = (sample*base*(fullWindow-smootherPrediction)+kc*close*(ceiling-smootherPrediction))+fullWindow;
+                p1_old = select2(counting,
                     phantomTarget,
                     fullWindow:ba.sAndH(sample));
                 p1h = combinedWindow:ba.sAndH(sampleH);
@@ -194,8 +239,8 @@ slidingReducePar(op, halfN, maxN, gainIsLinear) = sequentialOperatorParOut(nBits
         useValSize(i) = select2(pow2(i)<=halfN, disabledVal, _);
         variableWindows = par(i, nBits, _@sumOfPrevBlockSizes(i):useValBit(i)):parallelOp(op, nBits);
         useValBit(i) = select2(isUsed(i), disabledVal, _);
-        halfWindow = _@(look-halfN);
-        fullWindow = (_<:op(_, _@halfN)):_@(look-2*halfN);
+        halfWindow = _@(maxN-halfN);
+        fullWindow = (_<:op(_, _@halfN)):_@(maxN-2*halfN);
         sequentialOperatorParOut(HALFN, op) = seq(i, HALFN, operator(i));
         operator(i) = si.bus(i), (_<:_, op(_, _@pow2(i)));
         sumOfPrevBlockSizes(0) = 0;
