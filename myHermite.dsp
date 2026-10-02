@@ -4,7 +4,14 @@ declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
 
-// TODO: use the min(bigblock,target) as the input for the next: this works cause both the lookaheads and the prev gain are known "now"
+// TODO:
+// on the falling edge of x (not @ look!) < fullHermite(t+?),
+// or: on the rising edge of halfWindow<fullHermite(t+0.5:min(1))
+//
+//start a counter (+2/n), when it reaches 1, start the hermiteHalf with m1h = fullHermite(t+?)-fullHermite(t+?-1)
+//
+//
+//use the min(bigblock,target) as the input for the next: this works cause both the lookaheads and the prev gain are known "now"
 // as long as we don't have a steady target, use the value from the bigger neigbour block.
 // except the full window, which is always gliding
 // the end speed of the smaller blocks use is the end speed of the bigger neigbor, as calculated by increasing putting the t of the bigger block the size of the smaller block into the future
