@@ -8,6 +8,8 @@ declare copyright "2026 - 2026, Bart Brouns";
 // on the falling edge of x (not @ look!) < fullHermite(t+?),
 // or: on the rising edge of halfWindow<fullHermite(t+0.5:min(1))
 //
+// set m1.
+//
 //start a counter (+2/n), when it reaches 1, start the hermiteHalf with m1h = fullHermite(t+?)-fullHermite(t+?-1)
 //
 //
@@ -43,6 +45,8 @@ declare copyright "2026 - 2026, Bart Brouns";
 // only one *sample in p1 calc: at the (almost) end.
 //
 // if halfWindow<prev: n=n/2
+//
+// try to do everything with just 2 hermites: the current one and the "other window"
 
 import("stdfaust.lib");
 
@@ -64,10 +68,10 @@ hermiteFB~_// "with" so we can use prev
 SR = 48000;
 minFreq = 23.5;
 // minFreq = 12000;
-// minFreq = 11999;
 gainIsLinear = 1;
 maxN = (1<<int(ceil(log(SR/minFreq)/log(2)-1e-9)));
-// allign the signal properly
+// -1 to allign the signal properly
+// later on remove it so we have 1 sample extra lookahead to calculate m1.
 look = maxN-1;
 freq = hslider("freq[unit:Hz][scale:log]", SR/maxN, SR/maxN, SR/2, 0.01);
 // we want the small window exactly half the size of the main window
@@ -111,68 +115,20 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 //////////////////// debug
 
                 err = fullWindow-prev;
+                // velocity per window, same units as err:
                 vn = (prev-prev')*n;
-                // velocity per window, same units as err
                 ceiling = x@look;
-                close = sample*(1-max(0, ceiling-prev))^power;
-                // close = (ceiling-prev)/(fullWindow-prev);
-                // close = sample*((smootherPrediction-ceiling)*boost);
+                close = (1-max(0, ceiling-prev))^power;
                 power = hslider("power", 32, 1, 128, 1);
                 base = hslider("base", 0.5, 0, 1, 0.001);
-                // 1 at the ceiling, 0 at distance s
-                urgency = base+kc*close;
-                push = (kp*err-kd*vn)*urgency;
 
-                phantomTarget = (fullWindow+push*sample):min(phantomTarget_old);
-                //:max(-1):min(fullWindow);
-
-                kp = hslider("kp", 1, 0, 2, 0.001);
-                // overshoot per unit of error
-                kd = hslider("kd", 1, 0, 2, 0.001);
-                // damping / turn-around strength
                 kc = hslider("kc", 13, 0, 100, 0.01);
                 // extra urgency near the ceiling
-                s = hslider("s[scale:log]", 0.1, 0.01, 2, 0.001);
-                // "close" range
-
-                boost = hslider("boost", 1, 0, 13, 0.001);
-
-                // inside hermiteFB's `with`
-                // e = fullWindow-prev;
-                // dirE = select2(e>=0, -1, 1);
-                // toward = (prev-prev')*n*dirE;
-                // speed toward the target, in units per window
-                // shortfall = (abs(e)-toward):max(0);
-                //:min(kmax*abs(e));
-
-                // phantomTarget = (fullWindow+dirE*mult*shortfall*sample);
-
-                // kmax = hslider("kmax", 2, 1, 8, 0.01);
-                // cap on the push, in multiples of |e|
-                // how far the gain still has to fall (0 when not attacking)
-                err_old = max(0, p0-fullWindow);
-                // boost = hslider("boost", 1, 0, 10, 0.001);
-                maxOver = hslider("max overshoot", 0.5, 0, 2, 0.001);
-
-                windowPredictionRaw = n*(fullWindow-fullWindow');
 
                 smallestAbs(x) = select2(abs(x)<abs(x'), x', x);
 
-                windowPrediction = smallestAbs(windowPredictionRaw)+fullWindow;
-
                 smootherPrediction = prev+vn;
 
-                phantomTargetRaw = fullWindow+(sample*n*(fullWindow-fullWindow')*mult*(1+err_old*boost));
-                //
-                // :max(fullWindow-err_old*maxOver)// never overshoot more than a fraction of the distance
-                // :max(-1):min(1);
-                // phantomTarget = (phantomTargetRaw+phantomTargetRaw')*0.5:max(-1):min(1);
-                phantomTarget_old = select2(abs(phantomTargetRaw)>abs(phantomTargetRaw'),
-                    phantomTargetRaw,
-                    phantomTargetRaw'):max(-1):min(fullWindow);
-                phantomTargetx = select2(prev<fullWindow,
-                    max(phantomTargetRaw, phantomTargetRaw'),
-                    min(phantomTargetRaw, phantomTargetRaw'));
 
                 // hermiteHalf = hermite(th, p0h, m0h, p1h, m1h):cascade(freq*2*mult, sampleH, prev, halfWindow);
                 hermiteHalf = hermite(th, p0h, m0h, p1h, m1h);
