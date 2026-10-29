@@ -1278,7 +1278,7 @@ hermiteAttackReleaseFollower(nC, nAtt, nRel, checkEvery, cands) = (loop~si.bus(7
 // brickwall guarantee is structural (gain <= v1), does not depend on
 // the check at any setting, and measured exactly 0 violation even
 // with the check removed entirely.
-checkEvery = 2;
+checkEvery = 1;
 
 lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR) = lookaheadAttackReleaseSmootherCk(nAtt, nRel, maxAtt, checkEvery, rawGR);
 
@@ -1318,10 +1318,11 @@ testStep2 = TestGroup(hslider("[5]step2", 0.125, -1, 1, 0.001));
 testSelect = TestGroup(hslider("[6]signal select", 0, 0, 2, 1));
 testSignal = select3(testSelect, testSignal1, testSignal2, testSignal3);
 testSignal1 = it.interpolate_linear(testNoiseLevel,
-    (loop~_),
-    no.lfnoise(testNoiseRate))
+    (blockLFO~_),
+    noiseLFO)
     with {
-        loop(prev) = no.lfnoise0(testBlockscale*(abs(prev*69)%9:pow(0.75)*5+1));
+        blockLFO(prev) = no.lfnoise0(testBlockscale*(abs(prev*69)%9:pow(0.75)*5+1));
+        noiseLFO = no.lfnoise(testNoiseRate*(abs(13*no.lfnoise(11))%5:pow(0.75)+0.1));
     };
 testSignal2 = os.lf_squarewave(testFreq)*0.5;
 // the torture signal through an instant-attack / one-pole-release
@@ -1336,7 +1337,8 @@ testSignal3 = testSignal1:relFollow
         relCoef = exp(-1.0/(testRelMs*0.001*ma.SR));
         relFollow(x) = loop~_
             with {
-                loop(y) = min(x, x+(y-x)*relCoef);
+                // loop(y) = min(x, x+(y-x)*relCoef);
+                loop(y) = x+(y-x)*relCoef;
             };
     };
 
@@ -1344,13 +1346,18 @@ testSignal3 = testSignal1:relFollow
 // compile-time maximum: 50 ms at maxSR. Lower maxSR if you never run
 // above 48/96k, to save memory and a few reduce stages.
 maxSR = 192000;
-maxAtt = int(0.05*maxSR);
-
-relHoldMs = SmootherGroup(hslider("[0]rel hold[unit:ms][scale:log]", 50, 0.1, maxRelHold*1000, 0.1));
+maxAttMs = 0.05;
+maxAtt = int(maxAttMs*maxSR);
+maxRelHoldMs = maxAttMs+maxRelMs;
+maxRelHoldSamples = maxRelHoldMs*maxSR;
+relHoldMs = SmootherGroup(hslider("[0]rel hold[unit:ms][scale:log]", 50, 0.1, maxRelHoldMs*1000, 0.1));
 attMs = SmootherGroup(hslider("[1]attack lookahead [unit:ms]", 25, 0, 50, 0.1));
-nAtt = max(2, min(maxAtt, int(attMs*0.001*ma.SR)));
-relMs = SmootherGroup(hslider("[2]release [unit:ms]", 50, 0, 500, 0.1));
+nAtt = max(2, min(maxAtt, int(attMs*0.001*ma.SR))):si.smoo:max(2):min(maxAtt);
+maxRelMs = 0.2;
+relMs = SmootherGroup(hslider("[2]release [unit:ms]", 50, 0, 200, 0.1));
 nRel = max(1, int(relMs*0.001*ma.SR));
+manualHold = SmootherGroup(checkbox("manualHold"));
+mu = SmootherGroup(pow(hslider("mu", 0, 0, 1, 0.001)+1, 14)-0.999);
 
 // Shape slider base: g = shapeBase^s, so |s| = 1 gives a
 // shapeBase^2 : 1 endpoint-velocity skew. Must stay > 1.
@@ -1398,13 +1405,11 @@ underreact = DJcompGroup(hslider("[11]underreact[scale:log]", 42, 1, 10000, 0.1)
 // ============================================================================
 //  RELEASE HOLD (from lamb)
 // ============================================================================
-maxRelHold = 0.05;
-maxRelHoldSamples = maxRelHold*maxSR;
 
 // Clamped into the budget per the SR-budget note. Adds rel_hold_samples of
 // latency on top of the input; at rel hold = 0 the stage is the identity
 // (held == x, both delays are @0).
-rel_hold_samples = int(relHoldMs*0.001*ma.SR:max(0):min(maxRelHoldSamples));
+rel_hold_samples = select2(manualHold, nAtt+nRel, int(relHoldMs*0.001*ma.SR:max(0):min(maxRelHoldSamples)));
 
 // - min(prevGain, x @ rel_hold_samples) keeps the output monotonically
 //   non-rising: once we've gone down, we can't release.
@@ -1445,12 +1450,12 @@ gain_computer(strength, thresh, knee, level) = select3((level>(thresh-(knee/2)))
 // Outputs (gain, holdGain): the DJ gain and the hold-processed raw GR
 // it chases -- the compressor feeds BOTH into the smoother's overshoot
 // cap (lookaheadAttackReleaseSmootherShapedOs).
-compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !, _)
+OLD_compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !, _)
     with {
         loop(prevGain, prevRef) = gain, ref, playGain
             with {
                 // rawGain = gain_computer(1, thresh-attOvershoot, knee, level)*strength;
-                rawGain = gain_computer(1, thresh, knee, level)*strength;
+                rawGain = level*strength;
                 holdGain = rawGain:releaseHold;
 
                 // --- DJ lookahead, spent on the ATTACK (v1.8.0; v1.9.0: the demand ladder) ---
@@ -1737,11 +1742,21 @@ compressor(l, r) = l@latency*gain, r@latency*gain, scopeGain, gain
         latency = nAtt-1+rel_hold_samples+dj_look_samples;
     };
 
-process = slidingMinIdxBankAtt(nAtt, maxAtt);
-// demoGR;
+process = // slidingMinIdxBankAtt(nAtt, maxAtt);
+// relAutomationBench;
+demoGR;
 // MainGroup(compressor);
 // full_demo;
 
+// both a benchtest and a parameter automation demo
+relAutomationBench = smoother, benchTest@maxAtt, (mAtt/nAtt), (mRel/nRel)
+    with {
+        smoother = lookaheadAttackReleaseSmootherCk(mAtt, mRel, maxAtt, 1, benchTest@(maxAtt-mAtt));
+        mRel = nRel*os.lf_sawpos(3):int:max(42):min(ma.SR);
+        mAtt = nAtt*os.lf_sawpos(1):si.smoo:max(42):min(maxAtt);
+        // benchTest = os.osc(19)*0.5;
+        benchTest = testSignal1;
+    };
 full_demo = testSignal@latency, rawGR, gain
     with {
         rawGR = compression_gain_mono_db_auto(1, thres, 0, testSignal):(_, !);
@@ -1761,9 +1776,101 @@ full_demo = testSignal@latency, rawGR, gain
     };
 demoGR = MainGroup(demo(testSignal))
     with {
-        demo(rawGR) = grPlay, smoothed
+        demo(rawGR) = grPlay, smoothed, holdGR@(nAtt-1), max(0, smoothed-grPlay)*SmootherGroup(hslider("undershootGain", 10000, 1, 10000, 1)), DJ
             with {
-                grPlay = de.delay(maxAtt-1, nAtt-1, rawGR);
-                smoothed = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR);
+
+                grPlay = rawGR@(nAtt-1+rel_hold_samples);
+                grDJ = rawGR@(nAtt-1);
+                smoothed = ((lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, holdGR*0.5+0.5)*-1:muLawExpand(mu))*-1:muLawCompress(mu@(nAtt-1))-0.5)*2;
+                // smoothed = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, holdGR);
+                holdGR = releaseHold(rawGR);
+                DJ = compression_gain_mono_db_auto(strength, thresh, knee, grDJ);
+                strength = 1;
+                thresh = hslider("thresDJ", 0, -20, 20, 0.1);
+                knee = hslider("knee", 0, 0, 30, 0.1);
             };
     };
+
+// ============================================================================
+//  DJ-comp
+// ============================================================================
+
+gain_computer(strength, thresh, knee, level) = select3((level>(thresh-(knee/2)))+(level>(thresh+(knee/2))),
+    0,
+    ((level-thresh+(knee/2)):pow(2)/(2*max(ma.EPSILON, knee))),
+    (level-thresh)):max(0)*-strength;
+
+// TODO: put smoothing after channel-link in N-chan version
+// Outputs (gain, holdGain): the DJ gain and the hold-processed raw GR
+// it chases -- the compressor feeds BOTH into the smoother's overshoot
+// cap (lookaheadAttackReleaseSmootherShapedOs).
+compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !, _)
+    with {
+        loop(prevGain, prevRef) = gain, ref, holdGain
+            with {
+                // rawGain = gain_computer(1, thresh, knee, level)*strength;
+                rawGain = level*strength;
+                holdGain = rawGain:releaseHold;
+
+                coeff = select2(holdGain>prevGain, ba.tau2pole(gainAtt), ba.tau2pole(gainRel));
+                smoothed = holdGain+(prevGain-holdGain)*coeff;
+                gain = holdGain:onePoleSwitching(gainRel, gainAtt);
+
+                // gainSlow = holdGain:si.onePoleSwitching(gainRel, maxAttDJ);
+                // gain = min(gainSlow, min(0.0, holdGain+attOvershoot));
+                onePoleSwitching(att, rel, x) = loop~_
+                    with {
+                        loop(yState) = min(((1.0-coeff)*x+coeff*yState), min(0, holdGain+attOvershoot))
+                            with {
+                                coeff = ba.if(x>yState, ba.tau2pole(att), ba.tau2pole(rel));
+                            };
+                    };
+                gainRel = interpolate_logarithmic(dv, endRelease, startRelease);
+                gainAttDV = (prevGain-holdGain)/attOvershoot:max(0):min(1):gainAttDVmeter;
+
+                attCurve(shape, dv) = select2(abs(shape)<2e-3,
+                    pow(r, dv)*g-r*g// == (r^dv - r)/(1 - r), exact
+                    ,
+                    1-dv)// r -> 1 limit
+                    with {
+                        r = pow(1000, shape);
+                        den = 1-r+select2(abs(1-r)<ma.EPSILON, 0, ma.EPSILON);
+                        g = 1/den;
+                    };
+                gainAtt = maxAttDJ;
+                //maxAttDJ*attCurve(attShape, gainAttDV);
+
+                // gainAtt = interpolate_logarithmic(gainAttDV, maxAttDJ+minAtt, minAtt)-minAtt;
+
+                refAttackTime = 0;
+                singleprecisionMAX = 3.402823466e+38;
+
+                ref = (prevGain-transitionRange):min(0)*strength:si.onePoleSwitching(refRel, refAttackTime):refMeter;
+                refRel = it.interpolate_linear(dv,
+                    transitionTime,
+                    singleprecisionMAX/128);
+                fastGR = (prevGain-prevRef);
+                dv = (fastGR/transitionRange):max(0):min(1):dvMeter;
+            };
+    };
+
+/************************************************************************************************************
+**************         utilities
+************************************************************************************************************/
+
+// autosat and mu-law:
+// https://www.desmos.com/calculator/4bnimc04an
+// from: https://github.com/zamaudio/zam-plugins/blob/8cd23d781018e3ec84159958d3d2dc7038a82736/plugins/ZamAutoSat/ZamAutoSatPlugin.cpp#L71
+autoSat(x) = x:min(1):max(-1)<:2.0*_*(1.0-abs(_)*0.5);
+// μ-law compression
+muLawCompress(mu, x) = ma.signum(x)*log(1+mu*abs(x))/log(1+mu);
+// μ-law expansion (decompression)
+muLawExpand(mu, x) = ma.signum(x)*(pow(1+mu, abs(x))-1)/mu;
+
+// v0*pow(v1/v0, dv) with the pow opened into exp(dv*log(v1/v0))
+// (v1.16.2, perf): valid for v0, v1 > 0 (they are times here), and
+// log(v1/v0) depends only on sliders, so Faust hoists it to the
+// control block -- the audio path pays ONE exp instead of a full
+// pow. ulp-level differences from the pow form only (libm pow is
+// exp(y*log(x)) plus edge-case guards).
+interpolate_logarithmic(dv, v0, v1) = v0*exp(dv*log(v1/v0));
