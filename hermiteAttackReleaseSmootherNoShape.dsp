@@ -1403,13 +1403,15 @@ full_demo = testSignal@latency, rawGR, gain
     };
 demoGR = MainGroup(demo(testSignal))
     with {
-        demo(rawGR) = grPlay, smoothed, holdGR@(nAtt-1), max(0, smoothed-grPlay)*SmootherGroup(hslider("undershootGain", 10000, 1, 10000, 1)), DJ
+        demo(rawGR) = grPlay, smoothed, holdGR@(nAtt-1), DJ
             with {
 
                 grPlay = rawGR@(nAtt-1+rel_hold_samples);
                 grDJ = rawGR@(nAtt-1);
                 smoothedMu = ((lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, holdGR*0.5+0.5)*-1:muLawExpand(mu))*-1:muLawCompress(mu@(nAtt-1))-0.5)*2;
                 smoothed = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, holdGR);
+                // TODO: why does this break?
+                smoothed_dB = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, holdGR:ba.linear2db):ba.db2linear;
                 holdGR = releaseHold(rawGR);
                 DJ = compression_gain_mono_db_auto(strength, thresh, knee, grDJ);
                 strength = 1;
