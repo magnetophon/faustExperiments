@@ -1433,7 +1433,7 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
 
                 onePoleSwitching(att, rel, x) = loop~_
                     with {
-                        loop(yState) = min(((1.0-coeff)*x+coeff*yState), min(0, holdGain+attOvershoot))
+                        loop(yState) = min(((1.0-coeff)*x+coeff*yState), holdGain+attOvershoot)
                             with {
                                 coeff = ba.if(x>yState, ba.tau2pole(att), ba.tau2pole(rel));
                             };
