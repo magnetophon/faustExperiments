@@ -5,6 +5,8 @@ declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
 import("stdfaust.lib");
 
+// TODO: attack is one sample early.
+
 //========================================================================
 // Attack + release lookahead smoother. ONE Hermite-leg follower shapes
 // both directions of a gain-reduction signal: descents chase the
