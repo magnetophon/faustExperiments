@@ -1408,7 +1408,8 @@ demoGR = MainGroup(demo(testSignal))
 
                 grPlay = rawGR@(nAtt-1+rel_hold_samples);
                 grDJ = rawGR@(nAtt-1);
-                smoothed = ((lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, holdGR*0.5+0.5)*-1:muLawExpand(mu))*-1:muLawCompress(mu@(nAtt-1))-0.5)*2;
+                smoothedMu = ((lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, holdGR*0.5+0.5)*-1:muLawExpand(mu))*-1:muLawCompress(mu@(nAtt-1))-0.5)*2;
+                smoothed = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, holdGR);
                 holdGR = releaseHold(rawGR);
                 DJ = compression_gain_mono_db_auto(strength, thresh, knee, grDJ);
                 strength = 1;
