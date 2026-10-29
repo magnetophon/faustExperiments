@@ -5,8 +5,6 @@ declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
 import("stdfaust.lib");
 
-// TODO: attack is one sample early.
-
 //========================================================================
 // Attack + release lookahead smoother. ONE Hermite-leg follower shapes
 // both directions of a gain-reduction signal: descents chase the
@@ -735,7 +733,11 @@ hermiteAttackReleaseFollower(nC, nAtt, nRel, checkEvery, cands) = (loop~si.bus(7
                 // path's single biggest cost. The disabled-tap sentinel
                 // (ma.MAX) stays correctly ordered even where a cross
                 // product saturates (inf compares on the right side).
-                trip(val, dl, npv, npd) = val-gain, max(1, dl), val, dl, npv, npd;
+                // Deadlines become LEG STEPS here: dl+1, so tau = 1 falls on the sample
+                // where the target plays (dl = 0 -> T = 1, no max(1, dl) needed). The bank
+                // still emits raw play indices; i1 and nhD stay unshifted. clearOne below
+                // must use the same time base (df = dl+1) or the check runs a step early.
+                trip(val, dl, npv, npd) = val-gain, dl+1, val, dl+1, npv, npd+1;
                 scored = cands:(si.bus(4*nC), si.block(2)):par(i, nC, trip);
                 crit = scored:red6(nC);
                 // the winner's (val - gain) comes out of the tree for
@@ -1111,11 +1113,12 @@ hermiteAttackReleaseFollower(nC, nAtt, nRel, checkEvery, cands) = (loop~si.bus(7
                 ckD = 2*(gain-p1t)+ckM0+ckM1;
                 clearOne(val, dl, npv, npd) = num, den, dlP
                     with {
-                        df = 1.0*dl;
+                        // leg step in which this candidate plays: same time base as trip
+                        df = 1.0*(dl+1);
                         df2 = df*df;
                         valC = min(val, 2.0);
                         pl = ckA+df*(ckB+df*(ckC+df*ckD));
-                        pass = (dl<=0)|(df>=ckT)|(pl<=(valC*ckT3));
+                        pass = (df>=ckT)|(pl<=(valC*ckT3));
                         num = select2(pass, df2, 1e30);
                         den = select2(pass, max(1e-30, gain-valC), 1.0);
                         dlP = select2(pass, df, 1e30);
@@ -1159,8 +1162,8 @@ hermiteAttackReleaseFollower(nC, nAtt, nRel, checkEvery, cands) = (loop~si.bus(7
                 // trigger sample keeps the previous velocity (p(1/T) ~= p0 + m0T/T)
                 kN = select2(trig, min(k+1, TN+1), 1);
 
-                // Hermite basis at tau = k/T; lands (tau = 1) one sample before
-                // the target plays, then holds it through the play sample.
+                // Hermite basis at tau = k/T; lands (tau = 1) ON the sample where
+                // the target plays (T = dl+1 leg steps), then holds it through that sample.
                 tau = kN/max(1, TN);
                 // int/int division is float in Faust
                 t2 = tau*tau;
