@@ -1219,7 +1219,16 @@ hermiteAttackReleaseFollower(nC, nAtt, nRel, checkEvery, cands) = (loop~si.bus(7
 // with the check removed entirely.
 checkEvery = 1;
 
-lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR) = lookaheadAttackReleaseSmootherCk(nAtt, nRel, maxAtt, checkEvery, rawGR);
+// fixedLatency: 1 pins the latency to nAttMax - 1 whatever nAtt is, by
+// delaying the smoother's output by nAttMax - nAtt. 0 = latency nAtt - 1.
+// Keep the attack slider's max <= maxAttMs*1000, or nAtt can exceed nAttMax.
+fixedLatency = 1;
+nAttMax = max(1, min(maxAtt, int(maxAttMs*ma.SR)));
+
+lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR) = lookaheadAttackReleaseSmootherCk(nAtt, nRel, maxAtt, checkEvery, rawGR):latencyPad
+    with {
+        latencyPad(x) = select2(fixedLatency, x, de.delay(maxAtt, int(max(0, min(maxAtt, nAttMax-nAtt))), x));
+    };
 
 // fully parameterized variant, for callers that want the knob as an
 // argument instead of the constant above
@@ -1290,6 +1299,7 @@ relHoldMs = SmootherGroup(hslider("[0]rel hold[unit:ms][scale:log]", 50, 0.1, ma
 attMs = SmootherGroup(hslider("[1]attack lookahead [unit:ms]", 25, 0, 50, 0.1));
 // nAtt = max(1, min(maxAtt, int(attMs*0.001*ma.SR))):si.smoo:max(1):min(maxAtt);
 nAtt = max(1, min(maxAtt, int(attMs*0.001*ma.SR)));
+attLatency = select2(fixedLatency, nAtt, nAttMax)-1;
 maxRelMs = 0.2;
 relMs = SmootherGroup(hslider("[2]release [unit:ms]", 50, 0, 200, 0.1));
 nRel = max(1, int(relMs*0.001*ma.SR));
@@ -1369,13 +1379,13 @@ compressor(l, r) = l@latency*gain, r@latency*gain, scopeGain, gain
         rawAndPlay = compression_gain_mono_db_auto(1, thres, 0, max(abs(l), abs(r)):ba.linear2db);
         rawGR = rawAndPlay:(_, !);
         gain = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, rawGR):grMeter:db2linearFast;
-        scopeGain = rawAndPlay:select2(SmootherGroup(checkbox("[99]playGain"))):db2linearFast@(nAtt-1);
+        scopeGain = rawAndPlay:select2(SmootherGroup(checkbox("[99]playGain"))):db2linearFast@(attLatency);
 
         // dj_look_samples: the DJ gain rawGR(t) is planned for the
         // input sample dj_look_samples further in the past, so play
         // alignment gains that term. The rawGR play tap stays at
-        // @(nAtt-1): rawGR itself already carries the extra shift.
-        latency = nAtt-1+rel_hold_samples+dj_look_samples;
+        // @(attLatency): rawGR itself already carries the extra shift.
+        latency = attLatency+rel_hold_samples+dj_look_samples;
     };
 
 // alternative entry points: relAutomationBench, full_demo,
@@ -1398,17 +1408,17 @@ full_demo = testSignal@latency, rawGR, gain
         // dj_look_samples: the DJ gain rawGR(t) is planned for the
         // input sample dj_look_samples further in the past, so play
         // alignment gains that term. The rawGR play tap stays at
-        // @(nAtt-1): rawGR itself already carries the extra shift.
-        latency = nAtt-1+rel_hold_samples+dj_look_samples;
+        // @(attLatency): rawGR itself already carries the extra shift.
+        latency = attLatency+rel_hold_samples+dj_look_samples;
     };
 demoGR = MainGroup(demo(testSignal))
     with {
-        demo(rawGR) = grPlay, smoothed, holdGR@(nAtt-1), max(0, smoothed-grPlay)*SmootherGroup(hslider("undershootGain", 10000, 1, 10000, 1)), DJ
+        demo(rawGR) = grPlay, smoothed, holdGR@(attLatency), max(0, smoothed-grPlay)*SmootherGroup(hslider("undershootGain", 10000, 1, 10000, 1)), DJ
             with {
 
-                grPlay = rawGR@(nAtt-1+rel_hold_samples);
-                grDJ = rawGR@(nAtt-1);
-                smoothed = ((lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, holdGR*0.5+0.5)*-1:muLawExpand(mu))*-1:muLawCompress(mu@(nAtt-1))-0.5)*2;
+                grPlay = rawGR@(attLatency+rel_hold_samples);
+                grDJ = rawGR@(attLatency);
+                smoothed = ((lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, holdGR*0.5+0.5)*-1:muLawExpand(mu))*-1:muLawCompress(mu@(attLatency))-0.5)*2;
                 holdGR = releaseHold(rawGR);
                 DJ = compression_gain_mono_db_auto(strength, thresh, knee, grDJ);
                 strength = 1;
