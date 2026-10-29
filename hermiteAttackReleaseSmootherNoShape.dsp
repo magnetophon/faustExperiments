@@ -1422,15 +1422,15 @@ demoGR = MainGroup(demo(testSignal))
 
 // Outputs (gain, holdGain): the DJ gain and the hold-processed raw GR it chases.
 // TODO: put smoothing after channel-link in N-chan version
-compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !, _)
+compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !)
     with {
-        loop(prevGain, prevRef) = gain, ref, holdGain
+        loop(prevGain, prevRef) = gain, ref
             with {
                 rawGain = level*strength;
                 holdGain = rawGain:releaseHold;
 
+                // gain = smootherARorder(3, 3, 3, gainRel, gainAtt, holdGain);
                 gain = holdGain:onePoleSwitching(gainRel, gainAtt);
-
                 onePoleSwitching(att, rel, x) = loop~_
                     with {
                         loop(yState) = min(((1.0-coeff)*x+coeff*yState), holdGain+attOvershoot)
@@ -1473,3 +1473,27 @@ muLawExpand(mu, x) = ma.signum(x)*(pow(1+mu, abs(x))-1)/mu;
 // pow. ulp-level differences from the pow form only (libm pow is
 // exp(y*log(x)) plus edge-case guards).
 interpolate_logarithmic(dv, v0, v1) = v0*exp(dv*log(v1/v0));
+
+///////////////////////////////////////////////////////////////////////////////
+//                               smoothers                                   //
+///////////////////////////////////////////////////////////////////////////////
+
+// smoother adapted from Dario Sanfilippo
+// https://github.com/dariosanfilippo/limiterStereo/blob/da1c38cc393f08b5dd79e56ffd4e6256af07a708/limiterStereo.dsp#L90-L101
+//
+// fixed order
+smoother(order, att, rel, xx) = smootherOrder(order, order, att, rel, xx);
+
+smootherOrder(maxOrder, order, att, rel, xx) = smootherARorder(maxOrder, order, order, att, rel, xx);
+
+smootherARorder(maxOrder, orderAtt, orderRel, att, rel, xx) = xx:seq(i, maxOrder, loop(i)~_)
+    with {
+        loop(i, fb, x) = coeff(i)*fb+(1.0-coeff(i))*x
+            with {
+                cutoffCorrection(order) = 1.0/sqrt(pow(2.0, 1.0/order)-1.0);
+                coeff(i) = ba.if(x>fb, attCoeff(i), relCoeff(i));
+                attCoeff(i) = exp(-TWOPIT*cutoffCorrection(orderAtt)/max(ma.EPSILON, att))*(i<orderAtt);
+                relCoeff(i) = exp(-TWOPIT*cutoffCorrection(orderRel)/max(ma.EPSILON, rel))*(i<orderRel);
+                TWOPIT = 2*ma.PI*ma.T;
+            };
+    };
