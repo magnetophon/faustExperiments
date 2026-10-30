@@ -1270,7 +1270,7 @@ testSelect = TestGroup(hslider("[6]signal select", 0, 0, 2, 1));
 testSignal = select3(testSelect, testSignal1, testSignal2, testSignal3);
 testSignal1 = abs(it.interpolate_linear(testNoiseLevel,
     (blockLFO~_),
-    noiseLFO))*-1
+    noiseLFO))+0.1:min(1)
     with {
         blockLFO(prev) = no.lfnoise0(testBlockscale*(abs(prev*69)%9:pow(0.75)*5+1));
         noiseLFO = no.lfnoise(testNoiseRate*(abs(13*no.lfnoise(11))%5:pow(0.75)+0.1));
@@ -1420,7 +1420,7 @@ full_demo = testSignal@latency, rawGR, gain
     };
 demoGR = MainGroup(demo(testSignal))
     with {
-        demo(rawGR) = grPlay, smoothed, DJ, holdGR@(nAtt-1)
+        demo(rawGR) = grPlay, smoothed, dv, DJ, holdGR@(nAtt-1)
             with {
 
                 grPlay = rawGR@(nAtt-1+rel_hold_samples);
@@ -1429,9 +1429,12 @@ demoGR = MainGroup(demo(testSignal))
                 smoothedMu = ((lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, holdGR*0.5+0.5)*-1:muLawExpand(mu))*-1:muLawCompress(mu@(nAtt-1))-0.5)*2;
                 smoothed = lookaheadAttackReleaseSmoother(nAtt, Rel, maxAtt, holdGR);
                 // TODO: why does this break?
-                smoothed_dB = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, holdGR:ba.linear2db):ba.db2linear;
+                // smoothed_dB = lookaheadAttackReleaseSmoother(nAtt, Rel, maxAtt, holdGR/SmootherGroup(hslider("div", 1, 1, 100, 0.1)):ba.linear2db);
+                smoothed_dB = lookaheadAttackReleaseSmoother(nAtt, Rel, maxAtt, ba.linear2db(holdGR)):ba.db2linear;
+                // smoothed_dB = ((holdGR/div):ba.linear2db:ba.db2linear)*div;
+                div = SmootherGroup(hslider("div", 1, 0.1, 100, 0.1));
                 holdGR = releaseHold(rawGR);
-                DJ = compression_gain_mono_db_auto(strength, thresh, knee, grDJ):par(i, 2, _@(nAtt-1));
+                DJ = compression_gain_mono_db_auto(strength, thresh, knee, ba.linear2db(grDJ)):par(i, 2, _@(nAtt-1)):(ba.db2linear, _);
                 DJgain = DJ:(_, !);
                 // TODO: HP dv. to accentuate changes? (add or myult with orig dv?)
                 dv = DJ:(!, _);
