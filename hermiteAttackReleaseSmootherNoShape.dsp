@@ -1394,14 +1394,17 @@ compressor(l, r) = l@latency*gain, r@latency*gain, scopeGain, gain
 
 // alternative entry points: relAutomationBench, full_demo,
 // MainGroup(compressor), slidingMinIdxBankAtt(nAtt, maxAtt)
-process = demoGR;
+process = // relAutomationBench;
+demoGR;
 
 // both a benchtest and a parameter automation demo
-relAutomationBench = smoother, benchTest@maxAtt, (mAtt/nAtt), (mRel/nRel)
+relAutomationBench = (smoother~_), benchTest@maxAtt//, (mAtt/nAtt), (mRel/nRel)// relAutomationBench = smoother, benchTest@maxAtt, (mRel/nRel)
     with {
-        smoother = lookaheadAttackReleaseSmootherCk(mAtt, mRel, maxAtt, 1, benchTest@(maxAtt-mAtt));
-        mRel = nRel*os.lf_sawpos(3):int:max(42):min(ma.SR);
-        mAtt = nAtt*os.lf_sawpos(1):si.smoo:max(42):min(maxAtt);
+        smoother(prev) = lookaheadAttackReleaseSmootherCk(mAtt, mRel(prev), maxAtt, 1, benchTest@(maxAtt-mAtt)), mRel(prev)/nRel;
+        // mRel = nRel*(os.lf_trianglepos(13):pow(1/hslider("power", 1, 1, 13, 1))):int:max(42):min(ma.SR);
+        mRel(prev) = nRel*min(1, (69+ba.countup(1600, ba.impulsify(prev!=prev')))/1669);
+        // mAtt = nAtt*os.lf_sawpos(13):si.smoo:max(42):min(maxAtt);
+        mAtt = nAtt;
         benchTest = testSignal1;
     };
 full_demo = testSignal@latency, rawGR, gain
@@ -1417,17 +1420,24 @@ full_demo = testSignal@latency, rawGR, gain
     };
 demoGR = MainGroup(demo(testSignal))
     with {
-        demo(rawGR) = grPlay, smoothed, holdGR@(nAtt-1), DJ
+        demo(rawGR) = grPlay, smoothed, DJ, holdGR@(nAtt-1)
             with {
 
                 grPlay = rawGR@(nAtt-1+rel_hold_samples);
-                grDJ = rawGR@(nAtt-1);
+                // grDJ = rawGR@(nAtt-1);
+                grDJ = rawGR;
                 smoothedMu = ((lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, holdGR*0.5+0.5)*-1:muLawExpand(mu))*-1:muLawCompress(mu@(nAtt-1))-0.5)*2;
-                smoothed = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, holdGR);
+                smoothed = lookaheadAttackReleaseSmoother(nAtt, Rel, maxAtt, holdGR);
                 // TODO: why does this break?
                 smoothed_dB = lookaheadAttackReleaseSmoother(nAtt, nRel, maxAtt, holdGR:ba.linear2db):ba.db2linear;
                 holdGR = releaseHold(rawGR);
-                DJ = compression_gain_mono_db_auto(strength, thresh, knee, grDJ);
+                DJ = compression_gain_mono_db_auto(strength, thresh, knee, grDJ):par(i, 2, _@(nAtt-1));
+                DJgain = DJ:(_, !);
+                // TODO: HP dv. to accentuate changes? (add or myult with orig dv?)
+                dv = DJ:(!, _);
+
+                gainRel = interpolate_logarithmic(dv, endRelease, startRelease);
+                Rel = max(1, int(gainRel*ma.SR));
                 strength = 1;
                 thresh = hslider("thresDJ", 0, -20, 20, 0.1);
                 knee = hslider("knee", 0, 0, 30, 0.1);
@@ -1436,15 +1446,18 @@ demoGR = MainGroup(demo(testSignal))
 
 // Outputs (gain, holdGain): the DJ gain and the hold-processed raw GR it chases.
 // TODO: put smoothing after channel-link in N-chan version
-compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !)
+compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !, _)
     with {
-        loop(prevGain, prevRef) = gain, ref
+        loop(prevGain, prevRef) = gain, ref, dv
             with {
                 rawGain = level*strength;
                 holdGain = rawGain:releaseHold;
 
-                // gain = smootherARorder(3, 3, 3, gainRel, gainAtt, holdGain);
-                gain = holdGain:onePoleSwitching(gainRel, gainAtt);
+                gain = smootherARorder(4, 4, 4, gainRel, gainAtt, holdGain);
+
+                Rel = max(1, int(gainRel*ma.SR));
+                // gain = lookaheadAttackReleaseSmoother(nAtt, Rel, maxAtt, holdGain);
+                // gain = holdGain:onePoleSwitching(gainRel, gainAtt);
                 onePoleSwitching(att, rel, x) = loop~_
                     with {
                         loop(yState) = min(((1.0-coeff)*x+coeff*yState), holdGain+attOvershoot)
@@ -1452,7 +1465,7 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                                 coeff = ba.if(x>yState, ba.tau2pole(att), ba.tau2pole(rel));
                             };
                     };
-                gainRel = interpolate_logarithmic(dv, endRelease, startRelease);
+                gainRel = SmootherGroup(hslider("mult", 2, 1, 13, 0.01))*interpolate_logarithmic(dv, endRelease, startRelease);
                 gainAtt = maxAttDJ;
 
                 refAttackTime = 0;
@@ -1463,7 +1476,7 @@ compression_gain_mono_db_auto(strength, thresh, knee, level) = loop~(_, _):(_, !
                     transitionTime,
                     singleprecisionMAX/128);
                 fastGR = (prevGain-prevRef);
-                dv = (fastGR/transitionRange):max(0):min(1):dvMeter;
+                dv = (fastGR/transitionRange):max(0):min(1):pow(_, SmootherGroup(hslider("power", 3, 1, 13, 0.01))):dvMeter;
             };
     };
 
