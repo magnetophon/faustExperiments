@@ -1268,9 +1268,9 @@ testBlockscale = TestGroup(hslider("[2]blockscale", 1, 0.01, 10, 0.01));
 testFreq = TestGroup(hslider("[3]freq", 1, 0.001, 30, 0.001));
 testSelect = TestGroup(hslider("[6]signal select", 0, 0, 2, 1));
 testSignal = select3(testSelect, testSignal1, testSignal2, testSignal3);
-testSignal1 = it.interpolate_linear(testNoiseLevel,
+testSignal1 = abs(it.interpolate_linear(testNoiseLevel,
     (blockLFO~_),
-    noiseLFO)
+    noiseLFO))*-1
     with {
         blockLFO(prev) = no.lfnoise0(testBlockscale*(abs(prev*69)%9:pow(0.75)*5+1));
         noiseLFO = no.lfnoise(testNoiseRate*(abs(13*no.lfnoise(11))%5:pow(0.75)+0.1));
