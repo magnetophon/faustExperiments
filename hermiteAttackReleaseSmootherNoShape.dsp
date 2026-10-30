@@ -1,9 +1,12 @@
 declare name "hermiteAttackReleaseSmoother";
-declare version "1.9.2";
+declare version "1.9.3";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026, Bart Brouns";
 import("stdfaust.lib");
+
+// TODO: dynamic hold
+// automate att with lookhead dv?
 
 //========================================================================
 // Attack + release lookahead smoother. ONE Hermite-leg follower shapes
@@ -347,12 +350,15 @@ import("stdfaust.lib");
 // Latency: nAtt - 1.
 //
 // Release semantics: fixed DURATION, not fixed time constant --
-// any rise, large or small, takes nRel samples from rest; a
-// mid-flight re-latch that arrives hot keeps its velocity and
-// lands early (T = ceil(3*gap/dirPrev) < nRel) instead of braking
-// onto the fresh-leg cap. An isolated peak fully recovers in
-// exactly nRel; a staircase of k window-min steps takes up to
-// k*nRel. nRel = 1 gives instant rises to the window min.
+// any rise, large or small, takes nRel samples from rest when nRel
+// is stable. If nRel changes during an active release, re-plan from
+// the current gain using the new duration instead of waiting for the
+// next release start; the usual hot-entry shortening and clearance
+// guard still apply. A hot re-latch keeps its velocity and lands early
+// (T = ceil(3*gap/dirPrev) < nRel) instead of braking onto the fresh-leg
+// cap. An isolated peak with stable nRel fully recovers in exactly nRel;
+// a staircase of k window-min steps takes up to k*nRel. nRel = 1 gives
+// instant rises to the window min.
 //
 // Known limitations, on purpose:
 // * The next-deeper chain reads at dyadic resolution, so the true
@@ -855,13 +861,21 @@ hermiteAttackReleaseFollower(nC, nAtt, nRel, checkEvery, cands) = (loop~si.bus(7
                 //    FC-capped launch (m0T == 3*(p1 - p0), exactly, since
                 //    the product itself is latched) never trips it and block
                 //    S-curves keep flying whole.
-                // Terms 2 and 3 yield to attNeed explicitly: unlike term 1
+                // Terms 2-4 yield to attNeed explicitly: unlike term 1
                 // they do not imply v1 > gain, and a missed attack is a
                 // brickwall leak. A v1 that drops back under a flying
                 // release target is still flown past; if the gain crosses
                 // it, attNeed catches the crossing with a smooth arc.
+                // 4) release-time automation: when nRel changes during an
+                //    active upward leg, re-plan from the current gain with
+                //    the new duration. Gate on p1 > p0 and k < T, so an
+                //    attack leg or a landed/idle hold is never restarted.
+                //    The standard release latch recomputes the launch tangent
+                //    and hot-entry shortening from the incoming slope.
                 liftAhead = nhV>v1;
-                relTrig = (v1>p1)|((attNeed==0)&((liftAhead&(v1>gain))|((p1>=p0)&((m0T*0.99999999)>(3*(p1-p0))))));
+                // relTimeRetune = (nRel!=nRel')&(p1>p0)&(k<T);
+                relTimeRetune = (p1>p0)&(k<T);
+                relTrig = (v1>p1)|((attNeed==0)&(relTimeRetune|(liftAhead&(v1>gain))|((p1>=p0)&((m0T*0.99999999)>(3*(p1-p0))))));
                 trig = attTrig|relTrig;
 
                 // ---- new-segment values (only used when trig == 1) ----
