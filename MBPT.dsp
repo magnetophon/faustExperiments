@@ -41,6 +41,13 @@ x<:par(i, nrAnalysisBands, oneBandPT(i)):chooseLoudestPitchclass//
 
         argmax12 = (si.bus(12), par(i, 4, -1)):ro.bitonicSortIdx(16):(par(i, 15, !), _);
 
+        fifthWeight = hslider("fifth weight", 0.4, 0, 1, 0.01);
+
+        // output i = input (i+7)%12 ; route indices are 1-based
+        rot7 = route(12, 12, par(i, 12, ((i+7)%12+1, i+1)));
+
+        withFifth = si.bus(12)<:(si.bus(12), (rot7:par(i, 12, *(fifthWeight)))):>si.bus(12);
+
         chooseLoudestPitchclass = //
         // sort to freqs and levels:
         ro.interleave(2, nrAnalysisBands)//
@@ -49,7 +56,8 @@ x<:par(i, nrAnalysisBands, oneBandPT(i)):chooseLoudestPitchclass//
         // pass through the pitches
         :(si.bus(nrAnalysisBands), //
         // add the levels:
-        par(i, 12, si.bus(nrAnalysisOctaves):>_))//
+        // par(i, 12, si.bus(nrAnalysisOctaves):>_))//
+        (par(i, 12, si.bus(nrAnalysisOctaves):>_):withFifth))//
         // pass through the pitches
         :(si.bus(nrAnalysisBands), //
         // pass through the levels and give the index of the loudest oitchclass:
