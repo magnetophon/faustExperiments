@@ -57,6 +57,7 @@ x<:par(i, nrAnalysisBands, oneBandPT(i)):chooseLoudestPitchclass//
         :(si.bus(nrAnalysisBands), //
         // add the levels:
         // par(i, 12, si.bus(nrAnalysisOctaves):>_))//
+        // add the levels, also for the fifths:
         (par(i, 12, si.bus(nrAnalysisOctaves):>_):withFifth))//
         // pass through the pitches
         :(si.bus(nrAnalysisBands), //
