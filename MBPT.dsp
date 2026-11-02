@@ -1,16 +1,19 @@
 declare name "MBPT";
-declare version "0.4";
+declare version "0.5";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
 
 import("stdfaust.lib");
 
+// NOTE: needs faust-rs: it uses downsampling(), which is not in the C++ compiler.
+
 // A monophoonic multi band pitch travker.
 //
 //Working principle:
 
 // - a bandpass around each note of interest
+//   (each octave is lowpassed and then analysed at its own, lower, sample rate)
 // - get the freq using zero crossings, get the level using an envelope follower
 // - group by pitchclass and sum the levels per pitchclass
 // - pick the loudest pitchclass.
@@ -43,9 +46,46 @@ synthesis = par(i, nrSynthesisBands, sineVoice):>_:*(volume)
 //////////////////////////////////////////////////////////////////////////
 
 MBPT(x) = //
-x<:par(i, nrAnalysisBands, oneBandPT(i)):chooseLoudestPitchclass//
+x<:par(o, nrAnalysisOctaves, oneOctavePT(o)):chooseLoudestPitchclass//
 // par(i, nrAnalysisBands, CF(i))
     with {
+        //////////////////////////////////////////////////////////////////////////
+        // undersampling
+        //////////////////////////////////////////////////////////////////////////
+
+        // Every octave is analysed at the lowest sample rate that still leaves
+        // samplesPerPeriod samples per period for its highest band. That is what the
+        // zero crossing interpolation and the filters need, and it is the same
+        // normalized rate for every octave, so each octave costs the same, while the
+        // decimation halves with every octave up: the total is ~2 octaves of work
+        // instead of nrAnalysisOctaves.
+        //
+        // The decimation factor must be a compile-time constant, so it is calculated
+        // for a nominal sample rate. At a higher actual rate the octaves just get
+        // more samples per period.
+        designSR = 48000;
+        // 7.5 is a bit under what the top octave gets at 48k (7.65):
+        samplesPerPeriod = 7.5;
+
+        // powers of two, since the octaves are an octave apart. 1 for the top octave:
+        decimation(o) = 1<<max(0, int(floor(log(designSR/(samplesPerPeriod*CF(o*12+11)))/log(2))));
+
+        // We pick every decimation(o)-th sample, so we need to remove everything that
+        // would alias onto the bands first.
+        // The cutoff is at 1/4 of the local rate: ~1.9x above the top band's edge,
+        // and the things that fold onto the bands are > 3.5x above the cutoff.
+        // An octave that isn't decimated needs no filter.
+        aaOrder = 6;
+        antiAlias(o, x) = select2(decimation(o)==1, x:fi.lowpass(aaOrder, ma.SR/(4*decimation(o))), x);
+
+        // Inside downsampling:
+        // - ma.SR is the local rate (outer SR / decimation), so the filters, the
+        //   envelope follower and the frequency calculation adapt by themselves,
+        // - ' and ~ count in local samples, so the zero crossing code just works,
+        // - the outputs are held in between the local samples.
+        // Output: 12 * (freq, level), in pitchclass order.
+        oneOctavePT(o, x) = (decimation(o), antiAlias(o, x)):downsampling(_<:par(k, 12, oneBandPT(o*12+k)));
+
         // fi.bandpass(2 seems to give the best ring/ejection compromise 
         // sqrt(t) puts the band edges symmetrically around CF on a log-frequency axis,
         // so the filter is exactly bw semitones wide with CF in the geometric middle.
