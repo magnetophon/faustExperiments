@@ -10,7 +10,7 @@ process = // pitchTracker(1, 0.1);
 MBPT;
 
 MBPT(x) = //
-x<:par(i, nrAnalysisBands, oneBandPT(i)):chooseLoudest//
+x<:par(i, nrAnalysisBands, oneBandPT(i)):chooseLoudestPitchclass//
 // par(i, nrAnalysisBands, CF(i))
     with {
         oneBandPT(i, x) = fi.SVFTPT.BP2Norm(CF(i), Q, x)<:(analysisFreq(i), level(i));
@@ -22,9 +22,12 @@ x<:par(i, nrAnalysisBands, oneBandPT(i)):chooseLoudest//
         // to G8, 6271.927 Hz:
         nrAnalysisOctaves = 8;
         nrAnalysisBands = nrAnalysisOctaves*12;
-        // nrAnalysisBands = 96;
         Q = hslider("Q", 0.7, 0.01, 13, 0.01);
 
-        chooseLoudest = ro.interleave(2, nrAnalysisBands)//
-        :par(i, 2, ro.interleave(nrAnalysisOctaves, 12));
+        chooseLoudestPitchclass = // sort to freqs and levels:
+        ro.interleave(2, nrAnalysisBands)//
+        // sort in pitchclasses
+        :par(i, 2, ro.interleave(nrAnalysisOctaves, 12))//
+        // add the levels:
+        :(si.bus(nrAnalysisBands), par(i, 12, si.bus(nrAnalysisOctaves):>_));
     };
