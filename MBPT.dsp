@@ -6,6 +6,16 @@ declare copyright "2026 - 2026, Bart Brouns";
 
 import("stdfaust.lib");
 
+// A monophoonic multi band pitch travker.
+//
+//Working principle:
+
+// - a bandpass around each note of interest
+// - get the freq using zero crossings, get the level using an envelope follower
+// - group by pitchclass and sum the levels per pitchclass
+// - pick the loudest pitchclass.
+// - TODO: pick the loudest nrSynthesisBands of each pitchclass and synthesize them
+
 process = // pitchTracker(1, 0.1);
 MBPT;
 
