@@ -1,12 +1,13 @@
 declare name "MBPT";
-declare version "0.5";
+declare version "0.6";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
 
 import("stdfaust.lib");
 
-// NOTE: needs faust-rs: it uses downsampling(), which is not in the C++ compiler.
+// NOTE: with undersampling = 1 this needs faust-rs: it uses downsampling(), which is
+// not in the C++ compiler. With undersampling = 0 the C++ compiler works too.
 
 // A monophoonic multi band pitch travker.
 //
@@ -26,6 +27,12 @@ import("stdfaust.lib");
 
 // can be at most nrCandidates (see MBPT):
 nrSynthesisBands = 8;
+
+// compile time switch:
+// 1: analyse every octave at its own, lower, sample rate (see "undersampling" in MBPT).
+//    Much cheaper, but needs faust-rs.
+// 0: analyse every octave at the full sample rate. Works with the C++ compiler.
+undersampling = 1;
 
 process = // pitchTracker(1, 0.1);
 MBPT:synthesis;
@@ -78,13 +85,21 @@ x<:par(o, nrAnalysisOctaves, oneOctavePT(o)):chooseLoudestPitchclass//
         aaOrder = 6;
         antiAlias(o, x) = select2(decimation(o)==1, x:fi.lowpass(aaOrder, ma.SR/(4*decimation(o))), x);
 
-        // Inside downsampling:
+        // The compile time switch is a pattern match on the value of undersampling.
+        // Faust only evaluates the rule that matches, so with undersampling = 0
+        // downsampling() is never referenced, and the C++ compiler is fine with it.
+        oneOctavePT(o, x) = octavePT(undersampling, o, x);
+
+        // 0: all octaves at the full sample rate, no filtering and no decimation.
+        octavePT(0, o, x) = x<:par(k, 12, oneBandPT(o*12+k));
+
+        // 1: inside downsampling:
         // - ma.SR is the local rate (outer SR / decimation), so the filters, the
         //   envelope follower and the frequency calculation adapt by themselves,
         // - ' and ~ count in local samples, so the zero crossing code just works,
         // - the outputs are held in between the local samples.
         // Output: 12 * (freq, level), in pitchclass order.
-        oneOctavePT(o, x) = (decimation(o), antiAlias(o, x)):downsampling(_<:par(k, 12, oneBandPT(o*12+k)));
+        octavePT(1, o, x) = (decimation(o), antiAlias(o, x)):downsampling(_<:par(k, 12, oneBandPT(o*12+k)));
 
         // fi.bandpass(2 seems to give the best ring/ejection compromise 
         // sqrt(t) puts the band edges symmetrically around CF on a log-frequency axis,
