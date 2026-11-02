@@ -37,21 +37,16 @@ x<:par(i, nrAnalysisBands, oneBandPT(i)):chooseLoudestPitchclass//
         // crossing times linearly interpolated to sub-sample precision. Held until the next
         // crossing. (The old an.zcr(1/CF(i), x)*ma.SR*.5 lowpassed the crossing pulses with
         // a time constant of only one period, which left about +-25% ripple on the pitch.)
-        analysisFreq(i, x) = (held>0)*ma.SR/max(1, held)
+        analysisFreq(i, x) = (held(x)>0)*ma.SR/max(1, held(x));
+        rise(x) = (x>0)&(x'<=0);
+        a(x) = max(0, min(1, (0-x')/max(1e-30, x-x')));
+        c(x) = loop~_
             with {
-                rise = (x>0)&(x'<=0);
-                // where between the previous and the current sample the crossing happened (0..1):
-                a = max(0, min(1, (0-x')/max(1e-30, x-x')));
-                // samples since the previous crossing's sample, reset at each crossing:
-                c = loop~_
-                    with {
-                        loop(prev) = (prev+1)*(1-rise);
-                    };
-                aHeld = ba.latch(rise, a);
-                period = (c'+1)+a-aHeld';
-                // the first crossing has no predecessor, so it doesn't produce a period:
-                held = ba.latch(rise, period*(aHeld'>=0)*(c'>0));
+                loop(prev) = (prev+1)*(1-rise(x));
             };
+        aHeld(x) = ba.latch(rise(x), a(x));
+        period(x) = (c(x)'+1)+a(x)-aHeld(x)';
+        held(x) = ba.latch(rise(x), period(x)*(aHeld(x)'>=0)*(c(x)'>0));
         level(i, x) = an.amp_follower(2/CF(i), x);
         CF(i) = ba.pianokey2hz(i+baseFreqNr);
         // from Ab0, 25.956543 Hz:
