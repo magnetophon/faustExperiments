@@ -122,7 +122,9 @@ x<:par(o, nrAnalysisOctaves, oneOctavePT(o)):chooseLoudestPitchclass//
         period(x) = (c(x)'+1)+a(x)-aHeld(x)';
         held(x) = ba.latch(rise(x), period(x)*(aHeld(x)'>=0)*(c(x)'>0));
         // level(i, x) = an.amp_follower(2/CF(i), x);
-        level(i, x) = an.amp_follower_ar(1/CF(i), 2/CF(i), x);
+        level(i, x) = an.amp_follower_ar(att/CF(i), rel/CF(i), x);
+        att = hslider("[0]att", 4.2, 0, 42, 0.1);
+        rel = hslider("[1]rel", 6.9, 0, 69, 0.1);
         // level(i, x) = si.smooth(ba.tau2pole(2/CF(i)), x);
         CF(i) = ba.pianokey2hz(i+baseFreqNr);
         // from Ab0, 25.956543 Hz:
