@@ -1,5 +1,5 @@
 declare name "MBPT";
-declare version "0.2";
+declare version "0.3";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
@@ -15,6 +15,7 @@ import("stdfaust.lib");
 // - group by pitchclass and sum the levels per pitchclass
 // - pick the loudest pitchclass.
 // - pick the loudest nrSynthesisBands of the chosen pitchclass and its fifth
+//   (the fifth's levels are scaled by "fifth weight", just like in the pitchclass sum)
 // - TODO: synthesize them
 //
 // Output: nrSynthesisBands pairs of (freq, level), loudest first.
@@ -32,7 +33,25 @@ x<:par(i, nrAnalysisBands, oneBandPT(i)):chooseLoudestPitchclass//
         oneBandPT(i, x) = fi.bandpass(2, CF(i)/sqrt(r), CF(i)*sqrt(r), x)<:(analysisFreq(i), level(i));
         r = 2^(bw/12);
         bw = hslider("bandwidth [unit:semitones]", 1, 0.25, 6, 0.01);
-        analysisFreq(i, x) = an.zcr(1/CF(i), x)*ma.SR*.5;
+        // frequency from the time between successive rising zero crossings, with the
+        // crossing times linearly interpolated to sub-sample precision. Held until the next
+        // crossing. (The old an.zcr(1/CF(i), x)*ma.SR*.5 lowpassed the crossing pulses with
+        // a time constant of only one period, which left about +-25% ripple on the pitch.)
+        analysisFreq(i, x) = (held>0)*ma.SR/max(1, held)
+            with {
+                rise = (x>0)&(x'<=0);
+                // where between the previous and the current sample the crossing happened (0..1):
+                a = max(0, min(1, (0-x')/max(1e-30, x-x')));
+                // samples since the previous crossing's sample, reset at each crossing:
+                c = loop~_
+                    with {
+                        loop(prev) = (prev+1)*(1-rise);
+                    };
+                aHeld = ba.latch(rise, a);
+                period = (c'+1)+a-aHeld';
+                // the first crossing has no predecessor, so it doesn't produce a period:
+                held = ba.latch(rise, period*(aHeld'>=0)*(c'>0));
+            };
         level(i, x) = an.amp_follower(2/CF(i), x);
         CF(i) = ba.pianokey2hz(i+baseFreqNr);
         // from Ab0, 25.956543 Hz:
