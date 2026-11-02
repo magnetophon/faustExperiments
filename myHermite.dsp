@@ -47,6 +47,8 @@ declare copyright "2026 - 2026, Bart Brouns";
 // if halfWindow<prev: n=n/2
 //
 // try to do everything with just 2 hermites: the current one and the "other window"
+//
+// // switch back to the main window on release
 
 import("stdfaust.lib");
 
@@ -72,8 +74,9 @@ gainIsLinear = 1;
 maxN = (1<<int(ceil(log(SR/minFreq)/log(2)-1e-9)));
 // -1 to allign the signal properly
 // later on remove it so we have 1 sample extra lookahead to calculate m1.
-look = maxN-1;
-freq = hslider("freq[unit:Hz][scale:log]", SR/maxN, SR/maxN, SR/2, 0.01);
+look = maxN*2-1;
+// TODO: the algo breaks down for windows < 32 samples.
+freq = hslider("freq[unit:Hz][scale:log]", SR/maxN, SR/maxN, SR/4, 0.01);
 // we want the small window exactly half the size of the main window
 halfN = int(min(maxN, max(1, ceil(SR/freq*0.5))));
 n = halfN*2;
@@ -94,17 +97,25 @@ hermite(t, p0, m0, p1, m1) = ((a*t+b)*t+m0)*t+p0
         b = -3*p0-2*m0+3*p1-m1;
     };
 hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
-:(par(i, nBits, !), _, _)//
+:(par(i, nBits, !), _, _, _)//
 :hermiteFB~_
     with {
-        hermiteFB(prev, halfWindow, fullWindow) = //
+        hermiteFB(prev, halfWindow, fullWindow, earlyWindow) = //
         // (hermiteHalf, hermiteFull):min//
         // hermite(t, p0, m0, p1, m1)//, fullWindow, t
         // (hermiteHalf, hermiteFull):min, hermiteHalf, hermiteFull
-        hermiteFull, p1, kc*close*(ceiling-smootherPrediction), abs(second)*10, th*useHalf
+        hermiteFull, (((x-x')*n)@(maxN*2-n-1):ba.sAndH(sample)), earlyWindow, (((earlyWindow-earlyWindow')*n))//(((x-x')*n)@(maxN*2-n):ba.sAndH(sample))//((m1Raw):ba.sAndH(sample)), fullWindow//
+        //(((x-x')*n)@(maxN*2-n):ba.sAndH(sample)),
+        //, ((earlyWindow-earlyWindow')@(n-1)*n), m1, earlyWindow, abs(second)*100, fullWindow, ceilingOffset// , enableM1, (prev-prev')*n, abs(second)*10, th*useHalf
 
         //t, (abs(prev-prev')*100, _:max)~_, t, th, hermiteFull, hermiteHalf//th , hermiteHalf
             with {
+                attacking = fullWindow<p0;
+
+                enableM1 = checkbox("enableM1");
+                // (fullWindow, ba.slidingMin(n+offset, maxN+2, x))<:select2(attacking, >, <);
+                // offset = hslider("offset", 0, -2, 2, 1);
+
                 //////////////////// debug
                 first = prev-prev';
                 second = first-first';
@@ -112,11 +123,10 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 maxHold(x) = max(min(1, abs(x)), _)~_;
                 // note: has abs!
                 max2nd = maxHold(abs(second));
+                // -1 cause we can't compare against the current sample
+                undershoot = prev>x@look-1;
                 //////////////////// debug
 
-                err = fullWindow-prev;
-                // velocity per window, same units as err:
-                vn = (prev-prev')*n;
                 ceiling = x@look;
                 close = (1-max(0, ceiling-prev))^power;
                 power = hslider("power", 32, 1, 128, 1);
@@ -125,10 +135,7 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 kc = hslider("kc", 13, 0, 100, 0.01);
                 // extra urgency near the ceiling
 
-                smallestAbs(x) = select2(abs(x)<abs(x'), x', x);
-
-                smootherPrediction = prev+vn;
-
+                smootherPrediction = prev+((prev-prev')*n);
 
                 // hermiteHalf = hermite(th, p0h, m0h, p1h, m1h):cascade(freq*2*mult, sampleH, prev, halfWindow);
                 hermiteHalf = hermite(th, p0h, m0h, p1h, m1h);
@@ -141,7 +148,9 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
 
                 combinedWindow = min(hermiteFull, halfWindow);
                 // count from 1/n to 1, so we're always gliding:
-                t = (min(1, _*counting+1/n))~_;
+                // maybe actually n-1 cause we need one sample extra lookahead to calculat m1 from
+                t = (min(1, _*counting+1/(n)))~_;
+                // TODO: if halfWindow<fullHermite use the fast att time
                 WIP_t = tFB~_
                     with {
                         tFB(prevT) = (min(1, prevT*counting*(1-(isFast(prevT):ba.impulsify))+(1+isFast(prevT))/n));
@@ -159,14 +168,22 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
                 m0 = (prev-prev')*n:ba.sAndH(sample);
                 m0h = (prev-prev')*halfN:ba.sAndH(sampleH);
                 // end at the lookahead point
-                // p1 = sample*mult*(windowPrediction-smootherPrediction)+fullWindow;
-                p1 = (sample*base*(fullWindow-smootherPrediction)+kc*close*(ceiling-smootherPrediction))+fullWindow;
-                p1_old = select2(counting,
-                    phantomTarget,
-                    fullWindow:ba.sAndH(sample));
+                fullWindowOffset = base*(fullWindow-smootherPrediction);
+                ceilingOffsetRaw = kc*close*(ceiling-smootherPrediction):smallestAbs;
+                // needed to get rid of oscillations at high kc and freq
+                ceilingOffset = select2(attacking|prev>x@look, ceilingOffsetRaw, min(0, ceilingOffsetRaw));
+                p1 = sample*(fullWindowOffset+ceilingOffset)+fullWindow;
                 p1h = combinedWindow:ba.sAndH(sampleH);
-                // if the m1 is not 0, it's not the end yet
-                m1 = sample*(fullWindow-fullWindow);
+
+                // m1FullWindow = smallestAbs(fullWindow-fullWindow'):ba.sAndH(sample);
+                // m1Ceil = smallestAbs(x-x'):ba.sAndH(sample);
+                m1FullWindow = smallestAbs((fullWindow-fullWindow'):ba.sAndH(sample));
+                m1Ceil = smallestAbs((x-x'):ba.sAndH(sample));
+                m1Raw = select2(abs(m1Ceil)<abs(m1FullWindow), m1FullWindow, m1Ceil)*n;
+                m1 = //
+                m1Raw*(ma.signum((earlyWindow-earlyWindow'):ba.sAndH(sample))==ma.signum(m1Raw)):ba.sAndH(sample);
+                // select2(checkbox("m1Raw"), select2(attacking, max(0, m1Raw), min(0, m1Raw)), m1Raw);
+
                 // TODO: use the actual predicted end speed
                 // use one more sample latency:
                 // these are the old look values, so signal needs to be delayed by (look+1)
@@ -195,7 +212,7 @@ hermiteLim(x) = slidingMinPar(halfN, maxN, gainIsLinear, x)//
 // nBits fixed windows that are the same size or smaller than the half window, then the half window, then the full window
 //
 slidingMinPar(halfN, maxN, lin) = slidingReducePar(min, halfN, maxN, lin);
-slidingReducePar(op, halfN, maxN, gainIsLinear) = sequentialOperatorParOut(nBits-1, op)<:fixedWindows, (variableWindows<:halfWindow, fullWindow)
+slidingReducePar(op, halfN, maxN, gainIsLinear) = sequentialOperatorParOut(nBits-1, op)<:fixedWindows, ((variableWindows<:halfWindow, fullWindow):(_@maxN, (_<:(_@maxN, _@(maxN-n)))))
     with {
         disabledVal = gainIsLinear;
         fixedWindows = par(i, nBits, _@(look-pow2(i)):useValSize(i));
@@ -203,7 +220,7 @@ slidingReducePar(op, halfN, maxN, gainIsLinear) = sequentialOperatorParOut(nBits
         variableWindows = par(i, nBits, _@sumOfPrevBlockSizes(i):useValBit(i)):parallelOp(op, nBits);
         useValBit(i) = select2(isUsed(i), disabledVal, _);
         halfWindow = _@(maxN-halfN);
-        fullWindow = (_<:op(_, _@halfN)):_@(maxN-2*halfN);
+        fullWindow = (_<:op(_, _@halfN))@(maxN-n);
         sequentialOperatorParOut(HALFN, op) = seq(i, HALFN, operator(i));
         operator(i) = si.bus(i), (_<:_, op(_, _@pow2(i)));
         sumOfPrevBlockSizes(0) = 0;
@@ -228,22 +245,39 @@ SmootherGroup(x) = vgroup("[1]Smoother", x);
 testNoiseLevel = TestGroup(hslider("[0]noise level", 0.216, 0, 1, 0.001));
 testNoiseRate = TestGroup(hslider("[1]noise rate[scale:log]", 42, 1, 1000, 1));
 testBlockscale = TestGroup(hslider("[2]blockscale[scale:log]", 6.63, 0.01, 10, 0.01));
-testFreq = TestGroup(hslider("[3]test freq[scale:log]", 1, 0.001, 30, 0.001));
+testFreq = TestGroup(hslider("[3]test freq[scale:log]", 5, 0.001, 30, 0.001));
 testStep1 = TestGroup(hslider("[4]step1", 0.75, -1, 1, 0.001));
 testStep2 = TestGroup(hslider("[5]step2", 0.125, -1, 1, 0.001));
 testSelect = TestGroup(checkbox("[6]signal select"));
 testSignal = select2(testSelect, testSignal1, testSignal2);
 testSignal1 = it.interpolate_linear(testNoiseLevel,
-    (loop~_),
-    no.lfnoise(testNoiseRate))
+    (blocks~_)//
+    // :fi.lowpass(1, freq)
+    ,
+    randomLFO(blocks~_))
     with {
-        loop(prev) = no.lfnoise0(testBlockscale*(abs(prev*69)%9:pow(0.75)*5+1));
+        blocks(prev) = no.lfnoise0(testBlockscale*(abs(prev*69)%9:pow(0.75)*5+1));
+        isJump(blocks) = blocks!=blocks';
+        randomLFO(blocks) = no.lfnoise(testNoiseRate)*flip(blocks);
+        flip(blocks) = select2(checkbox("flip"),
+            1,
+            select2(ba.toggle(isJump(blocks)), -1, 1));
     };
 testSignal2 = os.lf_squarewave(testFreq)*0.5;
 
 /************************************************************************************************************
 **************         utilities
 ************************************************************************************************************/
+
+// autosat and mu-law:
+// https://www.desmos.com/calculator/4bnimc04an
+// from: https://github.com/zamaudio/zam-plugins/blob/8cd23d781018e3ec84159958d3d2dc7038a82736/plugins/ZamAutoSat/ZamAutoSatPlugin.cpp#L71
+autoSat(x) = x:min(1):max(-1)<:2.0*_*(1.0-abs(_)*0.5);
+// μ-law compression
+muLawCompress(mu, x) = ma.signum(x)*log(1+mu*abs(x))/log(1+mu);
+// μ-law expansion (decompression)
+muLawExpand(mu, x) = ma.signum(x)*(pow(1+mu, abs(x))-1)/mu;
+mu = pow(hslider("mu", 0.001, 0.001, 64, 0.001), 2);
 
 // minDelta(0) = 0.001;
 minDelta(0) = hslider("minDelta", 0.001, 0, 1, 0.001)*0.001;
@@ -281,3 +315,5 @@ spring(f, zeta, reset, p0, v0, target) = (step~(_, _)):(_, !)
     };
 
 // process = spring(2, 1, button("start"), 0, 0.001, os.osc(0.5));
+
+smallestAbs(x) = select2(abs(x)<abs(x'), x', x);
