@@ -166,7 +166,8 @@ x<:par(o, nrAnalysisOctaves, oneOctavePT(o)):chooseLoudestPitchclass//
         (si.bus(2*nrAnalysisBands), (_<:(_, fifthOf)))// -> [freqs(16), levels(16)] of the pitchclass' bands, then those of the fifth:
         :gatherCandidates// keep freqs and levels, and sort a copy of the levels to get the ranking (ascending index list):
         :(si.bus(2*nrCandidates)<:(si.bus(2*nrCandidates), (par(i, nrCandidates, !), si.bus(nrCandidates)))):(si.bus(2*nrCandidates), (ro.bitonicSortIdx(nrCandidates):loudestFirst))// use the ranking to select the freqs and levels:
-        :selectRanked;
+        :selectRanked//:sortByPitch
+        ;
 
         fifthOf = int:+(7):%(12);
 
@@ -197,4 +198,51 @@ x<:par(o, nrAnalysisOctaves, oneOctavePT(o)):chooseLoudestPitchclass//
             with {
                 groupSize = nrCandidates+1;
             };
+        // Sort the nrSynthesisBands (freq, level) pairs by ascending frequency.
+        // The same permutation is applied to frequencies and levels, so their
+        // associations remain intact.
+        sortByPitch =
+
+        // Split the interleaved input:
+        // [f0, l0, f1, l1, ...] -> [f0, f1, ... , l0, l1, ...]
+        ro.interleave(2, nrSynthesisBands)
+
+        // Keep the original frequencies and levels, and create a sorted
+        // index list from the frequencies only.
+        :(si.bus(2*nrSynthesisBands)<:(si.bus(2*nrSynthesisBands),
+
+        // Extract the frequency channels (odd input channels).
+        // Result: [f0, f1, ... f7]
+        (route(2*nrSynthesisBands, nrSynthesisBands, par(i, nrSynthesisBands, (2*i+1, i+1)))
+
+        // Generate the indices that sort the frequencies
+        // in ascending order.
+        :ro.bitonicSortIdx(nrSynthesisBands))))
+
+        // We now have three groups of signals:
+        //   1. Original frequencies and levels (16 channels)
+        //   2. Sorted indices (8 channels)
+        //
+        // For each output channel, construct a group containing:
+        //   - The appropriate sorted index
+        //   - All 8 values from the corresponding original array
+        //
+        // This is done separately for frequencies and levels,
+        // using exactly the same sorted indices.
+        :route(3*nrSynthesisBands, 2*nrSynthesisBands*(nrSynthesisBands+1), par(g, 2*nrSynthesisBands,
+
+        // Select the sorted index for this output channel.
+        // Even and odd groups share the same index list:
+        // first 8 outputs are frequencies, next 8 are levels.
+        (2*nrSynthesisBands+int(g/2)+1, g*(nrSynthesisBands+1)+1),
+
+        // Append all original values as candidates.
+        par(c, nrSynthesisBands, (int(g%2)*nrSynthesisBands+c+1, g*(nrSynthesisBands+1)+c+2))))
+
+        // Each group now contains:
+        // [sorted index, candidate0, candidate1, ... candidate7]
+        //
+        // selectW picks the candidate at the sorted index.
+        // This reconstructs the sorted frequency and level arrays.
+        :par(g, 2*nrSynthesisBands, selectW(nrSynthesisBands));
     };
