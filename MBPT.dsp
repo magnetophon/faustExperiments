@@ -1,5 +1,5 @@
 declare name "MBPT";
-declare version "0.3";
+declare version "0.4";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
@@ -16,12 +16,31 @@ import("stdfaust.lib");
 // - pick the loudest pitchclass.
 // - pick the loudest nrSynthesisBands of the chosen pitchclass and its fifth
 //   (the fifth's levels are scaled by "fifth weight", just like in the pitchclass sum)
-// - TODO: synthesize them
+// - synthesize them: one sine per band, summed to mono
 //
-// Output: nrSynthesisBands pairs of (freq, level), loudest first.
+// MBPT output: nrSynthesisBands pairs of (freq, level), loudest first.
+// process output: the sum of the sines, mono.
+
+// can be at most nrCandidates (see MBPT):
+nrSynthesisBands = 8;
 
 process = // pitchTracker(1, 0.1);
-MBPT;
+MBPT:synthesis;
+
+//////////////////////////////////////////////////////////////////////////
+// synthesis
+//////////////////////////////////////////////////////////////////////////
+
+// nrSynthesisBands * (freq, level) -> mono
+synthesis = par(i, nrSynthesisBands, sineVoice):>_:*(volume)
+    with {
+        sineVoice(f, l) = os.osc(f)*l;
+        volume = hslider("synth volume [unit:dB]", -6, -60, 12, 0.1):ba.db2linear:si.smoo;
+    };
+
+//////////////////////////////////////////////////////////////////////////
+// analysis
+//////////////////////////////////////////////////////////////////////////
 
 MBPT(x) = //
 x<:par(i, nrAnalysisBands, oneBandPT(i)):chooseLoudestPitchclass//
@@ -47,7 +66,9 @@ x<:par(i, nrAnalysisBands, oneBandPT(i)):chooseLoudestPitchclass//
         aHeld(x) = ba.latch(rise(x), a(x));
         period(x) = (c(x)'+1)+a(x)-aHeld(x)';
         held(x) = ba.latch(rise(x), period(x)*(aHeld(x)'>=0)*(c(x)'>0));
-        level(i, x) = an.amp_follower(2/CF(i), x);
+        // level(i, x) = an.amp_follower(2/CF(i), x);
+        level(i, x) = an.amp_follower_ar(1/CF(i), 2/CF(i), x);
+        // level(i, x) = si.smooth(ba.tau2pole(2/CF(i)), x);
         CF(i) = ba.pianokey2hz(i+baseFreqNr);
         // from Ab0, 25.956543 Hz:
         baseFreqNr = 0;
@@ -57,8 +78,6 @@ x<:par(i, nrAnalysisBands, oneBandPT(i)):chooseLoudestPitchclass//
         // candidates = the chosen pitchclass + its fifth, nrAnalysisOctaves bands each.
         // Must be a power of two (bitonic sort).
         nrCandidates = 2*nrAnalysisOctaves;
-        // can be at most nrCandidates:
-        nrSynthesisBands = 8;
         Q = hslider("Q", 0.7, 0.01, 17, 0.01);
 
         argmax12 = (si.bus(12), par(i, 4, -1)):ro.bitonicSortIdx(16):(par(i, 15, !), _);
